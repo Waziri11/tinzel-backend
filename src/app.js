@@ -15,21 +15,9 @@ import adminRoutes from './routes/admin.routes.js';
 const app = express();
 
 // Middlewares
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  process.env.FRONTEND_URL,
-].filter(Boolean);
-
 app.use(
   cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
-        callback(null, true);
-      } else {
-        callback(null, true); // Permissive in development
-      }
-    },
+    origin: true,
     credentials: true,
   })
 );

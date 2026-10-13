@@ -5,7 +5,7 @@ import app from './src/app.js';
 import { connectDB, getDBStatus } from './src/config/db.js';
 import { seedInitialData } from './src/utils/seedData.js';
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 
 app.listen(PORT, async () => {
   console.log(`[Tinzel Backend] Server running on http://localhost:${PORT}`);
