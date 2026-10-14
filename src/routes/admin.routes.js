@@ -7,13 +7,12 @@ import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
 import { getSimulatedNotifications } from '../services/notificationService.js';
 
+import { uploadCover } from '../services/uploadService.js';
+
 const router = Router();
 
-// Admin-only for all routes
-router.use(verifyStaffToken, requireRoles('admin'));
-
-// --- Dynamic Form Builder Endpoints ---
-router.get('/forms', async (req, res) => {
+// --- Dynamic Form Builder Endpoints (Accessible to both Admin and Manager) ---
+router.get('/forms', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
   try {
     const forms = await MagazineForm.find().sort({ createdAt: -1 });
     return res.status(200).json({ success: true, forms });
@@ -22,11 +21,38 @@ router.get('/forms', async (req, res) => {
   }
 });
 
-router.post('/forms', async (req, res) => {
+// Upload a magazine cover image
+router.post(
+  '/forms/upload-cover',
+  verifyStaffToken,
+  requireRoles('admin', 'manager'),
+  uploadCover.single('cover'),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: 'Please select an image file to upload' });
+      }
+      const coverUrl = `/uploads/covers/${req.file.filename}`;
+      return res.status(200).json({
+        success: true,
+        message: 'Cover uploaded successfully',
+        coverUrl,
+      });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+);
+
+router.post('/forms', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
   try {
-    const { title, slug, description, magazineType, price, currency, lipaNambaInstructions, fields } = req.body;
+    const { title, slug, description, magazineType, price, currency, coverImageUrl, lipaNambaInstructions, sections, fields } = req.body;
     if (!title || !slug) {
       return res.status(400).json({ success: false, message: 'Title and unique slug are required' });
+    }
+
+    if (!coverImageUrl || !coverImageUrl.trim()) {
+      return res.status(400).json({ success: false, message: 'A magazine cover image is REQUIRED for every edition' });
     }
 
     const cleanSlug = slug.toLowerCase().trim().replace(/[^a-z0-9-]/g, '-');
@@ -42,12 +68,14 @@ router.post('/forms', async (req, res) => {
       magazineType,
       price: Number(price) || 50000,
       currency: currency || 'TZS',
+      coverImageUrl: coverImageUrl.trim(),
       lipaNambaInstructions,
+      sections: sections || [],
       fields: fields || [],
     });
 
     await AuditLog.create({
-      actor: { type: 'admin', id: req.user._id, name: req.user.name },
+      actor: { type: req.user.role, id: req.user._id, name: req.user.name },
       action: 'FORM_CREATED',
       details: { slug: cleanSlug, title },
     });
@@ -58,9 +86,13 @@ router.post('/forms', async (req, res) => {
   }
 });
 
-router.put('/forms/:id', async (req, res) => {
+router.put('/forms/:id', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
   try {
-    const { title, description, magazineType, price, currency, lipaNambaInstructions, fields, isActive, isArchived } = req.body;
+    const { title, description, magazineType, price, currency, coverImageUrl, lipaNambaInstructions, sections, fields, isActive, isArchived } = req.body;
+
+    if (!coverImageUrl || !coverImageUrl.trim()) {
+      return res.status(400).json({ success: false, message: 'A magazine cover image is REQUIRED for every edition' });
+    }
 
     const form = await MagazineForm.findByIdAndUpdate(
       req.params.id,
@@ -70,8 +102,10 @@ router.put('/forms/:id', async (req, res) => {
         magazineType,
         price,
         currency,
+        coverImageUrl: coverImageUrl.trim(),
         lipaNambaInstructions,
-        fields,
+        sections: sections || [],
+        fields: fields || [],
         isActive,
         isArchived,
         $inc: { version: 1 },
@@ -84,7 +118,7 @@ router.put('/forms/:id', async (req, res) => {
     }
 
     await AuditLog.create({
-      actor: { type: 'admin', id: req.user._id, name: req.user.name },
+      actor: { type: req.user.role, id: req.user._id, name: req.user.name },
       action: 'FORM_UPDATED',
       details: { formId: form._id, slug: form.slug },
     });
@@ -95,7 +129,7 @@ router.put('/forms/:id', async (req, res) => {
   }
 });
 
-router.delete('/forms/:id', async (req, res) => {
+router.delete('/forms/:id', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
   try {
     const form = await MagazineForm.findByIdAndUpdate(
       req.params.id,
@@ -112,6 +146,9 @@ router.delete('/forms/:id', async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 });
+
+// Admin-only for all remaining routes (staff, system config, audit logs)
+router.use(verifyStaffToken, requireRoles('admin'));
 
 // --- Staff Management & Workload Endpoints ---
 router.get('/staff', async (req, res) => {

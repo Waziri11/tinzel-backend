@@ -1,10 +1,37 @@
 import mongoose from 'mongoose';
 
+const formSectionSchema = new mongoose.Schema(
+  {
+    sectionId: {
+      type: String,
+      required: true,
+    },
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    description: {
+      type: String,
+      default: '',
+    },
+    order: {
+      type: Number,
+      default: 0,
+    },
+  },
+  { _id: false }
+);
+
 const formFieldSchema = new mongoose.Schema(
   {
     fieldId: {
       type: String,
       required: true,
+    },
+    sectionId: {
+      type: String,
+      default: 'default_section',
     },
     label: {
       type: String,
@@ -76,6 +103,7 @@ const magazineFormSchema = new mongoose.Schema(
     },
     coverImageUrl: {
       type: String,
+      required: [true, 'A magazine cover image is required for every edition'],
       default: '/brand/magazine-cover-sample.jpg',
     },
     lipaNambaInstructions: {
@@ -86,6 +114,10 @@ const magazineFormSchema = new mongoose.Schema(
         default:
           'Lipa kupitia M-Pesa / Tigo Pesa / Airtel Money ukitumia Lipa Namba (Till Number). Weka jina lako kama reference.',
       },
+    },
+    sections: {
+      type: [formSectionSchema],
+      default: [],
     },
     fields: [formFieldSchema],
     isActive: {

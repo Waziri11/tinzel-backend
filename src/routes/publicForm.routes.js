@@ -11,7 +11,7 @@ const router = Router();
 router.get('/forms', async (req, res) => {
   try {
     const forms = await MagazineForm.find({ isActive: true, isArchived: false })
-      .select('title slug description magazineType price currency lipaNambaInstructions')
+      .select('title slug description magazineType price currency coverImageUrl lipaNambaInstructions sections')
       .sort({ createdAt: -1 });
 
     return res.status(200).json({ success: true, forms });

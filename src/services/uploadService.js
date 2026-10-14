@@ -61,3 +61,10 @@ export const uploadPrint = multer({
   fileFilter: documentFileFilter,
   limits: { fileSize: 200 * 1024 * 1024 }, // 200MB for print files
 });
+
+export const uploadCover = multer({
+  storage: createStorage('covers'),
+  fileFilter: photoFileFilter,
+  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB for cover images
+});
+
