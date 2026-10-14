@@ -58,7 +58,7 @@ export const seedInitialData = async () => {
       console.log('[Seed] Seeding initial magazine forms...');
       await MagazineForm.create([
         {
-          title: 'Harusi Yetu - Wedding Edition',
+          title: 'Wedding Magazine',
           slug: 'wedding-magazine',
           description: 'Personalized luxury wedding magazine celebrating your union with custom layouts and high-res photography.',
           magazineType: 'Wedding Magazine',
@@ -115,7 +115,7 @@ export const seedInitialData = async () => {
           isActive: true,
         },
         {
-          title: 'Birthday Celebration Special',
+          title: 'Birthday Magazine',
           slug: 'birthday-special',
           description: 'A bespoke milestone birthday magazine highlighting memories, tributes, and milestones.',
           magazineType: 'Birthday Magazine',
