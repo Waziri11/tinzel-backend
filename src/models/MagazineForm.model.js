@@ -74,6 +74,10 @@ const magazineFormSchema = new mongoose.Schema(
       type: String,
       default: 'TZS',
     },
+    coverImageUrl: {
+      type: String,
+      default: '/brand/magazine-cover-sample.jpg',
+    },
     lipaNambaInstructions: {
       tillNumber: { type: String, default: '55667788' },
       accountName: { type: String, default: 'Tinzel Media Ltd' },

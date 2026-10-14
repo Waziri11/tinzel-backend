@@ -64,6 +64,7 @@ export const seedInitialData = async () => {
           magazineType: 'Wedding Magazine',
           price: 75000,
           currency: 'TZS',
+          coverImageUrl: '/brand/magazine-cover-sample.jpg',
           lipaNambaInstructions: {
             tillNumber: '55667788',
             accountName: 'Tinzel Media Ltd',
@@ -120,6 +121,7 @@ export const seedInitialData = async () => {
           magazineType: 'Birthday Magazine',
           price: 50000,
           currency: 'TZS',
+          coverImageUrl: '/brand/magazine-cover-sample.jpg',
           lipaNambaInstructions: {
             tillNumber: '55667788',
             accountName: 'Tinzel Media Ltd',
