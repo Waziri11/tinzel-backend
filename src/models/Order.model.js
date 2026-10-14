@@ -120,6 +120,8 @@ const orderSchema = new mongoose.Schema(
         url: String,
         originalName: String,
         size: Number,
+        fieldId: { type: String, default: '' },
+        folderName: { type: String, default: 'General Photos' },
         uploadedAt: { type: Date, default: Date.now },
       },
     ],

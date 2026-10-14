@@ -40,7 +40,7 @@ const formFieldSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['text', 'textarea', 'photo_upload', 'dropdown', 'radio', 'date', 'number'],
+      enum: ['text', 'textarea', 'photo_upload', 'photo_group', 'dropdown', 'radio', 'date', 'number'],
       required: true,
       default: 'text',
     },

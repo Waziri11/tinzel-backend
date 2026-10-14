@@ -71,13 +71,33 @@ router.post('/forms/:slug/submit', uploadPhotos.array('photos', 30), async (req,
       }
     }
 
+    // Parse photos metadata (maps files to question fieldId and folderName)
+    let photosMeta = [];
+    if (typeof req.body.photosMetadata === 'string') {
+      try {
+        photosMeta = JSON.parse(req.body.photosMetadata);
+      } catch (e) {
+        photosMeta = [];
+      }
+    } else if (Array.isArray(req.body.photosMetadata)) {
+      photosMeta = req.body.photosMetadata;
+    }
+
     // Process uploaded photo attachments
-    const uploadedPhotos = (req.files || []).map((file) => ({
-      url: `/uploads/photos/${file.filename}`,
-      originalName: file.originalname,
-      size: file.size,
-      uploadedAt: new Date(),
-    }));
+    const uploadedPhotos = (req.files || []).map((file, idx) => {
+      const meta =
+        photosMeta.find((m) => m.originalName === file.originalname) ||
+        photosMeta[idx] ||
+        {};
+      return {
+        url: `/uploads/photos/${file.filename}`,
+        originalName: file.originalname,
+        size: file.size,
+        fieldId: meta.fieldId || '',
+        folderName: meta.folderName || 'General Photos',
+        uploadedAt: new Date(),
+      };
+    });
 
     const submissionId = generateSubmissionId();
 
