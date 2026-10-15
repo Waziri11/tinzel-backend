@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { validateFormForPublication } from '../src/services/formPublicationService.js';
+import { validateFormAnswers } from '../src/services/formResponseService.js';
 
 test('Form Builder: draft publication requires complete Tinzel settings', () => {
   const incomplete = validateFormForPublication({ title: 'Imported form', sections: [], fields: [] });
@@ -68,4 +69,13 @@ test('Form Builder: Enforces photo upload min and max constraints', () => {
   assert.equal(checkPhotoCount(photoField, 2), 'BELOW_MIN');
   assert.equal(checkPhotoCount(photoField, 8), 'VALID');
   assert.equal(checkPhotoCount(photoField, 25), 'EXCEEDS_MAX');
+});
+
+test('Form Builder: validates structured checkbox and grid answers', () => {
+  const fields = [
+    { fieldId: 'choices', label: 'Choices', type: 'checkbox', required: true },
+    { fieldId: 'grid', label: 'Grid', type: 'grid_radio', rows: ['A', 'B'], required: true },
+  ];
+  assert.deepEqual(validateFormAnswers(fields, { choices: ['One'], grid: { A: 'Yes', B: 'No' } }), []);
+  assert.deepEqual(validateFormAnswers(fields, { choices: [], grid: { A: 'Yes' } }), ['Choices is required', 'Grid is required']);
 });

@@ -4,6 +4,7 @@ import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { uploadPhotos } from '../services/uploadService.js';
 import { generateSubmissionId } from '../services/workflowService.js';
+import { validateFormAnswers } from '../services/formResponseService.js';
 
 const router = Router();
 
@@ -98,6 +99,11 @@ router.post('/forms/:slug/submit', uploadPhotos.array('photos', 30), async (req,
         uploadedAt: new Date(),
       };
     });
+
+    const answerErrors = validateFormAnswers(form.fields, parsedData, uploadedPhotos);
+    if (answerErrors.length > 0) {
+      return res.status(400).json({ success: false, message: answerErrors[0], errors: answerErrors });
+    }
 
     const submissionId = generateSubmissionId();
 

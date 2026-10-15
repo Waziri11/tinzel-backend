@@ -40,7 +40,11 @@ const formFieldSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['text', 'textarea', 'photo_upload', 'photo_group', 'dropdown', 'radio', 'date', 'number'],
+      enum: [
+        'text', 'textarea', 'photo_upload', 'photo_group', 'dropdown', 'radio', 'checkbox',
+        'date', 'datetime', 'time', 'duration', 'number', 'linear_scale', 'rating',
+        'grid_radio', 'grid_checkbox',
+      ],
       required: true,
       default: 'text',
     },
@@ -59,6 +63,20 @@ const formFieldSchema = new mongoose.Schema(
     options: {
       type: [String],
       default: [],
+    },
+    rows: {
+      type: [String],
+      default: [],
+    },
+    scaleConfig: {
+      low: { type: Number, default: 1 },
+      high: { type: Number, default: 5 },
+      lowLabel: { type: String, default: '' },
+      highLabel: { type: String, default: '' },
+    },
+    ratingConfig: {
+      levelCount: { type: Number, default: 5 },
+      iconType: { type: String, enum: ['star', 'heart', 'thumb'], default: 'star' },
     },
     validationRules: {
       minPhotos: { type: Number, default: 0 },
