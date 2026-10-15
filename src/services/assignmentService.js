@@ -10,6 +10,7 @@ export const autoAssignOrder = async (order, assignedBy = null) => {
   const availableDesigners = await StaffUser.find({
     role: 'designer',
     isActive: true,
+    deletedAt: null,
     isEligibleForAssignment: true,
     $expr: { $lt: ['$currentActiveWorkload', '$maxActiveWorkload'] },
   }).sort({ currentActiveWorkload: 1, updatedAt: 1 });
@@ -80,6 +81,7 @@ export const manualAssignOrder = async (order, targetDesignerId, reason, manager
     _id: targetDesignerId,
     role: 'designer',
     isActive: true,
+    deletedAt: null,
   });
 
   if (!targetDesigner) {

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { MagazineForm } from '../models/MagazineForm.model.js';
 import { StaffUser } from '../models/StaffUser.model.js';
+import { Order } from '../models/Order.model.js';
 import { SystemConfig } from '../models/SystemConfig.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
@@ -159,11 +160,39 @@ router.delete('/forms/:id', verifyStaffToken, requireRoles('admin', 'manager'), 
 router.use(verifyStaffToken, requireRoles('admin'));
 
 // --- Staff Management & Workload Endpoints ---
+const staffRoles = ['admin', 'manager', 'designer'];
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const publicStaff = (user) => {
+  const data = user.toObject();
+  delete data.passwordHash;
+  return data;
+};
+const logStaffChange = (req, action, user) => AuditLog.create({
+  actor: { type: req.user.role, id: req.user._id, name: req.user.name },
+  action,
+  details: { staffId: user._id, name: user.name, role: user.role },
+});
+const activeDesignerOrder = (id) => Order.exists({
+  assignedDesigner: id,
+  status: { $nin: ['delivered', 'closed'] },
+});
+
 router.get('/staff', async (req, res) => {
   try {
-    const staff = await StaffUser.find().select('-passwordHash').sort({ role: 1, name: 1 });
+    const staff = await StaffUser.find({ deletedAt: null }).select('-passwordHash').sort({ role: 1, name: 1 });
     return res.status(200).json({ success: true, staff });
   } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/staff/:id', async (req, res) => {
+  try {
+    const user = await StaffUser.findOne({ _id: req.params.id, deletedAt: null }).select('-passwordHash');
+    if (!user) return res.status(404).json({ success: false, message: 'Staff user not found' });
+    return res.status(200).json({ success: true, user });
+  } catch (error) {
+    if (error.name === 'CastError') return res.status(404).json({ success: false, message: 'Staff user not found' });
     return res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -171,11 +200,15 @@ router.get('/staff', async (req, res) => {
 router.post('/staff', async (req, res) => {
   try {
     const { name, email, password, role, phone, maxActiveWorkload, isEligibleForAssignment } = req.body;
-    if (!name || !email || !password) {
-      return res.status(400).json({ success: false, message: 'Name, email, and password are required' });
+    if (typeof name !== 'string' || !name.trim() || typeof email !== 'string' || !emailPattern.test(email.trim()) || typeof password !== 'string' || password.length < 8) {
+      return res.status(400).json({ success: false, message: 'Name, valid email, and a password of at least 8 characters are required' });
+    }
+    if (!staffRoles.includes(role)) return res.status(400).json({ success: false, message: 'Choose a valid internal role' });
+    if (role === 'designer' && maxActiveWorkload !== undefined && (!Number.isInteger(Number(maxActiveWorkload)) || Number(maxActiveWorkload) < 1 || Number(maxActiveWorkload) > 20)) {
+      return res.status(400).json({ success: false, message: 'Designer capacity must be between 1 and 20' });
     }
 
-    const existing = await StaffUser.findOne({ email: email.toLowerCase() });
+    const existing = await StaffUser.findOne({ email: email.trim().toLowerCase() });
     if (existing) {
       return res.status(400).json({ success: false, message: 'Email already registered' });
     }
@@ -183,48 +216,101 @@ router.post('/staff', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
 
     const user = await StaffUser.create({
-      name,
-      email: email.toLowerCase(),
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
       passwordHash,
-      role: role || 'designer',
-      phone: phone || '',
-      maxActiveWorkload: Number(maxActiveWorkload) || 5,
+      role,
+      phone: typeof phone === 'string' ? phone.trim() : '',
+      maxActiveWorkload: role === 'designer' && maxActiveWorkload !== undefined ? Number(maxActiveWorkload) : 5,
       isEligibleForAssignment: isEligibleForAssignment !== false,
     });
 
+    await logStaffChange(req, 'STAFF_CREATED', user);
     return res.status(201).json({
       success: true,
       message: 'Staff account created successfully',
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        currentActiveWorkload: user.currentActiveWorkload,
-        maxActiveWorkload: user.maxActiveWorkload,
-      },
+      user: publicStaff(user),
     });
   } catch (error) {
+    if (error.code === 11000) return res.status(409).json({ success: false, message: 'Email already registered' });
     return res.status(500).json({ success: false, message: error.message });
   }
 });
 
 router.put('/staff/:id', async (req, res) => {
   try {
-    const { name, role, phone, isActive, maxActiveWorkload, isEligibleForAssignment, password } = req.body;
-    const updates = { name, role, phone, isActive, maxActiveWorkload, isEligibleForAssignment };
-
-    if (password) {
-      updates.passwordHash = await bcrypt.hash(password, 10);
+    const user = await StaffUser.findOne({ _id: req.params.id, deletedAt: null });
+    if (!user) return res.status(404).json({ success: false, message: 'Staff user not found' });
+    const wasActiveAdmin = user.role === 'admin' && user.isActive;
+    const { name, email, role, phone, isActive, maxActiveWorkload, isEligibleForAssignment, password } = req.body;
+    if (name !== undefined) {
+      if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ success: false, message: 'Name is required' });
+      user.name = name.trim();
     }
-
-    const user = await StaffUser.findByIdAndUpdate(req.params.id, updates, { new: true }).select('-passwordHash');
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'Staff user not found' });
+    if (email !== undefined) {
+      if (typeof email !== 'string' || !emailPattern.test(email.trim())) return res.status(400).json({ success: false, message: 'Valid email is required' });
+      user.email = email.trim().toLowerCase();
     }
-
-    return res.status(200).json({ success: true, message: 'Staff user updated', user });
+    if (role !== undefined) {
+      if (!staffRoles.includes(role)) return res.status(400).json({ success: false, message: 'Choose a valid internal role' });
+      user.role = role;
+    }
+    if (phone !== undefined) {
+      if (typeof phone !== 'string') return res.status(400).json({ success: false, message: 'Phone must be text' });
+      user.phone = phone.trim();
+    }
+    if (isActive !== undefined) {
+      if (typeof isActive !== 'boolean') return res.status(400).json({ success: false, message: 'Status must be active or inactive' });
+      user.isActive = isActive;
+    }
+    if (isEligibleForAssignment !== undefined) {
+      if (typeof isEligibleForAssignment !== 'boolean') return res.status(400).json({ success: false, message: 'Assignment status must be true or false' });
+      user.isEligibleForAssignment = isEligibleForAssignment;
+    }
+    if (maxActiveWorkload !== undefined) {
+      if (!Number.isInteger(Number(maxActiveWorkload)) || Number(maxActiveWorkload) < 1 || Number(maxActiveWorkload) > 20) return res.status(400).json({ success: false, message: 'Designer capacity must be between 1 and 20' });
+      user.maxActiveWorkload = Number(maxActiveWorkload);
+    }
+    if (password !== undefined && password !== '') {
+      if (typeof password !== 'string' || password.length < 8) return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
+      user.passwordHash = await bcrypt.hash(password, 10);
+    }
+    if (String(user._id) === String(req.user._id) && (user.role !== 'admin' || !user.isActive)) return res.status(409).json({ success: false, message: 'You cannot remove your own administrator access' });
+    if (wasActiveAdmin && (user.role !== 'admin' || !user.isActive)) {
+      const otherAdmins = await StaffUser.countDocuments({ _id: { $ne: user._id }, role: 'admin', isActive: true, deletedAt: null });
+      if (!otherAdmins) return res.status(409).json({ success: false, message: 'At least one active administrator is required' });
+    }
+    if (user.role !== 'designer' || !user.isActive) {
+      if (await activeDesignerOrder(user._id)) return res.status(409).json({ success: false, message: 'Reassign this designer’s open orders before changing their role or access' });
+    }
+    await user.save();
+    await logStaffChange(req, 'STAFF_UPDATED', user);
+    return res.status(200).json({ success: true, message: 'Staff user updated', user: publicStaff(user) });
   } catch (error) {
+    if (error.name === 'CastError') return res.status(404).json({ success: false, message: 'Staff user not found' });
+    if (error.code === 11000) return res.status(409).json({ success: false, message: 'Email already registered' });
+    if (error.name === 'ValidationError') return res.status(400).json({ success: false, message: error.message });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.delete('/staff/:id', async (req, res) => {
+  try {
+    const user = await StaffUser.findOne({ _id: req.params.id, deletedAt: null });
+    if (!user) return res.status(404).json({ success: false, message: 'Staff user not found' });
+    if (String(user._id) === String(req.user._id)) return res.status(409).json({ success: false, message: 'You cannot delete your own account' });
+    if (user.role === 'admin' && user.isActive) {
+      const otherAdmins = await StaffUser.countDocuments({ _id: { $ne: user._id }, role: 'admin', isActive: true, deletedAt: null });
+      if (!otherAdmins) return res.status(409).json({ success: false, message: 'At least one active administrator is required' });
+    }
+    if (await activeDesignerOrder(user._id)) return res.status(409).json({ success: false, message: 'Reassign this designer’s open orders before deleting their account' });
+    user.isActive = false;
+    user.deletedAt = new Date();
+    await user.save();
+    await logStaffChange(req, 'STAFF_DELETED', user);
+    return res.status(200).json({ success: true, message: 'Staff account deleted' });
+  } catch (error) {
+    if (error.name === 'CastError') return res.status(404).json({ success: false, message: 'Staff user not found' });
     return res.status(500).json({ success: false, message: error.message });
   }
 });

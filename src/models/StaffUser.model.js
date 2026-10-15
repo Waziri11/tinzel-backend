@@ -34,6 +34,10 @@ const staffUserSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    deletedAt: {
+      type: Date,
+      default: null,
+    },
     // Workload controls for designers
     isEligibleForAssignment: {
       type: Boolean,

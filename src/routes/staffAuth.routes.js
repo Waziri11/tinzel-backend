@@ -22,7 +22,7 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
-    if (!user.isActive) {
+    if (!user.isActive || user.deletedAt) {
       return res.status(403).json({ success: false, message: 'Account is deactivated' });
     }
 

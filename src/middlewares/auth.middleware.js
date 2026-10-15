@@ -30,7 +30,7 @@ export const verifyStaffToken = async (req, res, next) => {
     const decoded = jwt.verify(token, JWT_SECRET);
 
     const user = await StaffUser.findById(decoded.id).select('-passwordHash');
-    if (!user || !user.isActive) {
+    if (!user || !user.isActive || user.deletedAt) {
       return res.status(401).json({ success: false, message: 'Invalid or inactive user account' });
     }
 
