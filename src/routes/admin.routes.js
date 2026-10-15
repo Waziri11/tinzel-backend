@@ -9,6 +9,7 @@ import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.j
 import { getSimulatedNotifications } from '../services/notificationService.js';
 import { availableFormSlug } from '../utils/formSlug.js';
 import { validateFormForPublication } from '../services/formPublicationService.js';
+import { importGoogleForm, GoogleFormsImportError } from '../services/googleFormsImportService.js';
 
 import { uploadCover } from '../services/uploadService.js';
 
@@ -90,6 +91,52 @@ router.post('/forms', verifyStaffToken, requireRoles('admin', 'manager'), async 
     return res.status(201).json({ success: true, message: 'Draft form created successfully', form });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/forms/import-google', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
+  try {
+    if (typeof req.body?.url !== 'string' || !req.body.url.trim()) {
+      return res.status(400).json({ success: false, message: 'Google Form link is required' });
+    }
+    const imported = await importGoogleForm(req.body.url.trim());
+    let form;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const slug = await availableFormSlug(imported.title, (candidate) => MagazineForm.exists({ slug: candidate }));
+      try {
+        form = await MagazineForm.create({
+          title: imported.title,
+          slug,
+          description: imported.description,
+          sections: imported.sections,
+          fields: imported.fields,
+          coverImageUrl: '',
+          isActive: false,
+          importSource: {
+            provider: 'google_forms',
+            sourceUrl: imported.sourceUrl,
+            importedAt: new Date(),
+            warnings: imported.warnings,
+          },
+        });
+        break;
+      } catch (error) {
+        if (error.code !== 11000 || !error.keyPattern?.slug) throw error;
+      }
+    }
+    if (!form) return res.status(409).json({ success: false, message: 'Could not reserve a unique edition address. Please try again.' });
+
+    await AuditLog.create({
+      actor: { type: req.user.role, id: req.user._id, name: req.user.name },
+      action: 'FORM_IMPORTED',
+      details: { formId: form._id, slug: form.slug, provider: 'google_forms', warningCount: imported.warnings.length },
+    });
+    return res.status(201).json({ success: true, message: 'Google Form imported as a draft', form, warnings: imported.warnings });
+  } catch (error) {
+    if (error instanceof GoogleFormsImportError) {
+      return res.status(error.status).json({ success: false, message: error.message });
+    }
+    return res.status(500).json({ success: false, message: 'Google Form import failed' });
   }
 });
 

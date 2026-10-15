@@ -149,6 +149,12 @@ const magazineFormSchema = new mongoose.Schema(
       type: Number,
       default: 1,
     },
+    importSource: {
+      provider: { type: String, enum: ['google_forms'] },
+      sourceUrl: { type: String, default: '' },
+      importedAt: Date,
+      warnings: { type: [String], default: [] },
+    },
   },
   {
     timestamps: true,
