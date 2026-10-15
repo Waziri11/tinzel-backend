@@ -1,5 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { validateFormForPublication } from '../src/services/formPublicationService.js';
+
+test('Form Builder: draft publication requires complete Tinzel settings', () => {
+  const incomplete = validateFormForPublication({ title: 'Imported form', sections: [], fields: [] });
+  assert.ok(incomplete.includes('A magazine cover image is required'));
+  assert.ok(incomplete.includes('At least one question is required'));
+
+  const complete = validateFormForPublication({
+    title: 'Imported form',
+    coverImageUrl: '/uploads/covers/cover.jpg',
+    price: 75000,
+    currency: 'TZS',
+    sections: [{ sectionId: 'section_1', title: 'Questions' }],
+    fields: [{ fieldId: 'field_1', label: 'Name' }],
+    lipaNambaInstructions: { tillNumber: '123', accountName: 'Tinzel', instructions: 'Pay here' },
+  });
+  assert.deepEqual(complete, []);
+});
 
 test('Form Builder: Validates required dynamic fields in submission', () => {
   const formSchema = {

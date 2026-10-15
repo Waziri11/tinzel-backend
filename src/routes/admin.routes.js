@@ -8,6 +8,7 @@ import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
 import { getSimulatedNotifications } from '../services/notificationService.js';
 import { availableFormSlug } from '../utils/formSlug.js';
+import { validateFormForPublication } from '../services/formPublicationService.js';
 
 import { uploadCover } from '../services/uploadService.js';
 
@@ -53,10 +54,6 @@ router.post('/forms', verifyStaffToken, requireRoles('admin', 'manager'), async 
       return res.status(400).json({ success: false, message: 'Magazine edition title is required' });
     }
 
-    if (!coverImageUrl || !coverImageUrl.trim()) {
-      return res.status(400).json({ success: false, message: 'A magazine cover image is REQUIRED for every edition' });
-    }
-
     let form;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const cleanSlug = await availableFormSlug(title, (candidate) => MagazineForm.exists({ slug: candidate }));
@@ -68,10 +65,11 @@ router.post('/forms', verifyStaffToken, requireRoles('admin', 'manager'), async 
           magazineType,
           price: Number(price) || 50000,
           currency: currency || 'TZS',
-          coverImageUrl: coverImageUrl.trim(),
+          coverImageUrl: typeof coverImageUrl === 'string' ? coverImageUrl.trim() : '',
           lipaNambaInstructions,
           sections: sections || [],
           fields: fields || [],
+          isActive: false,
         });
         break;
       } catch (error) {
@@ -89,7 +87,7 @@ router.post('/forms', verifyStaffToken, requireRoles('admin', 'manager'), async 
       details: { slug: form.slug, title: form.title },
     });
 
-    return res.status(201).json({ success: true, message: 'Form created successfully', form });
+    return res.status(201).json({ success: true, message: 'Draft form created successfully', form });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -97,11 +95,7 @@ router.post('/forms', verifyStaffToken, requireRoles('admin', 'manager'), async 
 
 router.put('/forms/:id', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
   try {
-    const { title, description, magazineType, price, currency, coverImageUrl, lipaNambaInstructions, sections, fields, isActive, isArchived } = req.body;
-
-    if (!coverImageUrl || !coverImageUrl.trim()) {
-      return res.status(400).json({ success: false, message: 'A magazine cover image is REQUIRED for every edition' });
-    }
+    const { title, description, magazineType, price, currency, coverImageUrl, lipaNambaInstructions, sections, fields } = req.body;
 
     const form = await MagazineForm.findByIdAndUpdate(
       req.params.id,
@@ -111,12 +105,10 @@ router.put('/forms/:id', verifyStaffToken, requireRoles('admin', 'manager'), asy
         magazineType,
         price,
         currency,
-        coverImageUrl: coverImageUrl.trim(),
+        coverImageUrl: typeof coverImageUrl === 'string' ? coverImageUrl.trim() : '',
         lipaNambaInstructions,
         sections: sections || [],
         fields: fields || [],
-        isActive,
-        isArchived,
         $inc: { version: 1 },
       },
       { new: true }
@@ -134,6 +126,31 @@ router.put('/forms/:id', verifyStaffToken, requireRoles('admin', 'manager'), asy
 
     return res.status(200).json({ success: true, message: 'Form updated successfully', form });
   } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/forms/:id/publish', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
+  try {
+    const form = await MagazineForm.findById(req.params.id);
+    if (!form) return res.status(404).json({ success: false, message: 'Form not found' });
+    if (form.isArchived) return res.status(409).json({ success: false, message: 'Archived forms cannot be published' });
+
+    const errors = validateFormForPublication(form);
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, message: errors[0], errors });
+    }
+
+    form.isActive = true;
+    await form.save();
+    await AuditLog.create({
+      actor: { type: req.user.role, id: req.user._id, name: req.user.name },
+      action: 'FORM_PUBLISHED',
+      details: { formId: form._id, slug: form.slug, version: form.version },
+    });
+    return res.status(200).json({ success: true, message: 'Form published successfully', form });
+  } catch (error) {
+    if (error.name === 'CastError') return res.status(404).json({ success: false, message: 'Form not found' });
     return res.status(500).json({ success: false, message: error.message });
   }
 });

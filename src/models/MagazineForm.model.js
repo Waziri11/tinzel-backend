@@ -103,8 +103,7 @@ const magazineFormSchema = new mongoose.Schema(
     },
     coverImageUrl: {
       type: String,
-      required: [true, 'A magazine cover image is required for every edition'],
-      default: '/brand/magazine-cover-sample.jpg',
+      default: '',
     },
     lipaNambaInstructions: {
       tillNumber: { type: String, default: '55667788' },
@@ -122,7 +121,7 @@ const magazineFormSchema = new mongoose.Schema(
     fields: [formFieldSchema],
     isActive: {
       type: Boolean,
-      default: true,
+      default: false,
     },
     isArchived: {
       type: Boolean,
