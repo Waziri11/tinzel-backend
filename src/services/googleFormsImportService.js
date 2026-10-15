@@ -200,7 +200,10 @@ export const normalizeGoogleFormData = (data, sourceUrl = '') => {
     else if (type === 11 || type === 12) warnings.push(`Skipped ${type === 11 ? 'image' : 'video'}: ${item?.[1] || `Item ${index + 1}`}`);
     else warnings.push(`Skipped unsupported Google Forms item: ${item?.[1] || `Item ${index + 1}`}`);
 
-    if (JSON.stringify(item).includes('goToSection')) warnings.push(`Removed answer-based section branching from: ${item?.[1] || `Item ${index + 1}`}`);
+    const hasBranching = (item?.[4] || []).some((payload) => Array.isArray(payload?.[1]) && payload[1].some((option) =>
+      Array.isArray(option) && ((option[2] !== null && option[2] !== undefined) || (option[3] !== null && option[3] !== undefined))
+    ));
+    if (hasBranching || JSON.stringify(item).includes('goToSection')) warnings.push(`Removed answer-based section branching from: ${item?.[1] || `Item ${index + 1}`}`);
   });
 
   const serializedForm = JSON.stringify(form).toLowerCase();

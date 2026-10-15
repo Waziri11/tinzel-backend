@@ -9,13 +9,21 @@ export const validateFormAnswers = (fields, answers, uploadedPhotos = []) => {
   const safeAnswers = answers && typeof answers === 'object' ? answers : {};
 
   for (const field of fields || []) {
-    if (!field.required) continue;
     if (field.type === 'photo_upload' || field.type === 'photo_group') {
-      if (!uploadedPhotos.some((photo) => photo.fieldId === field.fieldId)) {
+      const count = uploadedPhotos.filter((photo) => photo.fieldId === field.fieldId).length;
+      const minimum = Number(field.validationRules?.minPhotos || 0);
+      const maximum = Number(field.validationRules?.maxPhotos || 0);
+      if (field.required && count === 0) {
         errors.push(`${field.label} is required`);
+      } else if (count > 0 && count < minimum) {
+        errors.push(`${field.label} requires at least ${minimum} photos`);
+      } else if (maximum > 0 && count > maximum) {
+        errors.push(`${field.label} allows at most ${maximum} photos`);
       }
       continue;
     }
+
+    if (!field.required) continue;
 
     const answer = safeAnswers[field.fieldId];
     if (field.type === 'grid_radio' || field.type === 'grid_checkbox') {

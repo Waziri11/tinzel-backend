@@ -143,6 +143,19 @@ router.post('/forms/import-google', verifyStaffToken, requireRoles('admin', 'man
 router.put('/forms/:id', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
   try {
     const { title, description, magazineType, price, currency, coverImageUrl, lipaNambaInstructions, sections, fields } = req.body;
+    const currentForm = await MagazineForm.findById(req.params.id);
+    if (!currentForm) return res.status(404).json({ success: false, message: 'Form not found' });
+    if (currentForm.isArchived) return res.status(409).json({ success: false, message: 'Archived forms cannot be edited' });
+
+    if (currentForm.isActive) {
+      const candidate = {
+        ...currentForm.toObject(), title, description, magazineType, price, currency,
+        coverImageUrl: typeof coverImageUrl === 'string' ? coverImageUrl.trim() : '',
+        lipaNambaInstructions, sections: sections || [], fields: fields || [],
+      };
+      const errors = validateFormForPublication(candidate);
+      if (errors.length > 0) return res.status(400).json({ success: false, message: errors[0], errors });
+    }
 
     const form = await MagazineForm.findByIdAndUpdate(
       req.params.id,
@@ -160,10 +173,6 @@ router.put('/forms/:id', verifyStaffToken, requireRoles('admin', 'manager'), asy
       },
       { new: true }
     );
-
-    if (!form) {
-      return res.status(404).json({ success: false, message: 'Form not found' });
-    }
 
     await AuditLog.create({
       actor: { type: req.user.role, id: req.user._id, name: req.user.name },
