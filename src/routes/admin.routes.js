@@ -213,18 +213,22 @@ router.post('/forms/:id/publish', verifyStaffToken, requireRoles('admin', 'manag
 
 router.delete('/forms/:id', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
   try {
-    const form = await MagazineForm.findByIdAndUpdate(
-      req.params.id,
-      { isArchived: true, isActive: false },
-      { new: true }
-    );
+    const form = await MagazineForm.findById(req.params.id);
+    if (!form) return res.status(404).json({ success: false, message: 'Form not found' });
+    if (form.isArchived) return res.status(409).json({ success: false, message: 'Form is already deleted' });
 
-    if (!form) {
-      return res.status(404).json({ success: false, message: 'Form not found' });
-    }
+    form.isArchived = true;
+    form.isActive = false;
+    await form.save();
+    await AuditLog.create({
+      actor: { type: req.user.role, id: req.user._id, name: req.user.name },
+      action: 'FORM_ARCHIVED',
+      details: { formId: form._id, slug: form.slug, title: form.title },
+    });
 
-    return res.status(200).json({ success: true, message: 'Form archived', form });
+    return res.status(200).json({ success: true, message: 'Form deleted from active catalogue', form });
   } catch (error) {
+    if (error.name === 'CastError') return res.status(404).json({ success: false, message: 'Form not found' });
     return res.status(500).json({ success: false, message: error.message });
   }
 });
