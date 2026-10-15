@@ -2,8 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import app from './src/app.js';
-import { connectDB, getDBStatus } from './src/config/db.js';
-import { seedInitialData } from './src/utils/seedData.js';
+import { connectDB } from './src/config/db.js';
 
 const PORT = process.env.PORT || 5001;
 
@@ -12,9 +11,6 @@ app.listen(PORT, async () => {
   console.log(`[Tinzel Backend] Health endpoint: http://localhost:${PORT}/api/health`);
   console.log(`[Tinzel Backend] Specification: STR-TNZ-US-001 Conveyor Belt`);
 
-  // Attempt database connection in background
+  // Connect for local development; Vercel connects in src/app.js.
   await connectDB();
-  if (getDBStatus() === 'connected') {
-    await seedInitialData();
-  }
 });
