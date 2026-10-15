@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 import path from 'path';
+import { connectDB } from './config/db.js';
 
 import healthRoutes from './routes/health.routes.js';
 import itemRoutes from './routes/item.routes.js';
@@ -25,6 +26,18 @@ app.use(
 app.use(morgan('dev'));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Vercel serves this Express app directly, without running server.js.
+app.use('/api', async (req, res, next) => {
+  const connected = await connectDB();
+  if (connected || req.path.startsWith('/health') || req.path.startsWith('/items')) {
+    return next();
+  }
+  return res.status(503).json({
+    success: false,
+    message: 'Database temporarily unavailable. Please try again shortly.',
+  });
+});
 
 // Static file uploads directory
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));

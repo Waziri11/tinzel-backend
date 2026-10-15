@@ -1,21 +1,32 @@
 import mongoose from 'mongoose';
 
+let connectionPromise;
+
 export const connectDB = async () => {
+  if (mongoose.connection.readyState === 1) return true;
+
   const mongoUri = process.env.MONGODB_URI;
 
   if (!mongoUri) {
     console.warn('[DB Warning] MONGODB_URI is not defined in environment variables. Database connection skipped.');
-    return;
+    return false;
   }
 
-  try {
-    const conn = await mongoose.connect(mongoUri, {
-      serverSelectionTimeoutMS: 2500, // Quick timeout if local MongoDB isn't running
+  if (!connectionPromise) {
+    connectionPromise = mongoose.connect(mongoUri, {
+      serverSelectionTimeoutMS: 2500,
+    }).then((conn) => {
+      console.log(`[DB Connected] MongoDB connected: ${conn.connection.host}`);
+      return true;
+    }).catch((error) => {
+      console.warn(`[DB Notice] Could not connect to MongoDB (${error.message}).`);
+      return false;
+    }).finally(() => {
+      connectionPromise = undefined;
     });
-    console.log(`[DB Connected] MongoDB connected: ${conn.connection.host}`);
-  } catch (error) {
-    console.warn(`[DB Notice] Could not connect to MongoDB (${error.message}). Running in fallback mode.`);
   }
+
+  return connectionPromise;
 };
 
 export const getDBStatus = () => {
