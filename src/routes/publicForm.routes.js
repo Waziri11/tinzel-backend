@@ -109,6 +109,12 @@ router.post('/forms/:slug/submit', uploadPhotos.array('photos', 30), async (req,
       clientWhatsApp: clientWhatsApp.trim(),
       clientEmail: clientEmail ? clientEmail.trim() : '',
       submittedData: parsedData,
+      submittedFields: (form.fields || []).map((field) => ({
+        fieldId: field.fieldId,
+        label: field.label,
+        sectionId: field.sectionId,
+        order: field.order,
+      })),
       uploadedPhotos,
       status: 'awaiting_payment',
     });

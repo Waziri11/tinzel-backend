@@ -1,13 +1,37 @@
 import { Router } from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import { ZipArchive } from 'archiver';
+import mongoose from 'mongoose';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
 import { uploadDraft, uploadPrint } from '../services/uploadService.js';
+import { photoArchiveEntries, photoArchiveFileName } from '../utils/photoArchive.js';
 
 const router = Router();
 
 // Designer, Manager, or Admin access
 router.use(verifyStaffToken, requireRoles('designer', 'manager', 'admin'));
+
+router.param('id', async (req, res, next, id) => {
+  try {
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+    const order = await Order.findById(id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+    if (req.user.role === 'designer' && String(order.assignedDesigner) !== String(req.user._id)) {
+      return res.status(403).json({ success: false, message: 'This order is not assigned to you' });
+    }
+    req.order = order;
+    next();
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
 
 // Get all orders assigned to current designer
 router.get('/orders', async (req, res) => {
@@ -22,7 +46,7 @@ router.get('/orders', async (req, res) => {
     }
 
     const orders = await Order.find(filter)
-      .populate('formId', 'title slug')
+      .select('submissionId trackingId clientName formTitle status updatedAt assignedDesigner')
       .sort({ updatedAt: -1 });
 
     return res.status(200).json({ success: true, count: orders.length, orders });
@@ -34,16 +58,40 @@ router.get('/orders', async (req, res) => {
 // Get single order with complete client assets & revision notes
 router.get('/orders/:id', async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id)
-      .populate('formId')
-      .populate('assignedDesigner', 'name email');
-
-    if (!order) {
-      return res.status(404).json({ success: false, message: 'Order not found' });
-    }
+    const order = await req.order.populate(['formId', { path: 'assignedDesigner', select: 'name email' }]);
 
     return res.status(200).json({ success: true, order });
   } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Download one assigned order's photo folder as a ZIP archive.
+router.get('/orders/:id/photo-folder.zip', async (req, res) => {
+  const folder = req.query.folder;
+  if (typeof folder !== 'string' || !folder.trim()) {
+    return res.status(400).json({ success: false, message: 'Photo folder is required' });
+  }
+
+  try {
+    const uploadsDir = path.join(process.cwd(), 'uploads', 'photos');
+    const entries = photoArchiveEntries(req.order.uploadedPhotos, folder, uploadsDir);
+    if (entries.length === 0) {
+      return res.status(404).json({ success: false, message: 'Photo folder not found for this order' });
+    }
+    if (entries.some(({ diskPath }) => !fs.existsSync(diskPath) || !fs.statSync(diskPath).isFile())) {
+      return res.status(409).json({ success: false, message: 'Some photos in this folder are unavailable' });
+    }
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${photoArchiveFileName(req.order.trackingId || req.order.submissionId, folder)}"`);
+    const archive = new ZipArchive({ zlib: { level: 6 } });
+    archive.on('error', (error) => res.destroy(error));
+    archive.pipe(res);
+    entries.forEach(({ diskPath, archiveName }) => archive.file(diskPath, { name: archiveName }));
+    await archive.finalize();
+  } catch (error) {
+    if (res.headersSent) return res.destroy(error);
     return res.status(500).json({ success: false, message: error.message });
   }
 });

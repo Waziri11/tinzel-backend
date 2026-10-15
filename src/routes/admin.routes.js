@@ -6,6 +6,7 @@ import { SystemConfig } from '../models/SystemConfig.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
 import { getSimulatedNotifications } from '../services/notificationService.js';
+import { availableFormSlug } from '../utils/formSlug.js';
 
 import { uploadCover } from '../services/uploadService.js';
 
@@ -46,38 +47,45 @@ router.post(
 
 router.post('/forms', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
   try {
-    const { title, slug, description, magazineType, price, currency, coverImageUrl, lipaNambaInstructions, sections, fields } = req.body;
-    if (!title || !slug) {
-      return res.status(400).json({ success: false, message: 'Title and unique slug are required' });
+    const { title, description, magazineType, price, currency, coverImageUrl, lipaNambaInstructions, sections, fields } = req.body;
+    if (!title || !title.trim()) {
+      return res.status(400).json({ success: false, message: 'Magazine edition title is required' });
     }
 
     if (!coverImageUrl || !coverImageUrl.trim()) {
       return res.status(400).json({ success: false, message: 'A magazine cover image is REQUIRED for every edition' });
     }
 
-    const cleanSlug = slug.toLowerCase().trim().replace(/[^a-z0-9-]/g, '-');
-    const existing = await MagazineForm.findOne({ slug: cleanSlug });
-    if (existing) {
-      return res.status(400).json({ success: false, message: 'A form with this slug already exists' });
+    let form;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const cleanSlug = await availableFormSlug(title, (candidate) => MagazineForm.exists({ slug: candidate }));
+      try {
+        form = await MagazineForm.create({
+          title: title.trim(),
+          slug: cleanSlug,
+          description,
+          magazineType,
+          price: Number(price) || 50000,
+          currency: currency || 'TZS',
+          coverImageUrl: coverImageUrl.trim(),
+          lipaNambaInstructions,
+          sections: sections || [],
+          fields: fields || [],
+        });
+        break;
+      } catch (error) {
+        if (error.code !== 11000 || !error.keyPattern?.slug) throw error;
+      }
     }
 
-    const form = await MagazineForm.create({
-      title,
-      slug: cleanSlug,
-      description,
-      magazineType,
-      price: Number(price) || 50000,
-      currency: currency || 'TZS',
-      coverImageUrl: coverImageUrl.trim(),
-      lipaNambaInstructions,
-      sections: sections || [],
-      fields: fields || [],
-    });
+    if (!form) {
+      return res.status(409).json({ success: false, message: 'Could not reserve a unique edition address. Please try again.' });
+    }
 
     await AuditLog.create({
       actor: { type: req.user.role, id: req.user._id, name: req.user.name },
       action: 'FORM_CREATED',
-      details: { slug: cleanSlug, title },
+      details: { slug: form.slug, title: form.title },
     });
 
     return res.status(201).json({ success: true, message: 'Form created successfully', form });

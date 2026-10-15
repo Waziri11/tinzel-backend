@@ -115,6 +115,12 @@ const orderSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: {},
     },
+    submittedFields: [{
+      fieldId: String,
+      label: String,
+      sectionId: String,
+      order: Number,
+    }],
     uploadedPhotos: [
       {
         url: String,
