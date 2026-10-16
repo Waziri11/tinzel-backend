@@ -2,6 +2,8 @@ const ALLOWED_HOSTS = new Set(['forms.gle', 'docs.google.com']);
 const MAX_REDIRECTS = 4;
 const MAX_HTML_BYTES = 5 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 10000;
+const MAX_FETCH_ATTEMPTS = 2;
+const TRANSIENT_GOOGLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 const decodeHtmlEntities = (value) => value
   .replaceAll('&quot;', '"')
   .replaceAll('&#39;', "'")
@@ -30,6 +32,16 @@ export const validateGoogleFormUrl = (value) => {
   if (url.username || url.password) throw new GoogleFormsImportError('Google Forms links cannot include credentials');
   if (url.hostname === 'docs.google.com' && !url.pathname.startsWith('/forms/')) {
     throw new GoogleFormsImportError('The link must point to a Google Form');
+  }
+
+  // Staff often copy the URL from the Google Forms editor. Import the public
+  // responder page instead, while preserving access keys in the query string.
+  if (url.hostname === 'docs.google.com') {
+    const editorPath = url.pathname.match(/^\/forms\/(?:u\/\d+\/)?d\/(e\/)?([^/]+)\/edit\/?$/);
+    if (editorPath) {
+      url.pathname = `/forms/d/${editorPath[1] || ''}${editorPath[2]}/viewform`;
+      url.searchParams.delete('edit_requested');
+    }
   }
   url.hash = '';
   return url;
@@ -66,16 +78,24 @@ const fetchPublicFormHtml = async (sourceUrl, fetchImpl = fetch) => {
   try {
     for (let redirect = 0; redirect <= MAX_REDIRECTS; redirect += 1) {
       let response;
-      try {
-        response = await fetchImpl(url, {
-          method: 'GET',
-          redirect: 'manual',
-          signal: controller.signal,
-          headers: { 'User-Agent': 'Tinzel-Google-Forms-Importer/1.0', Accept: 'text/html' },
-        });
-      } catch (error) {
-        if (error.name === 'AbortError') throw new GoogleFormsImportError('Google Form import timed out', 504);
-        throw new GoogleFormsImportError('Could not reach Google Forms', 502);
+      for (let attempt = 0; attempt < MAX_FETCH_ATTEMPTS; attempt += 1) {
+        try {
+          response = await fetchImpl(url, {
+            method: 'GET',
+            redirect: 'manual',
+            signal: controller.signal,
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Tinzel-Google-Forms-Importer/1.0)', Accept: 'text/html,application/xhtml+xml' },
+          });
+        } catch (error) {
+          if (error.name === 'AbortError' || controller.signal.aborted) {
+            throw new GoogleFormsImportError('Google Form import timed out. Please try again.', 504);
+          }
+          if (attempt + 1 === MAX_FETCH_ATTEMPTS) {
+            throw new GoogleFormsImportError('Could not reach Google Forms. Please try again.', 502);
+          }
+          continue;
+        }
+        if (!TRANSIENT_GOOGLE_STATUSES.has(response.status) || attempt + 1 === MAX_FETCH_ATTEMPTS) break;
       }
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = response.headers.get('location');
@@ -84,7 +104,19 @@ const fetchPublicFormHtml = async (sourceUrl, fetchImpl = fetch) => {
         continue;
       }
       if (!response.ok) {
-        throw new GoogleFormsImportError(response.status === 404 ? 'Google Form was not found or is unpublished' : 'Google Form could not be opened', response.status === 404 ? 404 : 502);
+        if ([401, 403].includes(response.status)) {
+          throw new GoogleFormsImportError('This Google Form is restricted. In Google Forms, publish it and allow anyone with the link to respond, then try again.', 422);
+        }
+        if (response.status === 404) {
+          throw new GoogleFormsImportError('Google Form was not found or is unpublished. Copy its responder link and try again.', 404);
+        }
+        if (response.status === 429) {
+          throw new GoogleFormsImportError('Google temporarily limited this import. Please wait a moment and try again.', 503);
+        }
+        if (response.status >= 500) {
+          throw new GoogleFormsImportError('Google Forms is temporarily unavailable. Please try again.', 502);
+        }
+        throw new GoogleFormsImportError('Google rejected this link. Publish the form, allow anyone with the link to respond, and paste its responder link.', 422);
       }
       const contentType = response.headers.get('content-type') || '';
       if (contentType && !contentType.includes('text/html')) throw new GoogleFormsImportError('Google link did not return a form page');

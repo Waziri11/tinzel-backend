@@ -40,6 +40,14 @@ test('Google Forms importer only accepts approved HTTPS hosts', () => {
   assert.throws(() => validateGoogleFormUrl('https://docs.google.com/document/d/abc'), GoogleFormsImportError);
 });
 
+test('Google Forms importer converts editor links into public responder links', () => {
+  const standard = validateGoogleFormUrl('https://docs.google.com/forms/d/form-id/edit?usp=sharing#responses');
+  assert.equal(standard.toString(), 'https://docs.google.com/forms/d/form-id/viewform?usp=sharing');
+
+  const published = validateGoogleFormUrl('https://docs.google.com/forms/u/2/d/e/published-id/edit?edit_requested=true&resourcekey=key');
+  assert.equal(published.toString(), 'https://docs.google.com/forms/d/e/published-id/viewform?resourcekey=key');
+});
+
 test('Google Forms importer rejects pages without public form data', () => {
   assert.throws(() => extractPublicLoadData('<html>Sign in</html>'), /restricted, unpublished/);
 });
@@ -66,6 +74,31 @@ test('Google Forms importer rejects redirects away from Google', async () => {
 test('Google Forms importer rejects oversized pages before parsing', async () => {
   const fetchImpl = async () => new Response('x', { status: 200, headers: { 'content-type': 'text/html', 'content-length': String(6 * 1024 * 1024) } });
   await assert.rejects(() => importGoogleForm('https://forms.gle/example', { fetchImpl }), /too large/);
+});
+
+test('Google Forms importer retries a transient Google response once', async () => {
+  const html = `<script>FB_PUBLIC_LOAD_DATA_ = ${JSON.stringify(fixture)};</script>`;
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return calls === 1
+      ? new Response('try later', { status: 503 })
+      : new Response(html, { status: 200, headers: { 'content-type': 'text/html' } });
+  };
+  const imported = await importGoogleForm('https://docs.google.com/forms/d/e/example/viewform', { fetchImpl });
+  assert.equal(imported.title, 'Wedding Magazine Form');
+  assert.equal(calls, 2);
+});
+
+test('Google Forms importer explains restricted and rate-limited forms', async () => {
+  await assert.rejects(
+    () => importGoogleForm('https://docs.google.com/forms/d/e/private/viewform', { fetchImpl: async () => new Response('', { status: 403 }) }),
+    (error) => error.status === 422 && /allow anyone with the link/.test(error.message)
+  );
+  await assert.rejects(
+    () => importGoogleForm('https://docs.google.com/forms/d/e/busy/viewform', { fetchImpl: async () => new Response('', { status: 429 }) }),
+    (error) => error.status === 503 && /temporarily limited/.test(error.message)
+  );
 });
 
 test('Google Forms importer maps grids, dates, ratings and image uploads while warning on unsupported content', () => {
