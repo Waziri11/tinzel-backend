@@ -5,8 +5,28 @@ import { AuditLog } from '../models/AuditLog.model.js';
 import { uploadPhotos } from '../services/uploadService.js';
 import { generateSubmissionId } from '../services/workflowService.js';
 import { validateFormAnswers } from '../services/formResponseService.js';
+import { findCoverImage, openCoverImageStream } from '../services/coverStorageService.js';
 
 const router = Router();
+
+router.get('/covers/:id', async (req, res) => {
+  try {
+    const file = await findCoverImage(req.params.id);
+    if (!file) return res.status(404).json({ success: false, message: 'Cover image not found' });
+
+    res.setHeader('Content-Type', file.contentType || file.metadata?.contentType || 'application/octet-stream');
+    res.setHeader('Content-Length', file.length);
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    const stream = openCoverImageStream(req.params.id);
+    stream.on('error', (error) => {
+      if (!res.headersSent) res.status(500).json({ success: false, message: error.message });
+      else res.destroy(error);
+    });
+    return stream.pipe(res);
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
 
 // List all active public forms
 router.get('/forms', async (req, res) => {

@@ -63,8 +63,9 @@ export const uploadPrint = multer({
 });
 
 export const uploadCover = multer({
-  storage: createStorage('covers'),
+  // Covers are persisted to MongoDB GridFS by the route. Memory storage avoids
+  // writing to Vercel's read-only /var/task filesystem.
+  storage: multer.memoryStorage(),
   fileFilter: photoFileFilter,
   limits: { fileSize: 15 * 1024 * 1024 }, // 15MB for cover images
 });
-

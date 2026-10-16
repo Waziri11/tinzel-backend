@@ -12,6 +12,7 @@ import { validateFormForPublication } from '../services/formPublicationService.j
 import { importGoogleForm, GoogleFormsImportError } from '../services/googleFormsImportService.js';
 
 import { uploadCover } from '../services/uploadService.js';
+import { storeCoverImage } from '../services/coverStorageService.js';
 
 const router = Router();
 
@@ -36,7 +37,8 @@ router.post(
       if (!req.file) {
         return res.status(400).json({ success: false, message: 'Please select an image file to upload' });
       }
-      const coverUrl = `/uploads/covers/${req.file.filename}`;
+      const storedCover = await storeCoverImage(req.file, req.user._id);
+      const coverUrl = `/api/public/covers/${storedCover.id}`;
       return res.status(200).json({
         success: true,
         message: 'Cover uploaded successfully',
