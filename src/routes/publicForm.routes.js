@@ -81,47 +81,45 @@ router.get('/forms/:slug', async (req, res) => {
 });
 
 // Upload a single order photo before final form submission (avoids 413 Payload Too Large on multi-photo orders)
-router.post('/forms/:slug/photos', uploadPhotos.single('photo'), async (req, res) => {
-  try {
-    const form = await MagazineForm.findOne({
-      slug: req.params.slug.toLowerCase(),
-      isActive: true,
-      isArchived: false,
-    }).select('_id slug');
-
-    if (!form) {
-      return res.status(404).json({ success: false, message: 'Magazine form not found' });
+router.post('/forms/:slug/photos', (req, res) => {
+  uploadPhotos.single('photo')(req, res, async (uploadErr) => {
+    if (uploadErr) {
+      return res.status(400).json({ success: false, message: uploadErr.message || 'Invalid photo upload' });
     }
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: 'Photo file is required' });
-    }
+    try {
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: 'Photo file is required' });
+      }
 
-    const fieldId = typeof req.body.fieldId === 'string' ? req.body.fieldId.trim() : '';
-    const folderName =
-      typeof req.body.folderName === 'string' && req.body.folderName.trim()
-        ? req.body.folderName.trim()
-        : 'General Photos';
+      const slug = String(req.params.slug || '').toLowerCase();
+      const fieldId = typeof req.body?.fieldId === 'string' ? req.body.fieldId.trim() : '';
+      const folderName =
+        typeof req.body?.folderName === 'string' && req.body.folderName.trim()
+          ? req.body.folderName.trim()
+          : 'General Photos';
 
-    const stored = await storeOrderPhoto(req.file, {
-      fieldId,
-      folderName,
-      formSlug: form.slug,
-    });
-
-    return res.status(201).json({
-      success: true,
-      photo: {
-        url: `/api/public/photos/${stored.id}`,
-        originalName: req.file.originalname,
-        size: req.file.size,
+      const stored = await storeOrderPhoto(req.file, {
         fieldId,
         folderName,
-        uploadedAt: new Date(),
-      },
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
+        formSlug: slug,
+      });
+
+      return res.status(201).json({
+        success: true,
+        photo: {
+          url: `/api/public/photos/${stored.id}`,
+          originalName: req.file.originalname,
+          size: req.file.size,
+          fieldId,
+          folderName,
+          uploadedAt: new Date(),
+        },
+      });
+    } catch (error) {
+      console.error('[Photo Upload Error]', error);
+      return res.status(500).json({ success: false, message: error.message || 'Failed to store photo' });
+    }
+  });
 });
 
 // Submit magazine form with photos (supports both pre-uploaded photo descriptors and direct multipart files)

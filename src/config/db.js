@@ -14,7 +14,8 @@ export const connectDB = async () => {
 
   if (!connectionPromise) {
     connectionPromise = mongoose.connect(mongoUri, {
-      serverSelectionTimeoutMS: 2500,
+      serverSelectionTimeoutMS: 10000,
+      maxPoolSize: 10,
     }).then((conn) => {
       console.log(`[DB Connected] MongoDB connected: ${conn.connection.host}`);
       return true;
