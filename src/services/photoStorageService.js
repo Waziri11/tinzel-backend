@@ -14,10 +14,11 @@ const bucket = () => {
   return cachedBucket;
 };
 
-const writePhotoOnce = (file, meta = {}) =>
+export const storeOrderPhoto = (file, meta = {}) =>
   new Promise((resolve, reject) => {
     const buffer = Buffer.isBuffer(file.buffer) ? file.buffer : Buffer.from(file.buffer || []);
     const upload = bucket().openUploadStream(file.originalname || 'photo.jpg', {
+      timeoutMS: 20000,
       contentType: file.mimetype || 'image/jpeg',
       metadata: {
         uploadedAt: new Date(),
@@ -38,21 +39,6 @@ const writePhotoOnce = (file, meta = {}) =>
     );
     upload.end(buffer);
   });
-
-export const storeOrderPhoto = async (file, meta = {}) => {
-  let lastError;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      return await writePhotoOnce(file, meta);
-    } catch (err) {
-      lastError = err;
-      // Reset cached bucket in case of transient index/collection initialization conflict
-      cachedBucket = null;
-      await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
-    }
-  }
-  throw lastError;
-};
 
 export const findOrderPhoto = async (id) => {
   if (!mongoose.isValidObjectId(id)) return null;

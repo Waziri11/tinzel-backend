@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 import path from 'path';
+import { randomUUID } from 'node:crypto';
 import { connectDB } from './config/db.js';
 
 import healthRoutes from './routes/health.routes.js';
@@ -24,12 +25,27 @@ app.use(
 );
 
 app.use(morgan('dev'));
+app.use((req, res, next) => {
+  req.requestId = randomUUID();
+  res.setHeader('X-Request-Id', req.requestId);
+  const started = performance.now();
+  res.on('finish', () => {
+    if (/photos|media|upload-session/.test(req.path)) console.info(JSON.stringify({
+      event: 'media_request', requestId: req.requestId, method: req.method, path: req.path,
+      bytes: Number(req.headers['content-length'] || 0), status: res.statusCode,
+      durationMs: Math.round(performance.now() - started), dbWaitMs: req.dbWaitMs,
+    }));
+  });
+  next();
+});
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Vercel serves this Express app directly, without running server.js.
 app.use('/api', async (req, res, next) => {
+  const started = performance.now();
   const connected = await connectDB();
+  req.dbWaitMs = Math.round(performance.now() - started);
   if (connected || req.path.startsWith('/health') || req.path.startsWith('/items')) {
     return next();
   }

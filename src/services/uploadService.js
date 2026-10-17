@@ -49,8 +49,19 @@ export const uploadPhotos = multer({
   // writing to Vercel's read-only /var/task filesystem.
   storage: multer.memoryStorage(),
   fileFilter: photoFileFilter,
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB per photo
+  limits: { fileSize: 3500000, fields: 20, parts: 70 },
 });
+
+// Legacy multipart uploads must fit the deployment gateway, including metadata.
+export const boundPhotoRequest = (req, res, next) => {
+  if (!req.is('multipart/form-data')) return next();
+  const size = Number(req.headers['content-length']);
+  if (!Number.isFinite(size) || size <= 0 || size > 4000000) {
+    return res.status(413).json({ success: false, retryable: false,
+      message: 'Please refresh the form to upload photos individually using the resumable uploader.' });
+  }
+  next();
+};
 
 export const uploadDraft = multer({
   storage: createStorage('drafts'),

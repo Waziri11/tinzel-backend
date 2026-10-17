@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { MagazineForm } from '../models/MagazineForm.model.js';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
-import { uploadPhotos } from '../services/uploadService.js';
+import { uploadPhotos, boundPhotoRequest } from '../services/uploadService.js';
+import { respondMediaError } from '../services/mediaErrors.js';
 import { generateSubmissionId } from '../services/workflowService.js';
 import { validateFormAnswers } from '../services/formResponseService.js';
 import { findCoverImage, openCoverImageStream } from '../services/coverStorageService.js';
@@ -81,10 +82,10 @@ router.get('/forms/:slug', async (req, res) => {
 });
 
 // Upload a single order photo before final form submission (avoids 413 Payload Too Large on multi-photo orders)
-router.post('/forms/:slug/photos', (req, res) => {
+router.post('/forms/:slug/photos', boundPhotoRequest, (req, res) => {
   uploadPhotos.single('photo')(req, res, async (uploadErr) => {
     if (uploadErr) {
-      return res.status(400).json({ success: false, message: uploadErr.message || 'Invalid photo upload' });
+      return respondMediaError(req, res, Object.assign(uploadErr, { status: 400 }));
     }
     try {
       if (!req.file) {
@@ -116,14 +117,13 @@ router.post('/forms/:slug/photos', (req, res) => {
         },
       });
     } catch (error) {
-      console.error('[Photo Upload Error]', error);
-      return res.status(500).json({ success: false, message: error.message || 'Failed to store photo' });
+      return respondMediaError(req, res, error);
     }
   });
 });
 
 // Submit magazine form with photos (supports both pre-uploaded photo descriptors and direct multipart files)
-router.post('/forms/:slug/submit', uploadPhotos.array('photos', 50), async (req, res) => {
+router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos', 50), async (req, res) => {
   try {
     const form = await MagazineForm.findOne({
       slug: req.params.slug.toLowerCase(),
@@ -195,8 +195,8 @@ router.post('/forms/:slug/submit', uploadPhotos.array('photos', 50), async (req,
     }
 
     // Persist any direct multipart photo files into GridFS
-    const directUploadedPhotos = await Promise.all(
-      (req.files || []).map(async (file, idx) => {
+    const directUploadedPhotos = [];
+    for (const [idx, file] of (req.files || []).entries()) {
         const meta =
           photosMeta.find((m) => m.originalName === file.originalname) ||
           photosMeta[idx] ||
@@ -208,16 +208,15 @@ router.post('/forms/:slug/submit', uploadPhotos.array('photos', 50), async (req,
           folderName,
           formSlug: form.slug,
         });
-        return {
+        directUploadedPhotos.push({
           url: `/api/public/photos/${stored.id}`,
           originalName: file.originalname,
           size: file.size,
           fieldId,
           folderName,
           uploadedAt: new Date(),
-        };
-      })
-    );
+        });
+    }
 
     const uploadedPhotos = [...sanitizedPreUploaded, ...directUploadedPhotos];
 
