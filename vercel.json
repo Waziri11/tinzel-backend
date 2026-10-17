@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "regions": ["cpt1"],
+  "regions": ["iad1"],
   "functions": { "src/app.js": { "maxDuration": 300 } },
   "crons": [{ "path": "/api/internal/media-jobs", "schedule": "* * * * *" }]
 }
