@@ -15,6 +15,8 @@ const formSectionSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    titleSw: { type: String, default: '', trim: true },
+    descriptionSw: { type: String, default: '' },
     order: {
       type: Number,
       default: 0,
@@ -38,6 +40,7 @@ const formFieldSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    labelSw: { type: String, default: '', trim: true },
     type: {
       type: String,
       enum: [
@@ -60,11 +63,20 @@ const formFieldSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    helperTextSw: { type: String, default: '' },
     options: {
       type: [String],
       default: [],
     },
+    optionsSw: {
+      type: [String],
+      default: [],
+    },
     rows: {
+      type: [String],
+      default: [],
+    },
+    rowsSw: {
       type: [String],
       default: [],
     },
@@ -73,6 +85,8 @@ const formFieldSchema = new mongoose.Schema(
       high: { type: Number, default: 5 },
       lowLabel: { type: String, default: '' },
       highLabel: { type: String, default: '' },
+      lowLabelSw: { type: String, default: '' },
+      highLabelSw: { type: String, default: '' },
     },
     ratingConfig: {
       levelCount: { type: Number, default: 5 },
@@ -106,10 +120,13 @@ const magazineFormSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    titleSw: { type: String, default: '', trim: true },
+    descriptionSw: { type: String, default: '' },
     magazineType: {
       type: String,
       default: 'Standard Event Magazine',
     },
+    magazineTypeSw: { type: String, default: '' },
     price: {
       type: Number,
       required: true,

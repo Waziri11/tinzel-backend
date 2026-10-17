@@ -32,7 +32,7 @@ router.get('/covers/:id', async (req, res) => {
 router.get('/forms', async (req, res) => {
   try {
     const forms = await MagazineForm.find({ isActive: true, isArchived: false })
-      .select('title slug description magazineType price currency coverImageUrl lipaNambaInstructions sections')
+      .select('title titleSw slug description descriptionSw magazineType magazineTypeSw price currency coverImageUrl lipaNambaInstructions sections')
       .sort({ createdAt: -1 });
 
     return res.status(200).json({ success: true, forms });

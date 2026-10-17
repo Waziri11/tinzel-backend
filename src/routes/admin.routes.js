@@ -52,7 +52,7 @@ router.post(
 
 router.post('/forms', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
   try {
-    const { title, description, magazineType, price, currency, coverImageUrl, lipaNambaInstructions, sections, fields } = req.body;
+    const { title, description, titleSw, descriptionSw, magazineTypeSw, magazineType, price, currency, coverImageUrl, lipaNambaInstructions, sections, fields } = req.body;
     if (!title || !title.trim()) {
       return res.status(400).json({ success: false, message: 'Magazine edition title is required' });
     }
@@ -65,7 +65,10 @@ router.post('/forms', verifyStaffToken, requireRoles('admin', 'manager'), async 
           title: title.trim(),
           slug: cleanSlug,
           description,
+          titleSw: typeof titleSw === 'string' ? titleSw.trim() : '',
+          descriptionSw: descriptionSw || '',
           magazineType,
+          magazineTypeSw: magazineTypeSw || '',
           price: Number(price) || 50000,
           currency: currency || 'TZS',
           coverImageUrl: typeof coverImageUrl === 'string' ? coverImageUrl.trim() : '',
@@ -144,7 +147,7 @@ router.post('/forms/import-google', verifyStaffToken, requireRoles('admin', 'man
 
 router.put('/forms/:id', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
   try {
-    const { title, description, magazineType, price, currency, coverImageUrl, lipaNambaInstructions, sections, fields } = req.body;
+    const { title, description, titleSw, descriptionSw, magazineTypeSw, magazineType, price, currency, coverImageUrl, lipaNambaInstructions, sections, fields } = req.body;
     const currentForm = await MagazineForm.findById(req.params.id);
     if (!currentForm) return res.status(404).json({ success: false, message: 'Form not found' });
     if (currentForm.isArchived) return res.status(409).json({ success: false, message: 'Archived forms cannot be edited' });
@@ -164,7 +167,10 @@ router.put('/forms/:id', verifyStaffToken, requireRoles('admin', 'manager'), asy
       {
         title,
         description,
+        titleSw: typeof titleSw === 'string' ? titleSw.trim() : '',
+        descriptionSw: descriptionSw || '',
         magazineType,
+        magazineTypeSw: magazineTypeSw || '',
         price,
         currency,
         coverImageUrl: typeof coverImageUrl === 'string' ? coverImageUrl.trim() : '',

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyClientToken, generateClientToken } from '../middlewares/auth.middleware.js';
-import { sendNotification } from '../services/notificationService.js';
+import { sendNotification, notifyClientOtp } from '../services/notificationService.js';
 import { sanitizeOrderForClient } from '../services/workflowService.js';
 
 const router = Router();
@@ -54,19 +54,12 @@ router.post('/request-otp', async (req, res) => {
     };
     await order.save();
 
-    // Send OTP via notification service
-    const message = `Namba yako ya siri (OTP) ya kuingia kwenye mfumo wa Tinzel ni: ${otpCode}. Itatumika kwa dakika 10.`;
-    await sendNotification({
-      to: order.clientWhatsApp,
-      channel: 'whatsapp',
-      template: 'client_otp',
-      message,
-      orderId: order._id,
-    });
+    // Send OTP via multi-channel notification service (WhatsApp & Email if available)
+    await notifyClientOtp(order, otpCode);
 
     return res.status(200).json({
       success: true,
-      message: 'OTP sent to your WhatsApp number',
+      message: 'OTP sent to your registered contact channel',
       // For local development convenience, provide otp in dev mode
       devOtp: process.env.NODE_ENV !== 'production' ? otpCode : undefined,
     });
