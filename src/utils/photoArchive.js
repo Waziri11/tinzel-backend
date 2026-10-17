@@ -18,22 +18,34 @@ export const photoArchiveEntries = (photos, requestedFolder, uploadsDir) => {
   return (photos || [])
     .filter((photo) => photoFolderName(photo) === requestedFolder)
     .map((photo, index) => {
-      if (typeof photo.url !== 'string' || !/^\/uploads\/photos\/[a-zA-Z0-9._-]+$/.test(photo.url)) {
+      const url = typeof photo.url === 'string' ? photo.url : '';
+      const isDiskPhoto = /^\/uploads\/photos\/[a-zA-Z0-9._-]+$/.test(url);
+      const gridFsMatch = url.match(/^\/api\/public\/photos\/([a-f0-9]{24})$/i);
+
+      if (!isDiskPhoto && !gridFsMatch) {
         throw new Error('Photo has an invalid stored path');
       }
 
-      const storedName = path.posix.basename(photo.url);
+      const storedName = path.posix.basename(url);
       const original = path.posix.basename(String(photo.originalName || '').replaceAll('\\', '/'));
-      const safeName = safePart(original, `photo-${index + 1}${path.extname(storedName)}`);
-      const extension = path.extname(safeName);
-      const stem = safeName.slice(0, safeName.length - extension.length);
-      let entryName = safeName;
+      const defaultExt = path.extname(storedName) || '.jpg';
+      const safeName = safePart(original, `photo-${index + 1}${defaultExt}`);
+      const extension = path.extname(safeName) || defaultExt;
+      const stem = safeName.endsWith(extension) ? safeName.slice(0, safeName.length - extension.length) : safeName;
+      let entryName = `${stem}${extension}`;
       let copy = 2;
       while (usedNames.has(entryName.toLowerCase())) {
         entryName = `${stem} (${copy})${extension}`;
         copy += 1;
       }
       usedNames.add(entryName.toLowerCase());
+
+      if (gridFsMatch) {
+        return {
+          gridFsId: gridFsMatch[1],
+          archiveName: `${folder}/${entryName}`,
+        };
+      }
 
       return {
         diskPath: path.join(uploadsDir, storedName),

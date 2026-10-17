@@ -7,6 +7,7 @@ import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
 import { uploadDraft, uploadPrint } from '../services/uploadService.js';
+import { findOrderPhoto, openOrderPhotoStream } from '../services/photoStorageService.js';
 import { photoArchiveEntries, photoArchiveFileName } from '../utils/photoArchive.js';
 
 const router = Router();
@@ -79,8 +80,15 @@ router.get('/orders/:id/photo-folder.zip', async (req, res) => {
     if (entries.length === 0) {
       return res.status(404).json({ success: false, message: 'Photo folder not found for this order' });
     }
-    if (entries.some(({ diskPath }) => !fs.existsSync(diskPath) || !fs.statSync(diskPath).isFile())) {
-      return res.status(409).json({ success: false, message: 'Some photos in this folder are unavailable' });
+    for (const entry of entries) {
+      if (entry.gridFsId) {
+        const found = await findOrderPhoto(entry.gridFsId);
+        if (!found) {
+          return res.status(409).json({ success: false, message: 'Some photos in this folder are unavailable' });
+        }
+      } else if (!fs.existsSync(entry.diskPath) || !fs.statSync(entry.diskPath).isFile()) {
+        return res.status(409).json({ success: false, message: 'Some photos in this folder are unavailable' });
+      }
     }
 
     res.setHeader('Content-Type', 'application/zip');
@@ -88,7 +96,13 @@ router.get('/orders/:id/photo-folder.zip', async (req, res) => {
     const archive = new ZipArchive({ zlib: { level: 6 } });
     archive.on('error', (error) => res.destroy(error));
     archive.pipe(res);
-    entries.forEach(({ diskPath, archiveName }) => archive.file(diskPath, { name: archiveName }));
+    entries.forEach((entry) => {
+      if (entry.gridFsId) {
+        archive.append(openOrderPhotoStream(entry.gridFsId), { name: entry.archiveName });
+      } else {
+        archive.file(entry.diskPath, { name: entry.archiveName });
+      }
+    });
     await archive.finalize();
   } catch (error) {
     if (res.headersSent) return res.destroy(error);

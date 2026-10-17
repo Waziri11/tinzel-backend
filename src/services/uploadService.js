@@ -45,7 +45,9 @@ const documentFileFilter = (req, file, cb) => {
 };
 
 export const uploadPhotos = multer({
-  storage: createStorage('photos'),
+  // Order photos are persisted to MongoDB GridFS by the route. Memory storage avoids
+  // writing to Vercel's read-only /var/task filesystem.
+  storage: multer.memoryStorage(),
   fileFilter: photoFileFilter,
   limits: { fileSize: 25 * 1024 * 1024 }, // 25MB per photo
 });

@@ -23,3 +23,16 @@ test('photo folder ZIP rejects paths outside stored photos', () => {
     /invalid stored path/
   );
 });
+
+test('photo folder ZIP supports GridFS photo URLs', () => {
+  const photos = [
+    { folderName: 'Spread 1', url: '/api/public/photos/65f1a2b3c4d5e6f7a8b9c0d1', originalName: 'portrait.jpg' },
+  ];
+  const entries = photoArchiveEntries(photos, 'Spread 1', '/tmp/photos');
+  assert.deepEqual(entries, [
+    {
+      gridFsId: '65f1a2b3c4d5e6f7a8b9c0d1',
+      archiveName: 'Spread 1/portrait.jpg',
+    },
+  ]);
+});

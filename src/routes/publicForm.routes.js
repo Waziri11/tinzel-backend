@@ -6,6 +6,7 @@ import { uploadPhotos } from '../services/uploadService.js';
 import { generateSubmissionId } from '../services/workflowService.js';
 import { validateFormAnswers } from '../services/formResponseService.js';
 import { findCoverImage, openCoverImageStream } from '../services/coverStorageService.js';
+import { storeOrderPhoto, findOrderPhoto, openOrderPhotoStream } from '../services/photoStorageService.js';
 
 const router = Router();
 
@@ -18,6 +19,25 @@ router.get('/covers/:id', async (req, res) => {
     res.setHeader('Content-Length', file.length);
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     const stream = openCoverImageStream(req.params.id);
+    stream.on('error', (error) => {
+      if (!res.headersSent) res.status(500).json({ success: false, message: error.message });
+      else res.destroy(error);
+    });
+    return stream.pipe(res);
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/photos/:id', async (req, res) => {
+  try {
+    const file = await findOrderPhoto(req.params.id);
+    if (!file) return res.status(404).json({ success: false, message: 'Photo not found' });
+
+    res.setHeader('Content-Type', file.contentType || file.metadata?.contentType || 'image/jpeg');
+    res.setHeader('Content-Length', file.length);
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    const stream = openOrderPhotoStream(req.params.id);
     stream.on('error', (error) => {
       if (!res.headersSent) res.status(500).json({ success: false, message: error.message });
       else res.destroy(error);
@@ -60,8 +80,52 @@ router.get('/forms/:slug', async (req, res) => {
   }
 });
 
-// Submit magazine form with photos
-router.post('/forms/:slug/submit', uploadPhotos.array('photos', 30), async (req, res) => {
+// Upload a single order photo before final form submission (avoids 413 Payload Too Large on multi-photo orders)
+router.post('/forms/:slug/photos', uploadPhotos.single('photo'), async (req, res) => {
+  try {
+    const form = await MagazineForm.findOne({
+      slug: req.params.slug.toLowerCase(),
+      isActive: true,
+      isArchived: false,
+    }).select('_id slug');
+
+    if (!form) {
+      return res.status(404).json({ success: false, message: 'Magazine form not found' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'Photo file is required' });
+    }
+
+    const fieldId = typeof req.body.fieldId === 'string' ? req.body.fieldId.trim() : '';
+    const folderName =
+      typeof req.body.folderName === 'string' && req.body.folderName.trim()
+        ? req.body.folderName.trim()
+        : 'General Photos';
+
+    const stored = await storeOrderPhoto(req.file, {
+      fieldId,
+      folderName,
+      formSlug: form.slug,
+    });
+
+    return res.status(201).json({
+      success: true,
+      photo: {
+        url: `/api/public/photos/${stored.id}`,
+        originalName: req.file.originalname,
+        size: req.file.size,
+        fieldId,
+        folderName,
+        uploadedAt: new Date(),
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Submit magazine form with photos (supports both pre-uploaded photo descriptors and direct multipart files)
+router.post('/forms/:slug/submit', uploadPhotos.array('photos', 50), async (req, res) => {
   try {
     const form = await MagazineForm.findOne({
       slug: req.params.slug.toLowerCase(),
@@ -90,9 +154,37 @@ router.post('/forms/:slug/submit', uploadPhotos.array('photos', 30), async (req,
       } catch (e) {
         parsedData = formDataRaw;
       }
+    } else if (formDataRaw.answers && typeof formDataRaw.answers === 'object') {
+      parsedData = formDataRaw.answers;
     }
 
-    // Parse photos metadata (maps files to question fieldId and folderName)
+    // Parse pre-uploaded photos if sent as JSON or array
+    let preUploadedPhotos = [];
+    if (typeof req.body.uploadedPhotos === 'string') {
+      try {
+        preUploadedPhotos = JSON.parse(req.body.uploadedPhotos);
+      } catch (e) {
+        preUploadedPhotos = [];
+      }
+    } else if (Array.isArray(req.body.uploadedPhotos)) {
+      preUploadedPhotos = req.body.uploadedPhotos;
+    }
+
+    const sanitizedPreUploaded = (Array.isArray(preUploadedPhotos) ? preUploadedPhotos : [])
+      .filter((p) => p && typeof p.url === 'string' && /^\/api\/public\/photos\/[a-f0-9]{24}$/i.test(p.url))
+      .map((p) => ({
+        url: p.url,
+        originalName: String(p.originalName || 'photo.jpg'),
+        size: Number(p.size) || 0,
+        fieldId: String(p.fieldId || ''),
+        folderName:
+          typeof p.folderName === 'string' && p.folderName.trim()
+            ? p.folderName.trim()
+            : 'General Photos',
+        uploadedAt: new Date(),
+      }));
+
+    // Parse photos metadata (maps direct multipart files to question fieldId and folderName)
     let photosMeta = [];
     if (typeof req.body.photosMetadata === 'string') {
       try {
@@ -104,21 +196,32 @@ router.post('/forms/:slug/submit', uploadPhotos.array('photos', 30), async (req,
       photosMeta = req.body.photosMetadata;
     }
 
-    // Process uploaded photo attachments
-    const uploadedPhotos = (req.files || []).map((file, idx) => {
-      const meta =
-        photosMeta.find((m) => m.originalName === file.originalname) ||
-        photosMeta[idx] ||
-        {};
-      return {
-        url: `/uploads/photos/${file.filename}`,
-        originalName: file.originalname,
-        size: file.size,
-        fieldId: meta.fieldId || '',
-        folderName: meta.folderName || 'General Photos',
-        uploadedAt: new Date(),
-      };
-    });
+    // Persist any direct multipart photo files into GridFS
+    const directUploadedPhotos = await Promise.all(
+      (req.files || []).map(async (file, idx) => {
+        const meta =
+          photosMeta.find((m) => m.originalName === file.originalname) ||
+          photosMeta[idx] ||
+          {};
+        const fieldId = meta.fieldId || '';
+        const folderName = meta.folderName || 'General Photos';
+        const stored = await storeOrderPhoto(file, {
+          fieldId,
+          folderName,
+          formSlug: form.slug,
+        });
+        return {
+          url: `/api/public/photos/${stored.id}`,
+          originalName: file.originalname,
+          size: file.size,
+          fieldId,
+          folderName,
+          uploadedAt: new Date(),
+        };
+      })
+    );
+
+    const uploadedPhotos = [...sanitizedPreUploaded, ...directUploadedPhotos];
 
     const answerErrors = validateFormAnswers(form.fields, parsedData, uploadedPhotos);
     if (answerErrors.length > 0) {
