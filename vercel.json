@@ -1,0 +1,5 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": { "src/app.js": { "maxDuration": 300 } },
+  "crons": [{ "path": "/api/internal/media-jobs", "schedule": "* * * * *" }]
+}

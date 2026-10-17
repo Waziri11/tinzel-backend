@@ -8,3 +8,5 @@ yarn-error.log*
 uploads/*
 !uploads/.gitkeep
 !uploads/*/.gitkeep
+.vercel
+.env*

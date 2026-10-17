@@ -75,6 +75,7 @@ const draftVersionSchema = new mongoose.Schema(
 
 const orderSchema = new mongoose.Schema(
   {
+    mediaSessionId: { type: String, unique: true, sparse: true },
     submissionId: {
       type: String,
       required: true,
@@ -124,6 +125,8 @@ const orderSchema = new mongoose.Schema(
     uploadedPhotos: [
       {
         url: String,
+        assetId: String,
+        thumbnailUrl: String,
         originalName: String,
         size: Number,
         fieldId: { type: String, default: '' },

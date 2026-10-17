@@ -13,6 +13,8 @@ import staffAuthRoutes from './routes/staffAuth.routes.js';
 import managerRoutes from './routes/manager.routes.js';
 import designerRoutes from './routes/designer.routes.js';
 import adminRoutes from './routes/admin.routes.js';
+import mediaRoutes from './routes/media.routes.js';
+import mediaOperationsRoutes from './routes/mediaOperations.routes.js';
 
 const app = express();
 
@@ -24,18 +26,25 @@ app.use(
   })
 );
 
-app.use(morgan('dev'));
+app.use(morgan('dev', { skip: (req) => req.originalUrl.startsWith('/api/media-download/') }));
 app.use((req, res, next) => {
   req.requestId = randomUUID();
   res.setHeader('X-Request-Id', req.requestId);
   const started = performance.now();
+  const requestPath = req.path.replace(/(\/media-download\/).+/, '$1[redacted]');
   res.on('finish', () => {
-    if (/photos|media|upload-session/.test(req.path)) console.info(JSON.stringify({
-      event: 'media_request', requestId: req.requestId, method: req.method, path: req.path,
+    if (/photos|media|upload-session/.test(requestPath)) console.info(JSON.stringify({
+      event: 'media_request', requestId: req.requestId, method: req.method, path: requestPath,
       bytes: Number(req.headers['content-length'] || 0), status: res.statusCode,
       durationMs: Math.round(performance.now() - started), dbWaitMs: req.dbWaitMs,
     }));
   });
+  next();
+});
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/public/media') && req.is('application/json') && Number(req.headers['content-length']) > 256000) {
+    return res.status(413).json({ success: false, message: 'Form details are too large' });
+  }
   next();
 });
 app.use(express.json({ limit: '50mb' }));
@@ -80,6 +89,8 @@ app.get('/', (req, res) => {
 app.use('/api/health', healthRoutes);
 app.use('/api/items', itemRoutes);
 app.use('/api/public', publicFormRoutes);
+app.use('/api/public/media', mediaRoutes);
+app.use('/api', mediaOperationsRoutes);
 app.use('/api/client', clientTrackingRoutes);
 app.use('/api/staff', staffAuthRoutes);
 app.use('/api/manager', managerRoutes);

@@ -21,8 +21,9 @@ export const photoArchiveEntries = (photos, requestedFolder, uploadsDir) => {
       const url = typeof photo.url === 'string' ? photo.url : '';
       const isDiskPhoto = /^\/uploads\/photos\/[a-zA-Z0-9._-]+$/.test(url);
       const gridFsMatch = url.match(/^\/api\/public\/photos\/([a-f0-9]{24})$/i);
+      const assetMatch = url.match(/^\/api\/public\/media\/assets\/([a-f0-9]{24})$/i);
 
-      if (!isDiskPhoto && !gridFsMatch) {
+      if (!isDiskPhoto && !gridFsMatch && !assetMatch) {
         throw new Error('Photo has an invalid stored path');
       }
 
@@ -39,6 +40,8 @@ export const photoArchiveEntries = (photos, requestedFolder, uploadsDir) => {
         copy += 1;
       }
       usedNames.add(entryName.toLowerCase());
+
+      if (assetMatch) return { assetId: assetMatch[1], archiveName: `${folder}/${entryName}` };
 
       if (gridFsMatch) {
         return {

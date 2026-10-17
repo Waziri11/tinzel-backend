@@ -1,14 +1,13 @@
 import { Router } from 'express';
-import fs from 'node:fs';
-import path from 'node:path';
-import { ZipArchive } from 'archiver';
 import mongoose from 'mongoose';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
 import { uploadDraft, uploadPrint } from '../services/uploadService.js';
-import { findOrderPhoto, openOrderPhotoStream } from '../services/photoStorageService.js';
-import { photoArchiveEntries, photoArchiveFileName } from '../utils/photoArchive.js';
+import { photoArchiveFileName } from '../utils/photoArchive.js';
+import { MediaJob } from '../models/Media.model.js';
+import { enqueueArchive, createPhotoArchive } from '../services/mediaJobService.js';
+import { archiveStatus } from './mediaOperations.routes.js';
 
 const router = Router();
 
@@ -67,47 +66,33 @@ router.get('/orders/:id', async (req, res) => {
   }
 });
 
-// Download one assigned order's photo folder as a ZIP archive.
-router.get('/orders/:id/photo-folder.zip', async (req, res) => {
-  const folder = req.query.folder;
-  if (typeof folder !== 'string' || !folder.trim()) {
-    return res.status(400).json({ success: false, message: 'Photo folder is required' });
-  }
-
+// New clients prepare a cached archive and use a normal browser download.
+router.post('/orders/:id/photo-folder-download', async (req, res, next) => {
   try {
-    const uploadsDir = path.join(process.cwd(), 'uploads', 'photos');
-    const entries = photoArchiveEntries(req.order.uploadedPhotos, folder, uploadsDir);
-    if (entries.length === 0) {
-      return res.status(404).json({ success: false, message: 'Photo folder not found for this order' });
-    }
-    for (const entry of entries) {
-      if (entry.gridFsId) {
-        const found = await findOrderPhoto(entry.gridFsId);
-        if (!found) {
-          return res.status(409).json({ success: false, message: 'Some photos in this folder are unavailable' });
-        }
-      } else if (!fs.existsSync(entry.diskPath) || !fs.statSync(entry.diskPath).isFile()) {
-        return res.status(409).json({ success: false, message: 'Some photos in this folder are unavailable' });
-      }
-    }
+    if (typeof req.body.folder !== 'string') return res.status(400).json({ message: 'Choose a photo folder' });
+    const job = await enqueueArchive(req.order, req.body.folder);
+    res.status(job.state === 'ready' ? 200 : 202).json(await archiveStatus(job, req.user, req.order));
+  } catch (error) { next(error); }
+});
+router.get('/orders/:id/media-jobs/:jobId', async (req, res, next) => {
+  try {
+    let job = await MediaJob.findById(req.params.jobId).lean();
+    if (job?.state === 'expired' && String(job.orderId) === String(req.order._id)) job = await enqueueArchive(req.order, job.folder);
+    const status = await archiveStatus(job, req.user, req.order);
+    if (!status) return res.status(404).json({ message: 'Download not found' });
+    res.json(status);
+  } catch (error) { next(error); }
+});
 
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${photoArchiveFileName(req.order.trackingId || req.order.submissionId, folder)}"`);
-    const archive = new ZipArchive({ zlib: { level: 6 } });
-    archive.on('error', (error) => res.destroy(error));
-    archive.pipe(res);
-    entries.forEach((entry) => {
-      if (entry.gridFsId) {
-        archive.append(openOrderPhotoStream(entry.gridFsId), { name: entry.archiveName });
-      } else {
-        archive.file(entry.diskPath, { name: entry.archiveName });
-      }
-    });
-    await archive.finalize();
-  } catch (error) {
-    if (res.headersSent) return res.destroy(error);
-    return res.status(500).json({ success: false, message: error.message });
-  }
+// Keep older clients working, with bounded streaming and no image recompression.
+router.get('/orders/:id/photo-folder.zip', async (req, res) => {
+  if (typeof req.query.folder !== 'string' || !req.query.folder.trim()) return res.status(400).json({ message: 'Choose a photo folder' });
+  const controller = new AbortController();
+  res.on('close', () => controller.abort());
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="${photoArchiveFileName(req.order.trackingId || req.order.submissionId, req.query.folder)}"`);
+  try { await createPhotoArchive(req.order, req.query.folder, res, controller.signal); }
+  catch (error) { if (res.headersSent) res.destroy(error); else res.status(error.status || 500).json({ message: error.message }); }
 });
 
 // Start Design
