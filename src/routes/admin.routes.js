@@ -16,8 +16,8 @@ import { storeCoverImage } from '../services/coverStorageService.js';
 
 const router = Router();
 
-// --- Dynamic Form Builder Endpoints (Accessible to both Admin and Manager) ---
-router.get('/forms', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
+// --- Dynamic Form Builder Endpoints (Administrator owned) ---
+router.get('/forms', verifyStaffToken, requireRoles('admin'), async (req, res) => {
   try {
     const forms = await MagazineForm.find().sort({ createdAt: -1 });
     return res.status(200).json({ success: true, forms });
@@ -30,7 +30,7 @@ router.get('/forms', verifyStaffToken, requireRoles('admin', 'manager'), async (
 router.post(
   '/forms/upload-cover',
   verifyStaffToken,
-  requireRoles('admin', 'manager'),
+  requireRoles('admin'),
   uploadCover.single('cover'),
   async (req, res) => {
     try {
@@ -50,7 +50,7 @@ router.post(
   }
 );
 
-router.post('/forms', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
+router.post('/forms', verifyStaffToken, requireRoles('admin'), async (req, res) => {
   try {
     const { title, description, titleSw, descriptionSw, magazineTypeSw, magazineType, price, currency, coverImageUrl, lipaNambaInstructions, sections, fields } = req.body;
     if (!title || !title.trim()) {
@@ -99,7 +99,7 @@ router.post('/forms', verifyStaffToken, requireRoles('admin', 'manager'), async 
   }
 });
 
-router.post('/forms/import-google', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
+router.post('/forms/import-google', verifyStaffToken, requireRoles('admin'), async (req, res) => {
   try {
     if (typeof req.body?.url !== 'string' || !req.body.url.trim()) {
       return res.status(400).json({ success: false, message: 'Google Form link is required' });
@@ -145,7 +145,7 @@ router.post('/forms/import-google', verifyStaffToken, requireRoles('admin', 'man
   }
 });
 
-router.put('/forms/:id', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
+router.put('/forms/:id', verifyStaffToken, requireRoles('admin'), async (req, res) => {
   try {
     const { title, description, titleSw, descriptionSw, magazineTypeSw, magazineType, price, currency, coverImageUrl, lipaNambaInstructions, sections, fields } = req.body;
     const currentForm = await MagazineForm.findById(req.params.id);
@@ -194,7 +194,7 @@ router.put('/forms/:id', verifyStaffToken, requireRoles('admin', 'manager'), asy
   }
 });
 
-router.post('/forms/:id/publish', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
+router.post('/forms/:id/publish', verifyStaffToken, requireRoles('admin'), async (req, res) => {
   try {
     const form = await MagazineForm.findById(req.params.id);
     if (!form) return res.status(404).json({ success: false, message: 'Form not found' });
@@ -219,7 +219,7 @@ router.post('/forms/:id/publish', verifyStaffToken, requireRoles('admin', 'manag
   }
 });
 
-router.delete('/forms/:id', verifyStaffToken, requireRoles('admin', 'manager'), async (req, res) => {
+router.delete('/forms/:id', verifyStaffToken, requireRoles('admin'), async (req, res) => {
   try {
     const form = await MagazineForm.findById(req.params.id);
     if (!form) return res.status(404).json({ success: false, message: 'Form not found' });

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { SystemConfig } from '../models/SystemConfig.model.js';
+import { StaffUser } from '../models/StaffUser.model.js';
 import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
 import { generateTrackingId } from '../services/workflowService.js';
 import { autoAssignOrder, manualAssignOrder, releaseOrderWorkload } from '../services/assignmentService.js';
@@ -12,20 +13,69 @@ import {
   notifyPrintingInProgress,
   notifyDispatchRecorded,
 } from '../services/notificationService.js';
+import {
+  ACTIVE_ORDER_STATUSES,
+  ManagerWorkflowError,
+  isConfiguredPhone,
+  requireStatus,
+  validateDelivery,
+  validateDispatch,
+  validateDraftDecision,
+  validatePayment,
+  validatePrinterStage,
+} from '../services/managerWorkflowService.js';
 
 const router = Router();
+
+const handleManagerError = (res, error) => {
+  if (error instanceof ManagerWorkflowError) {
+    return res.status(error.status).json({ success: false, message: error.message });
+  }
+  return res.status(500).json({ success: false, message: error.message });
+};
 
 // Manager or Admin only for all manager routes
 router.use(verifyStaffToken, requireRoles('manager', 'admin'));
 
+router.get('/designers', async (_req, res) => {
+  try {
+    const designers = await StaffUser.find({
+      role: 'designer', isActive: true, deletedAt: null, isEligibleForAssignment: true,
+    })
+      .select('name currentActiveWorkload maxActiveWorkload')
+      .sort({ currentActiveWorkload: 1, name: 1 })
+      .lean();
+    return res.json({ success: true, designers });
+  } catch (error) {
+    return handleManagerError(res, error);
+  }
+});
+
+router.get('/settings', async (_req, res) => {
+  try {
+    const printerConfig = await SystemConfig.findOne({ key: 'printer_whatsapp_phone' }).lean();
+    const printerPhone = typeof printerConfig?.value === 'string' ? printerConfig.value.trim() : '';
+    return res.json({
+      success: true,
+      printer: { phone: isConfiguredPhone(printerPhone) ? printerPhone : '', configured: isConfiguredPhone(printerPhone) },
+    });
+  } catch (error) {
+    return handleManagerError(res, error);
+  }
+});
+
 // Get all orders across the conveyor belt stages
 router.get('/orders', async (req, res) => {
   try {
-    const { status, search } = req.query;
+    const { status, search, scope = 'active' } = req.query;
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(200, Math.max(1, Number.parseInt(req.query.limit, 10) || 100));
     const query = {};
 
     if (status && status !== 'all') {
       query.status = status;
+    } else if (scope !== 'all') {
+      query.status = { $in: ACTIVE_ORDER_STATUSES };
     }
 
     if (search) {
@@ -37,14 +87,49 @@ router.get('/orders', async (req, res) => {
       ];
     }
 
-    const orders = await Order.find(query)
+    const [orderDocs, total, statusCounts] = await Promise.all([
+      Order.find(query)
+      .select('submissionId trackingId formId formTitle clientName clientWhatsApp status assignedDesigner currentDraftVersion printDocument printingDetails dispatchDetails holdReason uploadedPhotos updatedAt createdAt')
       .populate('assignedDesigner', 'name email currentActiveWorkload')
       .populate('formId', 'title slug price currency')
-      .sort({ updatedAt: -1 });
+      .sort({ updatedAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit),
+      Order.countDocuments(query),
+      Order.aggregate([
+        { $match: query },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+    ]);
 
-    return res.status(200).json({ success: true, count: orders.length, orders });
+    const orders = orderDocs.map((document) => {
+      const order = document.toObject();
+      order.photoCount = order.uploadedPhotos?.length || 0;
+      delete order.uploadedPhotos;
+      return order;
+    });
+    const counts = Object.fromEntries(statusCounts.map((entry) => [entry._id, entry.count]));
+    const summary = {
+      active: ACTIVE_ORDER_STATUSES.reduce((sum, item) => sum + (counts[item] || 0), 0),
+      payment: counts.awaiting_payment || 0,
+      draftReview: counts.draft_manager_review || 0,
+      printApproval: counts.print_manager_review || 0,
+      dispatchReady: counts.printing_completed || 0,
+      blocked: (counts.on_hold || 0) + (counts.queued_for_assignment || 0),
+    };
+
+    return res.status(200).json({
+      success: true,
+      count: orders.length,
+      total,
+      page,
+      pageCount: Math.max(1, Math.ceil(total / limit)),
+      summary,
+      statusCounts: counts,
+      orders,
+    });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return handleManagerError(res, error);
   }
 });
 
@@ -70,7 +155,7 @@ router.get('/orders/:id', async (req, res) => {
 // Verify Payment & Issue Tracking ID -> Trigger Auto-Assignment
 router.post('/orders/:id/verify-payment', async (req, res) => {
   try {
-    const { lipaNambaReference, amountPaid } = req.body;
+    const { reference, amount } = validatePayment(req.body);
     const order = await Order.findById(req.params.id);
 
     if (!order) {
@@ -90,8 +175,8 @@ router.post('/orders/:id/verify-payment', async (req, res) => {
     order.paymentDetails = {
       verifiedBy: req.user._id,
       verifiedAt: new Date(),
-      lipaNambaReference: lipaNambaReference || 'VERIFIED-BY-MANAGER',
-      amountPaid: Number(amountPaid) || 0,
+      lipaNambaReference: reference,
+      amountPaid: amount,
       receiptNumber: `RCP-${Date.now().toString().slice(-6)}`,
     };
 
@@ -102,7 +187,7 @@ router.post('/orders/:id/verify-payment', async (req, res) => {
       actor: { type: 'manager', id: req.user._id, name: req.user.name },
       action: 'PAYMENT_VERIFIED',
       orderId: order._id,
-      details: { trackingId, lipaNambaReference, amountPaid },
+      details: { trackingId, lipaNambaReference: reference, amountPaid: amount },
     });
 
     // Send payment verification notification to client
@@ -121,7 +206,7 @@ router.post('/orders/:id/verify-payment', async (req, res) => {
       order,
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return handleManagerError(res, error);
   }
 });
 
@@ -138,7 +223,10 @@ router.post('/orders/:id/reassign', async (req, res) => {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
-    const result = await manualAssignOrder(order, designerId, reason, req.user);
+    requireStatus(order, ['payment_verified', 'queued_for_assignment', 'assigned', 'in_design'], 'Designer reassignment');
+    const cleanReason = typeof reason === 'string' ? reason.trim() : '';
+    if (!cleanReason) throw new ManagerWorkflowError('Record a reason for reassigning this order.');
+    const result = await manualAssignOrder(order, designerId, cleanReason, req.user);
 
     return res.status(200).json({
       success: true,
@@ -147,7 +235,7 @@ router.post('/orders/:id/reassign', async (req, res) => {
       order,
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return handleManagerError(res, error);
   }
 });
 
@@ -160,11 +248,15 @@ router.post('/orders/:id/hold', async (req, res) => {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
+    if (!['hold', 'resume'].includes(action)) throw new ManagerWorkflowError('Choose hold or resume.');
     if (action === 'hold') {
+      if (order.status === 'closed') throw new ManagerWorkflowError('Closed orders cannot be placed on hold.');
+      if (!reason?.trim()) throw new ManagerWorkflowError('A hold reason is required.');
       order.previousStatusBeforeHold = order.status;
       order.status = 'on_hold';
       order.holdReason = reason || 'Placed on hold by manager';
     } else {
+      requireStatus(order, ['on_hold'], 'Resume');
       order.status = order.previousStatusBeforeHold || 'in_design';
       order.holdReason = '';
     }
@@ -180,14 +272,14 @@ router.post('/orders/:id/hold', async (req, res) => {
 
     return res.status(200).json({ success: true, message: `Order ${action} executed`, order });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return handleManagerError(res, error);
   }
 });
 
 // Manager Review Draft: Approve/Release to Client OR Return to Designer
 router.post('/orders/:id/review-draft', async (req, res) => {
   try {
-    const { action, feedback } = req.body; // action: 'release_to_client' | 'return_to_designer'
+    const { action, feedback } = validateDraftDecision(req.body);
     const order = await Order.findById(req.params.id);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
@@ -258,7 +350,7 @@ router.post('/orders/:id/review-draft', async (req, res) => {
       });
     }
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return handleManagerError(res, error);
   }
 });
 
@@ -270,12 +362,7 @@ router.post('/orders/:id/authorise-print', async (req, res) => {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
-    if (order.status !== 'print_manager_review' && order.status !== 'client_approved') {
-      return res.status(400).json({
-        success: false,
-        message: `Order must have client whole-magazine approval and print document ready. Current status: ${order.status}`,
-      });
-    }
+    requireStatus(order, ['print_manager_review'], 'Print authorization');
 
     if (!order.printDocument || !order.printDocument.url) {
       return res.status(400).json({
@@ -286,7 +373,10 @@ router.post('/orders/:id/authorise-print', async (req, res) => {
 
     // Get Printer WhatsApp Number from System Config
     const printerConfig = await SystemConfig.findOne({ key: 'printer_whatsapp_phone' });
-    const printerPhone = req.body.printerPhone || (printerConfig ? printerConfig.value : '+255712345678');
+    const printerPhone = typeof printerConfig?.value === 'string' ? printerConfig.value.trim() : '';
+    if (!isConfiguredPhone(printerPhone)) {
+      throw new ManagerWorkflowError('The administrator must configure a verified printer WhatsApp number before dispatch.');
+    }
 
     order.printDocument.managerAuthorisedBy = req.user._id;
     order.printDocument.managerAuthorisedAt = new Date();
@@ -317,26 +407,28 @@ router.post('/orders/:id/authorise-print', async (req, res) => {
       order,
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return handleManagerError(res, error);
   }
 });
 
 // Log Printer WhatsApp Progress Update
 router.post('/orders/:id/printer-update', async (req, res) => {
   try {
-    const { stage, notes } = req.body; // stage: 'in_progress' | 'completed'
+    const { stage, notes } = validatePrinterStage(req.body);
     const order = await Order.findById(req.params.id);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
     if (stage === 'in_progress') {
+      requireStatus(order, ['printing_sent'], 'Printing acknowledgement');
       order.status = 'printing_in_progress';
       if (!order.printingDetails) order.printingDetails = {};
       order.printingDetails.acknowledgedAt = new Date();
       order.printingDetails.notes = notes || order.printingDetails.notes;
       await notifyPrintingInProgress(order);
     } else if (stage === 'completed') {
+      requireStatus(order, ['printing_in_progress'], 'Printing completion');
       order.status = 'printing_completed';
       if (!order.printingDetails) order.printingDetails = {};
       order.printingDetails.completedAt = new Date();
@@ -355,26 +447,24 @@ router.post('/orders/:id/printer-update', async (req, res) => {
 
     return res.status(200).json({ success: true, message: `Printing stage updated to ${stage}`, order });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return handleManagerError(res, error);
   }
 });
 
 // Authorise Dispatch
 router.post('/orders/:id/authorise-dispatch', async (req, res) => {
   try {
-    const { carrier, trackingReference, deliveryAddress, notes } = req.body;
+    const dispatch = validateDispatch(req.body);
     const order = await Order.findById(req.params.id);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
+    requireStatus(order, ['printing_completed'], 'Dispatch authorization');
     order.dispatchDetails = {
       authorisedBy: req.user._id,
       authorisedAt: new Date(),
-      carrier: carrier || 'Standard Courier',
-      trackingReference: trackingReference || `PKG-${Date.now().toString().slice(-6)}`,
-      deliveryAddress: deliveryAddress || '',
-      notes: notes || '',
+      ...dispatch,
     };
 
     order.status = 'dispatched';
@@ -384,30 +474,31 @@ router.post('/orders/:id/authorise-dispatch', async (req, res) => {
       actor: { type: 'manager', id: req.user._id, name: req.user.name },
       action: 'ORDER_DISPATCHED',
       orderId: order._id,
-      details: { carrier, trackingReference },
+      details: { carrier: dispatch.carrier, trackingReference: dispatch.trackingReference },
     });
 
-    await notifyDispatchRecorded(order, order.dispatchDetails.trackingReference, carrier);
+    await notifyDispatchRecorded(order, order.dispatchDetails.trackingReference, dispatch.carrier);
 
     return res.status(200).json({ success: true, message: 'Order dispatched successfully', order });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return handleManagerError(res, error);
   }
 });
 
 // Confirm Delivery & Close Order
 router.post('/orders/:id/close-order', async (req, res) => {
   try {
-    const { recipientFeedback } = req.body;
+    const delivery = validateDelivery(req.body);
     const order = await Order.findById(req.params.id);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
+    requireStatus(order, ['dispatched', 'delivered'], 'Delivery confirmation');
     order.deliveryDetails = {
       confirmedBy: req.user._id,
       confirmedAt: new Date(),
-      recipientFeedback: recipientFeedback || 'Delivered to client in good condition.',
+      ...delivery,
     };
 
     order.status = 'closed';
@@ -420,12 +511,12 @@ router.post('/orders/:id/close-order', async (req, res) => {
       actor: { type: 'manager', id: req.user._id, name: req.user.name },
       action: 'ORDER_CLOSED_DELIVERED',
       orderId: order._id,
-      details: { recipientFeedback },
+      details: delivery,
     });
 
     return res.status(200).json({ success: true, message: 'Order marked delivered and closed', order });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return handleManagerError(res, error);
   }
 });
 

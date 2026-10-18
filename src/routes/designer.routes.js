@@ -11,7 +11,7 @@ import { archiveStatus } from './mediaOperations.routes.js';
 
 const router = Router();
 
-// Designer, Manager, or Admin access
+// Managers may inspect production assets; only designers/admins may mutate design work.
 router.use(verifyStaffToken, requireRoles('designer', 'manager', 'admin'));
 
 router.param('id', async (req, res, next, id) => {
@@ -96,7 +96,7 @@ router.get('/orders/:id/photo-folder.zip', async (req, res) => {
 });
 
 // Start Design
-router.post('/orders/:id/start-design', async (req, res) => {
+router.post('/orders/:id/start-design', requireRoles('designer', 'admin'), async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
     if (!order) {
@@ -123,6 +123,7 @@ router.post('/orders/:id/start-design', async (req, res) => {
 // Upload Draft (PDF / Spreads)
 router.post(
   '/orders/:id/upload-draft',
+  requireRoles('designer', 'admin'),
   uploadDraft.fields([
     { name: 'draftFile', maxCount: 1 },
     { name: 'previewPages', maxCount: 20 },
@@ -193,7 +194,7 @@ router.post(
 );
 
 // Upload Final Print Document
-router.post('/orders/:id/upload-print-document', uploadPrint.single('printFile'), async (req, res) => {
+router.post('/orders/:id/upload-print-document', requireRoles('designer', 'admin'), uploadPrint.single('printFile'), async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
     if (!order) {
@@ -248,7 +249,7 @@ router.post('/orders/:id/upload-print-document', uploadPrint.single('printFile')
 });
 
 // Flag Issue with order
-router.post('/orders/:id/flag-issue', async (req, res) => {
+router.post('/orders/:id/flag-issue', requireRoles('designer', 'admin'), async (req, res) => {
   try {
     const { issue } = req.body;
     if (!issue) {

@@ -228,6 +228,11 @@ const orderSchema = new mongoose.Schema(
         ref: 'StaffUser',
       },
       confirmedAt: Date,
+      recipientName: String,
+      confirmationMethod: {
+        type: String,
+        enum: ['client_whatsapp', 'courier_proof', 'phone_call', 'in_person'],
+      },
       recipientFeedback: String,
     },
     otp: {
