@@ -64,8 +64,11 @@ export const boundPhotoRequest = (req, res, next) => {
 };
 
 export const uploadDraft = multer({
-  storage: createStorage('drafts'),
-  fileFilter: documentFileFilter,
+  storage: multer.memoryStorage(),
+  fileFilter: (req, file, cb) => {
+    const isPdfName = path.extname(file.originalname).toLowerCase() === '.pdf';
+    cb(isPdfName && file.mimetype === 'application/pdf' ? null : new Error('Drafts must be PDF files'), isPdfName && file.mimetype === 'application/pdf');
+  },
   limits: { fileSize: 100 * 1024 * 1024 }, // 100MB per draft
 });
 

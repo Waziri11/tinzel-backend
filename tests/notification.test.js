@@ -10,6 +10,10 @@ import {
   notifyPrintingInProgress,
   notifyDispatchRecorded,
   notifyClientOtp,
+  updateNotificationDeliveryStatus,
+  recordInboundNotification,
+  getNotificationHistory,
+  testTwilioConnection,
 } from '../src/services/notificationService.js';
 import {
   emailTemplates,
@@ -149,3 +153,64 @@ test('Client OTP: dispatches OTP to both WhatsApp and Email', async () => {
   assert.ok(wa.message.includes('991122'));
   assert.ok(mail.message.includes('991122'));
 });
+
+test('Twilio Webhook: updateNotificationDeliveryStatus updates status and error details', async () => {
+  clearSimulatedNotifications();
+
+  // Dispatch a simulated notification with a simulated SID
+  const notif = await sendNotification({
+    to: '0712345678',
+    channel: 'whatsapp',
+    template: 'test_delivery',
+    message: 'Testing status update',
+  });
+  notif.sid = 'SM_TEST_123456';
+
+  // Simulate Twilio StatusCallback webhook delivery
+  const updated = await updateNotificationDeliveryStatus({
+    twilioSid: 'SM_TEST_123456',
+    status: 'delivered',
+  });
+
+  assert.ok(updated);
+  assert.equal(updated.status, 'delivered');
+
+  // Simulate a failed delivery webhook
+  const failed = await updateNotificationDeliveryStatus({
+    twilioSid: 'SM_TEST_123456',
+    status: 'failed',
+    errorCode: '30008',
+    errorMessage: 'Unknown subscriber',
+  });
+
+  assert.ok(failed);
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.errorCode, '30008');
+});
+
+test('Twilio Inbound: recordInboundNotification records inbound replies', async () => {
+  clearSimulatedNotifications();
+
+  const inbound = await recordInboundNotification({
+    from: '+255711223344',
+    to: '+14155238886',
+    body: 'POKEA',
+    twilioSid: 'SM_INBOUND_9988',
+    channel: 'whatsapp',
+  });
+
+  assert.equal(inbound.direction, 'inbound');
+  assert.equal(inbound.status, 'received');
+  assert.equal(inbound.message, 'POKEA');
+
+  const history = await getNotificationHistory({ limit: 10 });
+  assert.ok(history.length >= 1);
+  assert.equal(history[0].message, 'POKEA');
+});
+
+test('Twilio Diagnostics: accurately reports simulation mode when credentials not configured', async () => {
+  const diag = await testTwilioConnection();
+  assert.equal(diag.mode, 'simulated');
+  assert.equal(diag.configured, false);
+});
+

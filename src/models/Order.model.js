@@ -27,10 +27,12 @@ const draftVersionSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
-    fileUrl: {
-      type: String,
-      required: true,
-    },
+    fileUrl: { type: String, default: '' },
+    assetId: { type: mongoose.Schema.Types.ObjectId },
+    originalName: { type: String, default: '' },
+    mimeType: { type: String, default: 'application/pdf' },
+    size: { type: Number, default: 0 },
+    revisionRequestId: { type: mongoose.Schema.Types.ObjectId },
     previewPages: {
       type: [String],
       default: [],
@@ -72,6 +74,33 @@ const draftVersionSchema = new mongoose.Schema(
   },
   { _id: true }
 );
+
+const correctionItemSchema = new mongoose.Schema({
+  text: { type: String, required: true, trim: true },
+  pageReference: { type: String, default: '', trim: true },
+  status: { type: String, enum: ['open', 'addressed'], default: 'open' },
+  designerResponse: { type: String, default: '', trim: true },
+  addressedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'StaffUser' },
+  addressedAt: Date,
+}, { _id: true });
+
+const revisionRequestSchema = new mongoose.Schema({
+  roundNumber: { type: Number, required: true },
+  draftVersionNumber: { type: Number, required: true },
+  source: { type: String, enum: ['manager', 'client'], required: true },
+  status: { type: String, enum: ['open', 'submitted_for_review', 'resolved'], default: 'open' },
+  requestedBy: {
+    type: { type: String, enum: ['manager', 'admin', 'client'], required: true },
+    id: String,
+    name: { type: String, default: '' },
+  },
+  requestedAt: { type: Date, default: Date.now },
+  items: { type: [correctionItemSchema], default: [] },
+  submittedVersionNumber: Number,
+  submittedAt: Date,
+  resolvedAt: Date,
+  resolution: { type: String, enum: ['released', 'returned', 'legacy'], default: undefined },
+}, { _id: true });
 
 const orderSchema = new mongoose.Schema(
   {
@@ -177,6 +206,7 @@ const orderSchema = new mongoose.Schema(
       type: String,
     },
     draftVersions: [draftVersionSchema],
+    revisionRequests: { type: [revisionRequestSchema], default: [] },
     currentDraftVersion: {
       type: Number,
       default: 0,

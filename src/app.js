@@ -15,6 +15,7 @@ import designerRoutes from './routes/designer.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import mediaRoutes from './routes/media.routes.js';
 import mediaOperationsRoutes from './routes/mediaOperations.routes.js';
+import notificationRoutes from './routes/notification.routes.js';
 
 const app = express();
 
@@ -64,7 +65,8 @@ app.use('/api', async (req, res, next) => {
   });
 });
 
-// Static file uploads directory
+// Drafts are private and only stream through authenticated routes. Other legacy uploads remain available.
+app.use('/uploads/drafts', (_req, res) => res.status(404).json({ success: false, message: 'Not found' }));
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Root Route
@@ -96,6 +98,7 @@ app.use('/api/staff', staffAuthRoutes);
 app.use('/api/manager', managerRoutes);
 app.use('/api/designer', designerRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // 404 Handler
 app.use((req, res) => {

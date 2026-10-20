@@ -55,6 +55,7 @@ export const sanitizeOrderForClient = (order) => {
   // Only expose draft versions if current status has passed manager review release gate
   const clientCanSeeDraft = [
     'client_review',
+    'revision_requested',
     'client_approved',
     'print_document_prep',
     'print_manager_review',
@@ -69,15 +70,30 @@ export const sanitizeOrderForClient = (order) => {
   if (!clientCanSeeDraft) {
     obj.draftVersions = [];
   } else {
-    // Only return versions that manager approved for client release
+    // Only the current manager-approved version is client-visible; storage identifiers never leave the API.
     obj.draftVersions = obj.draftVersions.filter(
-      (v) => v.managerReview && v.managerReview.status === 'approved'
-    );
+      (v) => v.versionNumber === obj.currentDraftVersion && v.managerReview?.status === 'approved'
+    ).map((v) => ({
+      _id: v._id,
+      versionNumber: v.versionNumber,
+      uploadedAt: v.uploadedAt,
+      managerReview: { status: v.managerReview.status, reviewedAt: v.managerReview.reviewedAt },
+      clientReview: v.clientReview,
+    }));
   }
+
+  obj.revisionRequests = (obj.revisionRequests || [])
+    .filter((request) => request.source === 'client')
+    .map((request) => ({
+      _id: request._id, roundNumber: request.roundNumber, draftVersionNumber: request.draftVersionNumber,
+      status: request.status, requestedAt: request.requestedAt, resolvedAt: request.resolvedAt,
+      items: (request.items || []).map((item) => ({ _id: item._id, text: item.text, pageReference: item.pageReference, status: item.status })),
+    }));
 
   // Remove internal OTP details and internal staff identifiers
   delete obj.otp;
   delete obj.__v;
+  delete obj.assignedDesigner;
 
   return obj;
 };

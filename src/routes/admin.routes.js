@@ -6,7 +6,7 @@ import { Order } from '../models/Order.model.js';
 import { SystemConfig } from '../models/SystemConfig.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
-import { getSimulatedNotifications } from '../services/notificationService.js';
+import { getSimulatedNotifications, getNotificationHistory } from '../services/notificationService.js';
 import { availableFormSlug } from '../utils/formSlug.js';
 import { validateFormForPublication } from '../services/formPublicationService.js';
 import { importGoogleForm, GoogleFormsImportError } from '../services/googleFormsImportService.js';
@@ -404,7 +404,7 @@ router.delete('/staff/:id', async (req, res) => {
 router.get('/config', async (req, res) => {
   try {
     const configs = await SystemConfig.find();
-    const simulatedNotifs = getSimulatedNotifications();
+    const simulatedNotifs = await getNotificationHistory({ limit: 50 });
     return res.status(200).json({ success: true, configs, simulatedNotifications: simulatedNotifs });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });

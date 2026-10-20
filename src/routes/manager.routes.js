@@ -24,6 +24,7 @@ import {
   validatePayment,
   validatePrinterStage,
 } from '../services/managerWorkflowService.js';
+import { assertExpectedVersion, closeActiveRevision, createRevisionRequest, normalizeCorrectionItems } from '../services/revisionRequestService.js';
 
 const router = Router();
 
@@ -31,7 +32,7 @@ const handleManagerError = (res, error) => {
   if (error instanceof ManagerWorkflowError) {
     return res.status(error.status).json({ success: false, message: error.message });
   }
-  return res.status(500).json({ success: false, message: error.message });
+  return res.status(error.status || 500).json({ success: false, message: error.message });
 };
 
 // Manager or Admin only for all manager routes
@@ -279,7 +280,7 @@ router.post('/orders/:id/hold', async (req, res) => {
 // Manager Review Draft: Approve/Release to Client OR Return to Designer
 router.post('/orders/:id/review-draft', async (req, res) => {
   try {
-    const { action, feedback } = validateDraftDecision(req.body);
+    const { action, feedback, items } = validateDraftDecision(req.body);
     const order = await Order.findById(req.params.id);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
@@ -291,6 +292,7 @@ router.post('/orders/:id/review-draft', async (req, res) => {
         message: `Order must be in 'draft_manager_review' status. Current: ${order.status}`,
       });
     }
+    assertExpectedVersion(order, req.body.expectedVersion);
 
     const currentDraft = order.draftVersions.find((v) => v.versionNumber === order.currentDraftVersion);
     if (!currentDraft) {
@@ -305,6 +307,7 @@ router.post('/orders/:id/review-draft', async (req, res) => {
         feedback: feedback || 'Manager approved draft for client whole-magazine review.',
       };
 
+      closeActiveRevision(order, 'released');
       order.status = 'client_review';
       await order.save();
 
@@ -333,14 +336,21 @@ router.post('/orders/:id/review-draft', async (req, res) => {
         feedback: feedback || 'Changes required before client release.',
       };
 
-      order.status = 'in_design';
+      closeActiveRevision(order, 'returned');
+      const correctionItems = normalizeCorrectionItems({ items, feedback });
+      const revisionRequest = createRevisionRequest(order, {
+        source: 'manager',
+        actor: { type: req.user.role, id: String(req.user._id), name: req.user.name },
+        items: correctionItems,
+      });
+      order.status = 'revision_requested';
       await order.save();
 
       await AuditLog.create({
         actor: { type: 'manager', id: req.user._id, name: req.user.name },
         action: 'DRAFT_RETURNED_TO_DESIGNER',
         orderId: order._id,
-        details: { versionNumber: order.currentDraftVersion, feedback },
+        details: { versionNumber: order.currentDraftVersion, feedback, requestId: revisionRequest._id, items: correctionItems },
       });
 
       return res.status(200).json({

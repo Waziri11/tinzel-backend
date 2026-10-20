@@ -44,15 +44,15 @@ export const validatePayment = ({ lipaNambaReference, amountPaid }) => {
   return { reference, amount };
 };
 
-export const validateDraftDecision = ({ action, feedback }) => {
+export const validateDraftDecision = ({ action, feedback, items }) => {
   if (!['release_to_client', 'return_to_designer'].includes(action)) {
     throw new ManagerWorkflowError('Choose whether to release the draft or return it to the designer.');
   }
   const notes = clean(feedback);
-  if (action === 'return_to_designer' && !notes) {
+  if (action === 'return_to_designer' && !notes && !items?.some((item) => String(item?.text || '').trim())) {
     throw new ManagerWorkflowError('Change instructions are required when returning a draft.');
   }
-  return { action, feedback: notes };
+  return { action, feedback: notes, items };
 };
 
 export const validatePrinterStage = ({ stage, notes }) => {

@@ -52,6 +52,7 @@ test('Workflow Gate: Sanitizer hides unreleased drafts from client portal', () =
   const mockOrderReleased = {
     trackingId: 'TNZ-2026-0001',
     status: 'client_review',
+    currentDraftVersion: 1,
     draftVersions: [
       {
         versionNumber: 1,
@@ -59,9 +60,16 @@ test('Workflow Gate: Sanitizer hides unreleased drafts from client portal', () =
         managerReview: { status: 'approved' },
       },
     ],
+    revisionRequests: [
+      { _id: 'manager-return', source: 'manager', status: 'resolved', items: [{ text: 'Internal change' }] },
+      { _id: 'client-return', source: 'client', roundNumber: 2, status: 'open', items: [{ _id: 'item-1', text: 'Client change', pageReference: '3', status: 'open', designerResponse: 'internal response' }] },
+    ],
   };
 
   const sanitizedAfterRelease = sanitizeOrderForClient(mockOrderReleased);
   assert.equal(sanitizedAfterRelease.draftVersions.length, 1, 'Released draft must be visible to client');
   assert.equal(sanitizedAfterRelease.draftVersions[0].versionNumber, 1);
+  assert.equal(sanitizedAfterRelease.draftVersions[0].fileUrl, undefined, 'Storage URL must not be exposed');
+  assert.equal(sanitizedAfterRelease.revisionRequests.length, 1, 'Only client-authored return history is visible');
+  assert.equal(sanitizedAfterRelease.revisionRequests[0].items[0].designerResponse, undefined, 'Internal designer responses stay private');
 });

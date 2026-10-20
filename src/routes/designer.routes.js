@@ -8,6 +8,8 @@ import { photoArchiveFileName } from '../utils/photoArchive.js';
 import { MediaJob } from '../models/Media.model.js';
 import { enqueueArchive, createPhotoArchive } from '../services/mediaJobService.js';
 import { archiveStatus } from './mediaOperations.routes.js';
+import { deleteDraftPdf, isPdf, saveDraftPdf, streamDraftPdf } from '../services/draftFileService.js';
+import { activeRevisionRequest, assertExpectedVersion } from '../services/revisionRequestService.js';
 
 const router = Router();
 
@@ -55,15 +57,67 @@ router.get('/orders', async (req, res) => {
   }
 });
 
+router.get('/returns', async (req, res) => {
+  try {
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 25));
+    const status = req.query.status === 'resolved' ? 'resolved' : 'active';
+    const revisionMatch = status === 'resolved'
+      ? { $elemMatch: { status: 'resolved' } }
+      : { $elemMatch: { status: { $in: ['open', 'submitted_for_review'] } } };
+    const query = { revisionRequests: revisionMatch };
+    if (req.user.role === 'designer') query.assignedDesigner = req.user._id;
+    const [orders, total] = await Promise.all([
+      Order.find(query).select('submissionId trackingId clientName formTitle status currentDraftVersion revisionRequests assignedDesigner updatedAt')
+        .populate('assignedDesigner', 'name').sort({ updatedAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      Order.countDocuments(query),
+    ]);
+    const rows = orders.flatMap((order) => order.revisionRequests
+      .filter((request) => status === 'resolved' ? request.status === 'resolved' : request.status !== 'resolved')
+      .map((request) => ({ orderId: order._id, trackingId: order.trackingId || order.submissionId,
+        clientName: order.clientName, formTitle: order.formTitle, orderStatus: order.status,
+        assignedDesigner: order.assignedDesigner, ...request })));
+    return res.json({ success: true, returns: rows, total, page, pageCount: Math.max(1, Math.ceil(total / limit)) });
+  } catch (error) { return res.status(500).json({ success: false, message: error.message }); }
+});
+
 // Get single order with complete client assets & revision notes
 router.get('/orders/:id', async (req, res) => {
   try {
     const order = await req.order.populate(['formId', { path: 'assignedDesigner', select: 'name email' }]);
 
-    return res.status(200).json({ success: true, order });
+    const auditLogs = await AuditLog.find({ orderId: order._id }).sort({ createdAt: -1 }).lean();
+    return res.status(200).json({ success: true, order, auditLogs });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
+});
+
+router.get('/orders/:id/drafts/:version/view', async (req, res) => {
+  const draft = req.order.draftVersions.find((item) => item.versionNumber === Number(req.params.version));
+  if (!draft) return res.status(404).json({ success: false, message: 'Draft version not found' });
+  try { return streamDraftPdf(res, draft); } catch (error) { return res.status(error.status || 500).json({ success: false, message: error.message }); }
+});
+
+router.get('/orders/:id/drafts/:version/download', requireRoles('manager', 'admin'), async (req, res) => {
+  const draft = req.order.draftVersions.find((item) => item.versionNumber === Number(req.params.version));
+  if (!draft) return res.status(404).json({ success: false, message: 'Draft version not found' });
+  try { return streamDraftPdf(res, draft, { download: true }); } catch (error) { return res.status(error.status || 500).json({ success: false, message: error.message }); }
+});
+
+router.patch('/orders/:id/returns/:requestId/items/:itemId', requireRoles('designer', 'admin'), async (req, res) => {
+  try {
+    const request = req.order.revisionRequests.id(req.params.requestId);
+    const item = request?.items.id(req.params.itemId);
+    if (!request || !item || request.status !== 'open') return res.status(404).json({ success: false, message: 'Open fix item not found' });
+    const response = String(req.body.response || '').trim();
+    if (!response) return res.status(400).json({ success: false, message: 'Describe how this fix was addressed' });
+    item.status = 'addressed'; item.designerResponse = response; item.addressedBy = req.user._id; item.addressedAt = new Date();
+    await req.order.save();
+    await AuditLog.create({ actor: { type: req.user.role, id: req.user._id, name: req.user.name }, action: 'CORRECTION_ITEM_ADDRESSED', orderId: req.order._id,
+      details: { requestId: request._id, itemId: item._id, roundNumber: request.roundNumber } });
+    return res.json({ success: true, request });
+  } catch (error) { return res.status(error.status || 500).json({ success: false, message: error.message }); }
 });
 
 // New clients prepare a cached archive and use a normal browser download.
@@ -108,7 +162,7 @@ router.post('/orders/:id/start-design', requireRoles('designer', 'admin'), async
       await order.save();
 
       await AuditLog.create({
-        actor: { type: 'designer', id: req.user._id, name: req.user.name },
+        actor: { type: req.user.role, id: req.user._id, name: req.user.name },
         action: 'DESIGN_STARTED',
         orderId: order._id,
       });
@@ -124,40 +178,38 @@ router.post('/orders/:id/start-design', requireRoles('designer', 'admin'), async
 router.post(
   '/orders/:id/upload-draft',
   requireRoles('designer', 'admin'),
-  uploadDraft.fields([
-    { name: 'draftFile', maxCount: 1 },
-    { name: 'previewPages', maxCount: 20 },
-  ]),
+  uploadDraft.single('draftFile'),
   async (req, res) => {
+    let assetId;
     try {
-      const order = await Order.findById(req.params.id);
-      if (!order) {
-        return res.status(404).json({ success: false, message: 'Order not found' });
+      const order = req.order;
+      if (!['assigned', 'in_design', 'revision_requested'].includes(order.status)) {
+        return res.status(409).json({ success: false, message: `A draft cannot be uploaded while the order is ${order.status.replaceAll('_', ' ')}` });
       }
-
-      if (!req.files || !req.files.draftFile || req.files.draftFile.length === 0) {
+      if (!req.file) {
         return res.status(400).json({ success: false, message: 'Draft file is required' });
       }
-
-      const draftFile = req.files.draftFile[0];
-      const draftUrl = `/uploads/drafts/${draftFile.filename}`;
-
-      // Preview page images for whole-magazine flip reader
-      const previewPages = (req.files.previewPages || []).map(
-        (f) => `/uploads/drafts/${f.filename}`
-      );
-
-      // If no preview images uploaded separately, use draftFile itself as page 1
-      if (previewPages.length === 0) {
-        previewPages.push(draftUrl);
+      if (!isPdf(req.file)) return res.status(400).json({ success: false, message: 'Drafts must be valid PDF files' });
+      assertExpectedVersion(order, req.body.expectedVersion);
+      const activeReturn = activeRevisionRequest(order);
+      if (activeReturn?.status === 'submitted_for_review') return res.status(409).json({ success: false, message: 'This return is already awaiting manager review' });
+      if (activeReturn) {
+        if (String(req.body.revisionRequestId || '') !== String(activeReturn._id)) return res.status(409).json({ success: false, message: 'Refresh and use the current return checklist' });
+        if (req.body.verifyAll !== 'true' || activeReturn.items.some((item) => item.status !== 'addressed')) {
+          return res.status(400).json({ success: false, message: 'Address and verify every requested fix before uploading' });
+        }
       }
 
       const nextVersion = (order.currentDraftVersion || 0) + 1;
+      assetId = await saveDraftPdf(req.file, order._id, nextVersion);
 
       order.draftVersions.push({
         versionNumber: nextVersion,
-        fileUrl: draftUrl,
-        previewPages,
+        assetId,
+        originalName: req.file.originalname,
+        mimeType: 'application/pdf',
+        size: req.file.size,
+        revisionRequestId: activeReturn?._id,
         uploadedBy: req.user._id,
         uploadedAt: new Date(),
         designerNotes: req.body.designerNotes || '',
@@ -166,19 +218,25 @@ router.post(
         },
       });
 
+      if (activeReturn) {
+        activeReturn.status = 'submitted_for_review';
+        activeReturn.submittedVersionNumber = nextVersion;
+        activeReturn.submittedAt = new Date();
+      }
+
       order.currentDraftVersion = nextVersion;
       // PRD Gate: draft enters draft_manager_review and is NOT yet visible to client!
       order.status = 'draft_manager_review';
       await order.save();
 
       await AuditLog.create({
-        actor: { type: 'designer', id: req.user._id, name: req.user.name },
+        actor: { type: req.user.role, id: req.user._id, name: req.user.name },
         action: 'DRAFT_UPLOADED',
         orderId: order._id,
         details: {
           versionNumber: nextVersion,
-          draftUrl,
-          previewPagesCount: previewPages.length,
+          assetId: String(assetId),
+          revisionRequestId: activeReturn?._id,
         },
       });
 
@@ -188,7 +246,8 @@ router.post(
         order,
       });
     } catch (error) {
-      return res.status(500).json({ success: false, message: error.message });
+      await deleteDraftPdf(assetId);
+      return res.status(error.status || 500).json({ success: false, message: error.message });
     }
   }
 );

@@ -4,6 +4,8 @@ import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyClientToken, generateClientToken } from '../middlewares/auth.middleware.js';
 import { sendNotification, notifyClientOtp } from '../services/notificationService.js';
 import { sanitizeOrderForClient } from '../services/workflowService.js';
+import { streamDraftPdf } from '../services/draftFileService.js';
+import { assertExpectedVersion, createRevisionRequest, normalizeCorrectionItems } from '../services/revisionRequestService.js';
 
 const router = Router();
 
@@ -64,7 +66,7 @@ router.post('/request-otp', async (req, res) => {
       devOtp: process.env.NODE_ENV !== 'production' ? otpCode : undefined,
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
@@ -103,7 +105,7 @@ router.post('/verify-otp', async (req, res) => {
       message: 'Access granted',
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
@@ -123,6 +125,19 @@ router.get('/order', verifyClientToken, async (req, res) => {
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
+});
+
+router.get('/draft/view', verifyClientToken, async (req, res) => {
+  try {
+    const order = await Order.findById(req.clientAuth.orderId);
+    if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+    const allowed = ['client_review', 'revision_requested', 'client_approved', 'print_document_prep', 'print_manager_review', 'printing_sent', 'printing_in_progress', 'printing_completed', 'dispatched', 'delivered', 'closed'];
+    const draft = order.draftVersions.find((item) => item.versionNumber === order.currentDraftVersion);
+    if (!allowed.includes(order.status) || !draft || draft.managerReview?.status !== 'approved') {
+      return res.status(404).json({ success: false, message: 'No magazine proof is currently available' });
+    }
+    return streamDraftPdf(res, draft);
+  } catch (error) { return res.status(error.status || 500).json({ success: false, message: error.message }); }
 });
 
 // Whole-Magazine Client Approval
@@ -185,10 +200,7 @@ router.post('/approve-draft', verifyClientToken, async (req, res) => {
 // Request Revisions (Restarts approval loop)
 router.post('/request-revision', verifyClientToken, async (req, res) => {
   try {
-    const { feedback } = req.body;
-    if (!feedback || !feedback.trim()) {
-      return res.status(400).json({ success: false, message: 'Please provide details on the changes you require' });
-    }
+    const items = normalizeCorrectionItems(req.body);
 
     const order = await Order.findById(req.clientAuth.orderId);
     if (!order) {
@@ -201,6 +213,7 @@ router.post('/request-revision', verifyClientToken, async (req, res) => {
         message: 'Order is not currently in client review stage',
       });
     }
+    assertExpectedVersion(order, req.body.expectedVersion);
 
     const currentVersion = order.draftVersions.find(
       (v) => v.versionNumber === order.currentDraftVersion
@@ -210,9 +223,15 @@ router.post('/request-revision', verifyClientToken, async (req, res) => {
       currentVersion.clientReview = {
         status: 'revision_requested',
         reviewedAt: new Date(),
-        feedback: feedback.trim(),
+        feedback: items.map((item) => item.text).join('\n'),
       };
     }
+
+    const revisionRequest = createRevisionRequest(order, {
+      source: 'client',
+      actor: { type: 'client', name: order.clientName },
+      items,
+    });
 
     // Restart approval loop back to in_design
     order.status = 'revision_requested';
@@ -224,7 +243,9 @@ router.post('/request-revision', verifyClientToken, async (req, res) => {
       orderId: order._id,
       details: {
         versionNumber: order.currentDraftVersion,
-        feedback: feedback.trim(),
+        feedback: items.map((item) => item.text).join('\n'),
+        requestId: revisionRequest._id,
+        items,
       },
     });
 
@@ -234,7 +255,7 @@ router.post('/request-revision', verifyClientToken, async (req, res) => {
       order: sanitizeOrderForClient(order),
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 

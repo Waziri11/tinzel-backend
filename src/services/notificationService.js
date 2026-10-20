@@ -1,6 +1,7 @@
 import twilio from 'twilio';
 import mongoose from 'mongoose';
 import { AuditLog } from '../models/AuditLog.model.js';
+import { Notification } from '../models/Notification.model.js';
 import { sendEmail, emailTemplates, isEmailConfigured } from './emailService.js';
 
 // In-memory simulation log for development & inspection
@@ -67,6 +68,7 @@ export const sendNotification = async ({
   mediaUrl = null,
   metadata = {},
   orderId = null,
+  fallbackToSms = true,
 }) => {
   const timestamp = new Date().toISOString();
   const logEntry = {
@@ -106,35 +108,74 @@ export const sendNotification = async ({
     const client = getTwilioClient();
 
     if (client) {
+      const formattedRecipient = normalizePhoneNumber(to);
+      const isWhatsApp = channel === 'whatsapp';
+      const fromNumber = isWhatsApp
+        ? `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER || process.env.TWILIO_PHONE_NUMBER}`
+        : process.env.TWILIO_PHONE_NUMBER;
+
+      const toNumber = isWhatsApp
+        ? `whatsapp:${formattedRecipient}`
+        : formattedRecipient;
+
+      const payload = {
+        from: fromNumber,
+        to: toNumber,
+        body: message,
+      };
+
+      if (mediaUrl) {
+        payload.mediaUrl = [mediaUrl];
+      }
+
+      if (process.env.TWILIO_STATUS_CALLBACK_URL) {
+        payload.statusCallback = process.env.TWILIO_STATUS_CALLBACK_URL;
+      }
+
       try {
-        const formattedRecipient = normalizePhoneNumber(to);
-        const fromNumber =
-          channel === 'whatsapp'
-            ? `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER || process.env.TWILIO_PHONE_NUMBER}`
-            : process.env.TWILIO_PHONE_NUMBER;
-
-        const toNumber =
-          channel === 'whatsapp'
-            ? `whatsapp:${formattedRecipient}`
-            : formattedRecipient;
-
-        const payload = {
-          from: fromNumber,
-          to: toNumber,
-          body: message,
-        };
-
-        if (mediaUrl) {
-          payload.mediaUrl = [mediaUrl];
-        }
-
         const res = await client.messages.create(payload);
         logEntry.sid = res.sid;
         logEntry.mode = 'twilio_live';
+        logEntry.status = 'sent';
       } catch (error) {
-        console.warn(`[Twilio Error] Failed to send via live Twilio: ${error.message}. Recorded in simulated log.`);
-        logEntry.mode = 'twilio_failed_fallback_simulated';
-        logEntry.error = error.message;
+        console.warn(`[Twilio Error - ${channel.toUpperCase()}] ${error.message}`);
+
+        // Automatic fallback to SMS if WhatsApp fails
+        const shouldFallback =
+          isWhatsApp &&
+          fallbackToSms &&
+          process.env.ENABLE_TWILIO_SMS_FALLBACK !== 'false' &&
+          process.env.TWILIO_PHONE_NUMBER;
+
+        if (shouldFallback) {
+          console.log(`[Twilio WhatsApp Fallback] Falling back to SMS for ${formattedRecipient}...`);
+          try {
+            const smsPayload = {
+              from: process.env.TWILIO_PHONE_NUMBER,
+              to: formattedRecipient,
+              body: message,
+            };
+            if (process.env.TWILIO_STATUS_CALLBACK_URL) {
+              smsPayload.statusCallback = process.env.TWILIO_STATUS_CALLBACK_URL;
+            }
+            const smsRes = await client.messages.create(smsPayload);
+            logEntry.sid = smsRes.sid;
+            logEntry.channel = 'sms';
+            logEntry.fallbackFromChannel = 'whatsapp';
+            logEntry.mode = 'twilio_fallback_sms';
+            logEntry.status = 'sent';
+            logEntry.error = null;
+          } catch (smsError) {
+            console.warn(`[Twilio SMS Fallback Error] ${smsError.message}`);
+            logEntry.mode = 'twilio_failed_fallback_simulated';
+            logEntry.status = 'failed';
+            logEntry.error = `WhatsApp: ${error.message} | SMS: ${smsError.message}`;
+          }
+        } else {
+          logEntry.mode = 'twilio_failed_fallback_simulated';
+          logEntry.status = 'failed';
+          logEntry.error = error.message;
+        }
       }
     } else {
       logEntry.mode = 'simulated';
@@ -150,6 +191,32 @@ export const sendNotification = async ({
 
   console.log(`[Notification Engine - ${channel.toUpperCase()}] To: ${to} | Template: ${template} | Mode: ${logEntry.mode}`);
 
+  // Safely persist to Notification collection if DB is connected
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const notifDoc = await Notification.create({
+        recipient: to,
+        channel: logEntry.channel || channel,
+        direction: 'outbound',
+        orderId,
+        template,
+        subject,
+        message,
+        mediaUrl,
+        twilioSid: logEntry.sid || null,
+        mode: logEntry.mode,
+        status: logEntry.status,
+        errorCode: logEntry.errorCode || null,
+        errorMessage: logEntry.error || null,
+        fallbackFromChannel: logEntry.fallbackFromChannel || null,
+        metadata,
+      });
+      logEntry._id = notifDoc._id;
+    } catch {
+      // Prevent isolated test environments without collections from throwing
+    }
+  }
+
   // Safely persist audit log if an associated order exists and DB is connected
   if (orderId && mongoose.connection.readyState === 1) {
     try {
@@ -159,10 +226,11 @@ export const sendNotification = async ({
         orderId,
         details: {
           to,
-          channel,
+          channel: logEntry.channel || channel,
           template,
           mode: logEntry.mode,
           status: logEntry.status,
+          fallbackFromChannel: logEntry.fallbackFromChannel || null,
         },
       });
     } catch {
@@ -172,6 +240,7 @@ export const sendNotification = async ({
 
   return logEntry;
 };
+
 
 // --- Specialized Milestone Multi-Channel Dispatchers ---
 
@@ -443,4 +512,214 @@ export const notifyClientOtp = async (order, otpCode) => {
 
   const results = await Promise.allSettled(notifications);
   return results.map((r) => (r.status === 'fulfilled' ? r.value : { status: 'failed', error: r.reason }));
+};
+
+/**
+ * Updates the delivery status of a dispatched Twilio message by SID.
+ * Called by Twilio StatusCallback webhooks.
+ */
+export const updateNotificationDeliveryStatus = async ({
+  twilioSid,
+  status,
+  errorCode = null,
+  errorMessage = null,
+}) => {
+  if (!twilioSid) return null;
+
+  const validStatuses = ['queued', 'sent', 'delivered', 'failed', 'undelivered'];
+  const normalizedStatus = validStatuses.includes(status) ? status : 'sent';
+
+  // Update in-memory log entry if present
+  const memoryEntry = simulatedNotifications.find((n) => n.sid === twilioSid);
+  if (memoryEntry) {
+    memoryEntry.status = normalizedStatus;
+    if (errorCode) memoryEntry.errorCode = errorCode;
+    if (errorMessage) memoryEntry.error = errorMessage;
+  }
+
+  // Update persistent MongoDB record
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const updated = await Notification.findOneAndUpdate(
+        { twilioSid },
+        {
+          $set: {
+            status: normalizedStatus,
+            errorCode: errorCode || null,
+            errorMessage: errorMessage || null,
+          },
+        },
+        { returnDocument: 'after' }
+      );
+      return updated;
+    } catch (err) {
+      console.warn(`[Notification Status Update Error] ${err.message}`);
+    }
+  }
+
+  return memoryEntry || null;
+};
+
+/**
+ * Records an incoming notification (e.g., Twilio Inbound Webhook reply).
+ */
+export const recordInboundNotification = async ({
+  from,
+  to,
+  body,
+  twilioSid,
+  channel = 'whatsapp',
+  orderId = null,
+  metadata = {},
+}) => {
+  const logEntry = {
+    id: `notif-in-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    from,
+    to,
+    recipient: to,
+    channel,
+    direction: 'inbound',
+    message: body,
+    twilioSid,
+    orderId,
+    mode: 'twilio_inbound',
+    status: 'received',
+    timestamp: new Date().toISOString(),
+    metadata,
+  };
+
+  simulatedNotifications.unshift(logEntry);
+  if (simulatedNotifications.length > 100) simulatedNotifications.pop();
+
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const created = await Notification.create({
+        recipient: from,
+        channel,
+        direction: 'inbound',
+        message: body,
+        twilioSid,
+        orderId,
+        mode: 'twilio_inbound',
+        status: 'received',
+        metadata: { ...metadata, to, from },
+      });
+      return created;
+    } catch (err) {
+      console.warn(`[Inbound Notification DB Error] ${err.message}`);
+    }
+  }
+
+  return logEntry;
+};
+
+/**
+ * Returns full notification history for admin audit & live monitoring.
+ */
+export const getNotificationHistory = async ({
+  limit = 50,
+  orderId = null,
+  channel = null,
+  status = null,
+} = {}) => {
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const filter = {};
+      if (orderId) filter.orderId = orderId;
+      if (channel) filter.channel = channel;
+      if (status) filter.status = status;
+
+      const items = await Notification.find(filter)
+        .sort({ createdAt: -1 })
+        .limit(Math.min(limit, 200))
+        .populate('orderId', 'trackingId formTitle clientName status')
+        .lean();
+
+      if (items && items.length > 0) {
+        return items;
+      }
+    } catch (err) {
+      console.warn(`[Notification History DB Error] ${err.message}`);
+    }
+  }
+
+  // Fallback to in-memory notifications
+  return simulatedNotifications.slice(0, limit);
+};
+
+/**
+ * Re-sends a failed or existing notification with optional channel override.
+ */
+export const resendNotification = async (notificationId, { channelOverride = null } = {}) => {
+  let original = null;
+  if (mongoose.connection.readyState === 1) {
+    original = await Notification.findById(notificationId);
+  }
+
+  if (!original) {
+    original = simulatedNotifications.find((n) => n.id === notificationId || String(n._id) === String(notificationId));
+  }
+
+  if (!original) {
+    throw new Error('Notification record not found');
+  }
+
+  const targetChannel = channelOverride || original.channel;
+  const result = await sendNotification({
+    to: original.recipient || original.to,
+    channel: targetChannel,
+    template: original.template || 'resend',
+    subject: original.subject,
+    message: original.message,
+    mediaUrl: original.mediaUrl,
+    orderId: original.orderId,
+    metadata: {
+      ...(original.metadata || {}),
+      isResend: true,
+      originalNotificationId: original._id || original.id,
+    },
+  });
+
+  if (mongoose.connection.readyState === 1 && original._id) {
+    await Notification.findByIdAndUpdate(original._id, { $inc: { retries: 1 } });
+  }
+
+  return result;
+};
+
+/**
+ * Diagnostics function to test Twilio API connectivity and credentials.
+ */
+export const testTwilioConnection = async () => {
+  const configured = isTwilioConfigured();
+  if (!configured) {
+    return {
+      success: false,
+      configured: false,
+      mode: 'simulated',
+      message: 'Twilio credentials not configured in environment. System is operating in local simulation mode.',
+    };
+  }
+
+  const client = getTwilioClient();
+  try {
+    const account = await client.api.v2010.accounts(process.env.TWILIO_ACCOUNT_SID).fetch();
+    return {
+      success: true,
+      configured: true,
+      mode: 'twilio_live',
+      accountName: account.friendlyName,
+      status: account.status,
+      phoneNumber: process.env.TWILIO_PHONE_NUMBER,
+      whatsappNumber: process.env.TWILIO_WHATSAPP_NUMBER || process.env.TWILIO_PHONE_NUMBER,
+      message: 'Successfully connected and verified against Twilio API.',
+    };
+  } catch (error) {
+    return {
+      success: false,
+      configured: true,
+      mode: 'error',
+      message: `Failed to authenticate with Twilio API: ${error.message}`,
+    };
+  }
 };
