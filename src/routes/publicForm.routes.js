@@ -8,6 +8,7 @@ import { generateSubmissionId } from '../services/workflowService.js';
 import { validateFormAnswers } from '../services/formResponseService.js';
 import { findCoverImage, openCoverImageStream } from '../services/coverStorageService.js';
 import { storeOrderPhoto, findOrderPhoto, openOrderPhotoStream } from '../services/photoStorageService.js';
+import { notifyOrderSubmitted } from '../services/notificationService.js';
 
 const router = Router();
 
@@ -256,6 +257,8 @@ router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos
       },
       ipAddress: req.ip,
     });
+
+    await notifyOrderSubmitted(order);
 
     return res.status(201).json({
       success: true,

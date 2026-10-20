@@ -9,9 +9,11 @@ import { autoAssignOrder, manualAssignOrder, releaseOrderWorkload } from '../ser
 import {
   notifyPaymentVerified,
   notifyDraftReleased,
+  notifyDraftReturned,
   notifyPrinterDispatch,
   notifyPrintingInProgress,
   notifyDispatchRecorded,
+  notifyOrderClosed,
 } from '../services/notificationService.js';
 import {
   ACTIVE_ORDER_STATUSES,
@@ -65,32 +67,82 @@ router.get('/settings', async (_req, res) => {
   }
 });
 
-// Get all orders across the conveyor belt stages
+const PHASE_STATUSES = {
+  pre_design: ['awaiting_payment', 'payment_verified', 'queued_for_assignment'],
+  design_phase: ['assigned', 'in_design', 'draft_manager_review', 'client_review', 'revision_requested'],
+  post_design: [
+    'client_approved',
+    'print_document_prep',
+    'print_manager_review',
+    'printing_sent',
+    'printing_in_progress',
+    'printing_completed',
+    'dispatched',
+    'delivered',
+    'closed',
+  ],
+};
+
+// Get all orders across the conveyor belt stages (optionally scoped by phase)
 router.get('/orders', async (req, res) => {
   try {
-    const { status, search, scope = 'active' } = req.query;
+    const { status, search, scope = 'active', phase } = req.query;
     const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
     const limit = Math.min(200, Math.max(1, Number.parseInt(req.query.limit, 10) || 100));
-    const query = {};
+    const conditions = [];
 
     if (status && status !== 'all') {
-      query.status = status;
+      conditions.push({ status });
+    } else if (phase && PHASE_STATUSES[phase]) {
+      const phaseList = PHASE_STATUSES[phase];
+      const activePhaseList = scope === 'all' || phase === 'post_design'
+        ? phaseList
+        : phaseList.filter((s) => s !== 'closed');
+
+      if (phase === 'pre_design') {
+        conditions.push({
+          $or: [
+            { status: { $in: activePhaseList } },
+            {
+              status: 'on_hold',
+              $or: [
+                { previousStatusBeforeHold: { $in: phaseList } },
+                { previousStatusBeforeHold: { $exists: false } },
+                { previousStatusBeforeHold: null },
+                { previousStatusBeforeHold: '' },
+              ],
+            },
+          ],
+        });
+      } else {
+        conditions.push({
+          $or: [
+            { status: { $in: activePhaseList } },
+            { status: 'on_hold', previousStatusBeforeHold: { $in: phaseList } },
+          ],
+        });
+      }
     } else if (scope !== 'all') {
-      query.status = { $in: ACTIVE_ORDER_STATUSES };
+      conditions.push({ status: { $in: ACTIVE_ORDER_STATUSES } });
     }
 
     if (search) {
-      query.$or = [
-        { clientName: { $regex: search, $options: 'i' } },
-        { clientWhatsApp: { $regex: search, $options: 'i' } },
-        { trackingId: { $regex: search, $options: 'i' } },
-        { submissionId: { $regex: search, $options: 'i' } },
-      ];
+      conditions.push({
+        $or: [
+          { clientName: { $regex: search, $options: 'i' } },
+          { clientWhatsApp: { $regex: search, $options: 'i' } },
+          { trackingId: { $regex: search, $options: 'i' } },
+          { submissionId: { $regex: search, $options: 'i' } },
+          { formTitle: { $regex: search, $options: 'i' } },
+        ],
+      });
     }
+
+    const query = conditions.length === 0 ? {} : conditions.length === 1 ? conditions[0] : { $and: conditions };
 
     const [orderDocs, total, statusCounts] = await Promise.all([
       Order.find(query)
-      .select('submissionId trackingId formId formTitle clientName clientWhatsApp status assignedDesigner currentDraftVersion printDocument printingDetails dispatchDetails holdReason uploadedPhotos updatedAt createdAt')
+      .select('submissionId trackingId formId formTitle clientName clientWhatsApp clientEmail status previousStatusBeforeHold assignedDesigner currentDraftVersion revisionRequests printDocument printingDetails dispatchDetails holdReason uploadedPhotos updatedAt createdAt')
       .populate('assignedDesigner', 'name email currentActiveWorkload')
       .populate('formId', 'title slug price currency')
       .sort({ updatedAt: -1 })
@@ -113,10 +165,19 @@ router.get('/orders', async (req, res) => {
     const summary = {
       active: ACTIVE_ORDER_STATUSES.reduce((sum, item) => sum + (counts[item] || 0), 0),
       payment: counts.awaiting_payment || 0,
+      paymentVerified: counts.payment_verified || 0,
+      queuedAssignment: counts.queued_for_assignment || 0,
+      inDesign: (counts.assigned || 0) + (counts.in_design || 0),
       draftReview: counts.draft_manager_review || 0,
+      clientReview: counts.client_review || 0,
+      returns: counts.revision_requested || 0,
+      printPrep: (counts.client_approved || 0) + (counts.print_document_prep || 0),
       printApproval: counts.print_manager_review || 0,
+      printing: (counts.printing_sent || 0) + (counts.printing_in_progress || 0),
       dispatchReady: counts.printing_completed || 0,
+      delivered: (counts.dispatched || 0) + (counts.delivered || 0) + (counts.closed || 0),
       blocked: (counts.on_hold || 0) + (counts.queued_for_assignment || 0),
+      onHold: counts.on_hold || 0,
     };
 
     return res.status(200).json({
@@ -353,6 +414,8 @@ router.post('/orders/:id/review-draft', async (req, res) => {
         details: { versionNumber: order.currentDraftVersion, feedback, requestId: revisionRequest._id, items: correctionItems },
       });
 
+      await notifyDraftReturned(order, revisionRequest, 'manager');
+
       return res.status(200).json({
         success: true,
         message: 'Draft returned to designer with feedback',
@@ -523,6 +586,8 @@ router.post('/orders/:id/close-order', async (req, res) => {
       orderId: order._id,
       details: delivery,
     });
+
+    await notifyOrderClosed(order, delivery);
 
     return res.status(200).json({ success: true, message: 'Order marked delivered and closed', order });
   } catch (error) {

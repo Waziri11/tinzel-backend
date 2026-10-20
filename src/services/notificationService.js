@@ -2,14 +2,18 @@ import twilio from 'twilio';
 import mongoose from 'mongoose';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { Notification } from '../models/Notification.model.js';
+import { StaffUser } from '../models/StaffUser.model.js';
 import { sendEmail, emailTemplates, isEmailConfigured } from './emailService.js';
 
 // In-memory simulation log for development & inspection
 const simulatedNotifications = [];
+const inSystemNotifications = [];
 
 export const getSimulatedNotifications = () => [...simulatedNotifications];
+export const getSimulatedInSystemNotifications = () => [...inSystemNotifications];
 export const clearSimulatedNotifications = () => {
   simulatedNotifications.length = 0;
+  inSystemNotifications.length = 0;
 };
 
 let cachedTwilioClient = null;
@@ -56,11 +60,16 @@ export const normalizePhoneNumber = (phone) => {
 
 /**
  * Universal dispatcher supporting Email (Google SMTP), SMS (Twilio), WhatsApp (Twilio),
- * and clean local simulation mode.
+ * In-System Notifications, and clean local simulation mode.
  */
 export const sendNotification = async ({
   to,
-  channel = 'whatsapp', // 'whatsapp' | 'sms' | 'email'
+  recipientName = '',
+  recipientRole = 'client',
+  recipientUser = null,
+  eventGroupId = null,
+  title = null,
+  channel = 'whatsapp', // 'whatsapp' | 'sms' | 'email' | 'in_system'
   template = 'general',
   subject = null,
   html = null,
@@ -74,7 +83,14 @@ export const sendNotification = async ({
   const logEntry = {
     id: `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     to,
+    recipient: to,
+    recipientName,
+    recipientRole,
+    recipientUser,
+    eventGroupId,
+    title: title || subject || null,
     channel,
+    direction: 'outbound',
     template,
     subject,
     message,
@@ -82,14 +98,22 @@ export const sendNotification = async ({
     metadata,
     orderId,
     timestamp,
+    createdAt: timestamp,
+    isRead: false,
     status: 'delivered',
   };
 
+  // Channel: IN-SYSTEM Notification
+  if (channel === 'in_system') {
+    logEntry.mode = 'in_system';
+    logEntry.status = 'delivered';
+  }
+
   // Channel: EMAIL (Google SMTP via Nodemailer)
-  if (channel === 'email') {
+  else if (channel === 'email') {
     const mailResult = await sendEmail({
       to,
-      subject: subject || `Taarifa ya Tinzel: ${template}`,
+      subject: subject || title || `Taarifa ya Tinzel: ${template}`,
       html,
       text: message,
     });
@@ -186,8 +210,13 @@ export const sendNotification = async ({
   }
 
   // Keep in-memory rolling log for developer visibility & admin dashboard
-  simulatedNotifications.unshift(logEntry);
-  if (simulatedNotifications.length > 100) simulatedNotifications.pop();
+  if (channel === 'in_system') {
+    inSystemNotifications.unshift(logEntry);
+    if (inSystemNotifications.length > 150) inSystemNotifications.pop();
+  } else {
+    simulatedNotifications.unshift(logEntry);
+    if (simulatedNotifications.length > 100) simulatedNotifications.pop();
+  }
 
   console.log(`[Notification Engine - ${channel.toUpperCase()}] To: ${to} | Template: ${template} | Mode: ${logEntry.mode}`);
 
@@ -196,6 +225,11 @@ export const sendNotification = async ({
     try {
       const notifDoc = await Notification.create({
         recipient: to,
+        recipientName,
+        recipientRole,
+        recipientUser: recipientUser || null,
+        eventGroupId,
+        title: title || subject || null,
         channel: logEntry.channel || channel,
         direction: 'outbound',
         orderId,
@@ -206,6 +240,7 @@ export const sendNotification = async ({
         twilioSid: logEntry.sid || null,
         mode: logEntry.mode,
         status: logEntry.status,
+        isRead: false,
         errorCode: logEntry.errorCode || null,
         errorMessage: logEntry.error || null,
         fallbackFromChannel: logEntry.fallbackFromChannel || null,
@@ -218,7 +253,7 @@ export const sendNotification = async ({
   }
 
   // Safely persist audit log if an associated order exists and DB is connected
-  if (orderId && mongoose.connection.readyState === 1) {
+  if (orderId && mongoose.connection.readyState === 1 && channel !== 'in_system') {
     try {
       await AuditLog.create({
         actor: { type: 'system', name: 'Notification Service' },
@@ -241,30 +276,296 @@ export const sendNotification = async ({
   return logEntry;
 };
 
+/**
+ * Records an in-system notification linked to its companion Email and Phone dispatches.
+ */
+export const recordInSystemNotification = async ({
+  recipient = 'System Inbox',
+  recipientName = '',
+  recipientRole = 'manager',
+  recipientUser = null,
+  eventGroupId = null,
+  title = 'System Notification',
+  template = 'general',
+  message = '',
+  orderId = null,
+  emailTo = '',
+  phoneTo = '',
+  metadata = {},
+}) => {
+  const groupId = eventGroupId || `evt-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  return sendNotification({
+    to: recipient || recipientName || emailTo || phoneTo || 'in-system',
+    recipientName,
+    recipientRole,
+    recipientUser,
+    eventGroupId: groupId,
+    title,
+    channel: 'in_system',
+    template,
+    subject: title,
+    message,
+    orderId,
+    metadata: {
+      ...metadata,
+      channelsSummary: {
+        in_system: true,
+        email: Boolean(emailTo),
+        phone: Boolean(phoneTo),
+        emailAddress: emailTo || '',
+        phoneNumber: phoneTo || '',
+      },
+    },
+  });
+};
+
+/**
+ * QAMS-style Unified Tri-Channel Dispatcher:
+ * Simultaneously sends an In-System notification, an Email (when email is present),
+ * and a Phone notification (WhatsApp with SMS fallback when phone is present).
+ */
+export const dispatchTriChannelNotification = async ({
+  recipientName = '',
+  recipientRole = 'manager',
+  recipientUser = null,
+  email = '',
+  phone = '',
+  title = 'Taarifa ya Tinzel',
+  message = '',
+  html = null,
+  template = 'general',
+  orderId = null,
+  mediaUrl = null,
+  phoneChannel = 'whatsapp',
+  metadata = {},
+}) => {
+  const eventGroupId = `evt-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const sharedMeta = {
+    ...metadata,
+    channelsSummary: {
+      in_system: true,
+      email: Boolean(email),
+      phone: Boolean(phone),
+      emailAddress: email || '',
+      phoneNumber: phone || '',
+    },
+  };
+
+  const tasks = [
+    recordInSystemNotification({
+      recipient: recipientName || email || phone || recipientRole,
+      recipientName,
+      recipientRole,
+      recipientUser,
+      eventGroupId,
+      title,
+      template,
+      message,
+      orderId,
+      emailTo: email,
+      phoneTo: phone,
+      metadata: sharedMeta,
+    }),
+  ];
+
+  if (phone) {
+    tasks.push(
+      sendNotification({
+        to: phone,
+        recipientName,
+        recipientRole,
+        recipientUser,
+        eventGroupId,
+        title,
+        channel: phoneChannel,
+        template,
+        subject: title,
+        message,
+        mediaUrl,
+        orderId,
+        metadata: sharedMeta,
+      })
+    );
+  }
+
+  if (email) {
+    const emailPayload = html
+      ? { title, html, text: message }
+      : emailTemplates.general_notification({ recipientName, title, message });
+
+    tasks.push(
+      sendNotification({
+        to: email,
+        recipientName,
+        recipientRole,
+        recipientUser,
+        eventGroupId,
+        title: emailPayload.title || title,
+        channel: 'email',
+        template,
+        subject: emailPayload.title || title,
+        html: emailPayload.html,
+        message: emailPayload.text || message,
+        orderId,
+        metadata: sharedMeta,
+      })
+    );
+  }
+
+  const settled = await Promise.allSettled(tasks);
+  return settled.map((r) => (r.status === 'fulfilled' ? r.value : { status: 'failed', error: r.reason }));
+};
+
+/**
+ * Helper to fetch active staff members by role when DB is connected.
+ */
+const getActiveStaffByRole = async (roles = ['manager']) => {
+  if (mongoose.connection.readyState !== 1) return [];
+  try {
+    const roleList = Array.isArray(roles) ? roles : [roles];
+    return await StaffUser.find({
+      role: { $in: roleList },
+      isActive: true,
+      deletedAt: null,
+    })
+      .select('_id name email phone role')
+      .lean();
+  } catch {
+    return [];
+  }
+};
+
 
 // --- Specialized Milestone Multi-Channel Dispatchers ---
 
 /**
+ * Milestone: Order Submitted (Pre-Design)
+ * Dispatches tri-channel (In-System + Email + Phone) to Client and active Managers.
+ */
+export const notifyOrderSubmitted = async (order) => {
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const staffUrl = `${frontendUrl}/staff/pre-design`;
+  const clientTemplate = emailTemplates.order_submitted({
+    clientName: order.clientName,
+    submissionId: order.submissionId,
+    formTitle: order.formTitle,
+    isStaff: false,
+  });
+
+  const dispatches = [
+    dispatchTriChannelNotification({
+      recipientName: order.clientName,
+      recipientRole: 'client',
+      email: order.clientEmail,
+      phone: order.clientWhatsApp,
+      title: clientTemplate.title,
+      message: clientTemplate.text,
+      html: clientTemplate.html,
+      template: 'order_submitted',
+      orderId: order._id,
+      metadata: { submissionId: order.submissionId, phase: 'pre_design' },
+    }),
+  ];
+
+  const managers = await getActiveStaffByRole(['manager', 'admin']);
+  if (managers.length > 0) {
+    for (const mgr of managers) {
+      const mgrTemplate = emailTemplates.order_submitted({
+        recipientName: mgr.name,
+        clientName: order.clientName,
+        submissionId: order.submissionId,
+        formTitle: order.formTitle,
+        isStaff: true,
+        staffUrl,
+      });
+      dispatches.push(
+        dispatchTriChannelNotification({
+          recipientName: mgr.name,
+          recipientRole: mgr.role,
+          recipientUser: mgr._id,
+          email: mgr.email,
+          phone: mgr.phone,
+          title: mgrTemplate.title,
+          message: mgrTemplate.text,
+          html: mgrTemplate.html,
+          template: 'order_submitted_staff',
+          orderId: order._id,
+          metadata: { submissionId: order.submissionId, phase: 'pre_design' },
+        })
+      );
+    }
+  } else {
+    dispatches.push(
+      recordInSystemNotification({
+        recipient: 'Manager Team',
+        recipientName: 'Production Manager',
+        recipientRole: 'manager',
+        title: `Oda Mpya Imepokelewa: ${order.submissionId}`,
+        template: 'order_submitted_staff',
+        message: `Oda mpya (${order.submissionId}) kutoka kwa ${order.clientName} inasubiri uthibitisho wa malipo kwenye Pre-Design.`,
+        orderId: order._id,
+        emailTo: order.clientEmail,
+        phoneTo: order.clientWhatsApp,
+        metadata: { submissionId: order.submissionId, phase: 'pre_design' },
+      })
+    );
+  }
+
+  await Promise.allSettled(dispatches);
+};
+
+/**
  * Milestone: Payment Verified
- * Sends WhatsApp and Email (if clientEmail is present).
+ * Sends WhatsApp, Email (if clientEmail is present), and In-System notification.
  */
 export const notifyPaymentVerified = async (order, trackingUrl) => {
   const notifications = [];
+  const eventGroupId = `evt-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const sharedMeta = {
+    trackingId: order.trackingId,
+    phase: 'pre_design',
+    channelsSummary: {
+      in_system: true,
+      email: Boolean(order.clientEmail),
+      phone: Boolean(order.clientWhatsApp),
+      emailAddress: order.clientEmail || '',
+      phoneNumber: order.clientWhatsApp || '',
+    },
+  };
+
+  const summaryMsg =
+    `Habari ${order.clientName}! Malipo ya jarida lako yamethibitishwa.\n` +
+    `Namba yako ya Kufuatilia (Tracking ID) ni: ${order.trackingId}\n` +
+    `Unaweza kufuatilia maendeleo ya jarida lako hapa: ${trackingUrl}`;
+
+  await recordInSystemNotification({
+    recipient: order.clientName || order.trackingId,
+    recipientName: order.clientName,
+    recipientRole: 'manager',
+    eventGroupId,
+    title: `Malipo Yamethibitishwa: ${order.trackingId}`,
+    template: 'payment_verified',
+    message: summaryMsg,
+    orderId: order._id,
+    emailTo: order.clientEmail,
+    phoneTo: order.clientWhatsApp,
+    metadata: sharedMeta,
+  });
 
   // WhatsApp
   if (order.clientWhatsApp) {
-    const message =
-      `Habari ${order.clientName}! Malipo ya jarida lako yamethibitishwa.\n` +
-      `Namba yako ya Kufuatilia (Tracking ID) ni: ${order.trackingId}\n` +
-      `Unaweza kufuatilia maendeleo ya jarida lako hapa: ${trackingUrl}`;
-
     notifications.push(
       sendNotification({
         to: order.clientWhatsApp,
+        recipientName: order.clientName,
+        recipientRole: 'client',
+        eventGroupId,
+        title: `Malipo Yamethibitishwa: ${order.trackingId}`,
         channel: 'whatsapp',
         template: 'payment_verified',
-        message,
+        message: summaryMsg,
         orderId: order._id,
+        metadata: sharedMeta,
       })
     );
   }
@@ -281,12 +582,17 @@ export const notifyPaymentVerified = async (order, trackingUrl) => {
     notifications.push(
       sendNotification({
         to: order.clientEmail,
+        recipientName: order.clientName,
+        recipientRole: 'client',
+        eventGroupId,
+        title: templateData.title,
         channel: 'email',
         template: 'payment_verified',
         subject: templateData.title,
         html: templateData.html,
         message: templateData.text,
         orderId: order._id,
+        metadata: sharedMeta,
       })
     );
   }
@@ -296,25 +602,142 @@ export const notifyPaymentVerified = async (order, trackingUrl) => {
 };
 
 /**
+ * Milestone: Order Assigned / Reassigned to Designer (Design Phase)
+ * Dispatches tri-channel (In-System + Email + Phone) to the assigned Designer.
+ */
+export const notifyOrderAssigned = async (order, designer) => {
+  if (!designer) return [];
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const staffUrl = `${frontendUrl}/staff/design/orders/${order._id}`;
+  const trackingLabel = order.trackingId || order.submissionId;
+
+  const tpl = emailTemplates.order_assigned({
+    designerName: designer.name,
+    trackingId: trackingLabel,
+    formTitle: order.formTitle,
+    clientName: order.clientName,
+    staffUrl,
+  });
+
+  return dispatchTriChannelNotification({
+    recipientName: designer.name,
+    recipientRole: 'designer',
+    recipientUser: designer._id,
+    email: designer.email,
+    phone: designer.phone,
+    title: tpl.title,
+    message: tpl.text,
+    html: tpl.html,
+    template: 'order_assigned',
+    orderId: order._id,
+    metadata: { trackingId: trackingLabel, designerName: designer.name, phase: 'design_phase' },
+  });
+};
+
+/**
+ * Milestone: Draft Uploaded by Designer for Manager Review (Design Phase)
+ * Dispatches tri-channel (In-System + Email + Phone) to active Managers.
+ */
+export const notifyDraftUploaded = async (order, versionNumber) => {
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const staffUrl = `${frontendUrl}/staff/design-phase`;
+  const trackingLabel = order.trackingId || order.submissionId;
+  const managers = await getActiveStaffByRole(['manager', 'admin']);
+
+  if (managers.length === 0) {
+    return [
+      await recordInSystemNotification({
+        recipient: 'Manager Team',
+        recipientName: 'Production Manager',
+        recipientRole: 'manager',
+        title: `Rasimu V${versionNumber || 1} Inasubiri Mapitio: ${trackingLabel}`,
+        template: 'draft_uploaded',
+        message: `Rasimu V${versionNumber || 1} ya oda ${trackingLabel} (${order.clientName}) imepakiwa na inasubiri mapitio yako ya Meneja.`,
+        orderId: order._id,
+        metadata: { trackingId: trackingLabel, versionNumber, phase: 'design_phase' },
+      }),
+    ];
+  }
+
+  const tasks = managers.map((mgr) => {
+    const tpl = emailTemplates.draft_uploaded({
+      managerName: mgr.name,
+      trackingId: trackingLabel,
+      formTitle: order.formTitle,
+      clientName: order.clientName,
+      versionNumber,
+      staffUrl,
+    });
+    return dispatchTriChannelNotification({
+      recipientName: mgr.name,
+      recipientRole: mgr.role,
+      recipientUser: mgr._id,
+      email: mgr.email,
+      phone: mgr.phone,
+      title: tpl.title,
+      message: tpl.text,
+      html: tpl.html,
+      template: 'draft_uploaded',
+      orderId: order._id,
+      metadata: { trackingId: trackingLabel, versionNumber, phase: 'design_phase' },
+    });
+  });
+
+  return Promise.allSettled(tasks);
+};
+
+/**
  * Milestone: Draft Released for Client Review
- * Sends WhatsApp and Email (if clientEmail is present).
+ * Sends WhatsApp, Email (if clientEmail is present), and In-System notification.
  */
 export const notifyDraftReleased = async (order, trackingUrl) => {
   const notifications = [];
+  const eventGroupId = `evt-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const sharedMeta = {
+    trackingId: order.trackingId,
+    versionNumber: order.currentDraftVersion || 1,
+    phase: 'design_phase',
+    channelsSummary: {
+      in_system: true,
+      email: Boolean(order.clientEmail),
+      phone: Boolean(order.clientWhatsApp),
+      emailAddress: order.clientEmail || '',
+      phoneNumber: order.clientWhatsApp || '',
+    },
+  };
+
+  const message =
+    `Habari ${order.clientName}! Rasimu ya Jarida lako (Toleo la ${order.currentDraftVersion || 1}) ipo tayari kuangaliwa!\n` +
+    `Tafadhali ingia hapa kuona kurasa zote za jarida na kutoa idhini au maoni: ${trackingUrl}`;
+
+  await recordInSystemNotification({
+    recipient: order.clientName || order.trackingId,
+    recipientName: order.clientName,
+    recipientRole: 'manager',
+    eventGroupId,
+    title: `Rasimu V${order.currentDraftVersion || 1} Imetumwa kwa Mteja: ${order.trackingId}`,
+    template: 'draft_released',
+    message,
+    orderId: order._id,
+    emailTo: order.clientEmail,
+    phoneTo: order.clientWhatsApp,
+    metadata: sharedMeta,
+  });
 
   // WhatsApp
   if (order.clientWhatsApp) {
-    const message =
-      `Habari ${order.clientName}! Rasimu ya Jarida lako (Toleo la ${order.currentDraftVersion || 1}) ipo tayari kuangaliwa!\n` +
-      `Tafadhali ingia hapa kuona kurasa zote za jarida na kutoa idhini au maoni: ${trackingUrl}`;
-
     notifications.push(
       sendNotification({
         to: order.clientWhatsApp,
+        recipientName: order.clientName,
+        recipientRole: 'client',
+        eventGroupId,
+        title: `Rasimu ya Jarida Ipo Tayari (Toleo la ${order.currentDraftVersion || 1})`,
         channel: 'whatsapp',
         template: 'draft_released',
         message,
         orderId: order._id,
+        metadata: sharedMeta,
       })
     );
   }
@@ -332,12 +755,17 @@ export const notifyDraftReleased = async (order, trackingUrl) => {
     notifications.push(
       sendNotification({
         to: order.clientEmail,
+        recipientName: order.clientName,
+        recipientRole: 'client',
+        eventGroupId,
+        title: templateData.title,
         channel: 'email',
         template: 'draft_released',
         subject: templateData.title,
         html: templateData.html,
         message: templateData.text,
         orderId: order._id,
+        metadata: sharedMeta,
       })
     );
   }
@@ -347,10 +775,224 @@ export const notifyDraftReleased = async (order, trackingUrl) => {
 };
 
 /**
+ * Milestone: Draft Returned for Changes (Manager or Client Revision Request -> Returns Page)
+ * Dispatches tri-channel (In-System + Email + Phone) to the assigned Designer and active Managers.
+ */
+export const notifyDraftReturned = async (order, revisionRequest, source = 'manager') => {
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const staffUrl = `${frontendUrl}/staff/returns`;
+  const trackingLabel = order.trackingId || order.submissionId;
+  const items = revisionRequest?.items || [];
+  const roundNumber = revisionRequest?.roundNumber || 1;
+
+  let designer = null;
+  if (order.assignedDesigner && mongoose.connection.readyState === 1) {
+    try {
+      const designerId = order.assignedDesigner._id || order.assignedDesigner;
+      designer = await StaffUser.findById(designerId).select('_id name email phone role').lean();
+    } catch {
+      designer = null;
+    }
+  }
+
+  const dispatches = [];
+  if (designer) {
+    const tpl = emailTemplates.draft_returned({
+      recipientName: designer.name,
+      trackingId: trackingLabel,
+      formTitle: order.formTitle,
+      clientName: order.clientName,
+      roundNumber,
+      items,
+      source,
+      staffUrl,
+    });
+    dispatches.push(
+      dispatchTriChannelNotification({
+        recipientName: designer.name,
+        recipientRole: 'designer',
+        recipientUser: designer._id,
+        email: designer.email,
+        phone: designer.phone,
+        title: tpl.title,
+        message: tpl.text,
+        html: tpl.html,
+        template: source === 'client' ? 'client_revision_requested' : 'draft_returned',
+        orderId: order._id,
+        metadata: { trackingId: trackingLabel, roundNumber, source, phase: 'returns' },
+      })
+    );
+  }
+
+  if (source === 'client') {
+    const managers = await getActiveStaffByRole(['manager', 'admin']);
+    for (const mgr of managers) {
+      const tpl = emailTemplates.draft_returned({
+        recipientName: mgr.name,
+        trackingId: trackingLabel,
+        formTitle: order.formTitle,
+        clientName: order.clientName,
+        roundNumber,
+        items,
+        source: 'client',
+        staffUrl,
+      });
+      dispatches.push(
+        dispatchTriChannelNotification({
+          recipientName: mgr.name,
+          recipientRole: mgr.role,
+          recipientUser: mgr._id,
+          email: mgr.email,
+          phone: mgr.phone,
+          title: tpl.title,
+          message: tpl.text,
+          html: tpl.html,
+          template: 'client_revision_requested',
+          orderId: order._id,
+          metadata: { trackingId: trackingLabel, roundNumber, source: 'client', phase: 'returns' },
+        })
+      );
+    }
+  }
+
+  if (dispatches.length === 0) {
+    dispatches.push(
+      recordInSystemNotification({
+        recipient: 'Returns Queue',
+        recipientName: designer?.name || 'Editorial Team',
+        recipientRole: 'manager',
+        title: `Jarida Limerudishwa kwa Marekebisho: ${trackingLabel} (Duru ya ${roundNumber})`,
+        template: source === 'client' ? 'client_revision_requested' : 'draft_returned',
+        message: `Jarida ${trackingLabel} (${order.clientName}) limerudishwa kwa marekebisho (${items.length} fix items).`,
+        orderId: order._id,
+        metadata: { trackingId: trackingLabel, roundNumber, source, phase: 'returns' },
+      })
+    );
+  }
+
+  return Promise.allSettled(dispatches);
+};
+
+/**
+ * Milestone: Client Approved Whole Magazine (Transition to Post-Design Phase)
+ * Dispatches tri-channel (In-System + Email + Phone) to Assigned Designer and Managers.
+ */
+export const notifyClientApproved = async (order) => {
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const staffUrl = `${frontendUrl}/staff/post-design`;
+  const trackingLabel = order.trackingId || order.submissionId;
+
+  const recipients = await getActiveStaffByRole(['manager', 'admin']);
+  if (order.assignedDesigner && mongoose.connection.readyState === 1) {
+    try {
+      const designerId = order.assignedDesigner._id || order.assignedDesigner;
+      const designer = await StaffUser.findById(designerId).select('_id name email phone role').lean();
+      if (designer) recipients.push(designer);
+    } catch {
+      // ignore
+    }
+  }
+
+  if (recipients.length === 0) {
+    return [
+      await recordInSystemNotification({
+        recipient: 'Production Team',
+        recipientName: 'Production Manager',
+        recipientRole: 'manager',
+        title: `Mteja Ameidhinisha Jarida: ${trackingLabel}`,
+        template: 'client_approved',
+        message: `Mteja ${order.clientName} ameidhinisha jarida zima la oda ${trackingLabel}. Oda imeingia Post-Design Phase.`,
+        orderId: order._id,
+        metadata: { trackingId: trackingLabel, phase: 'post_design' },
+      }),
+    ];
+  }
+
+  const tasks = recipients.map((staff) => {
+    const tpl = emailTemplates.client_approved({
+      recipientName: staff.name,
+      trackingId: trackingLabel,
+      formTitle: order.formTitle,
+      clientName: order.clientName,
+      versionNumber: order.approvedVersionNumber || order.currentDraftVersion || 1,
+      staffUrl,
+    });
+    return dispatchTriChannelNotification({
+      recipientName: staff.name,
+      recipientRole: staff.role,
+      recipientUser: staff._id,
+      email: staff.email,
+      phone: staff.phone,
+      title: tpl.title,
+      message: tpl.text,
+      html: tpl.html,
+      template: 'client_approved',
+      orderId: order._id,
+      metadata: { trackingId: trackingLabel, phase: 'post_design' },
+    });
+  });
+
+  return Promise.allSettled(tasks);
+};
+
+/**
+ * Milestone: Print-Ready Document Uploaded (Post-Design Phase)
+ * Dispatches tri-channel (In-System + Email + Phone) to active Managers.
+ */
+export const notifyPrintDocumentUploaded = async (order) => {
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const staffUrl = `${frontendUrl}/staff/post-design`;
+  const trackingLabel = order.trackingId || order.submissionId;
+  const managers = await getActiveStaffByRole(['manager', 'admin']);
+
+  if (managers.length === 0) {
+    return [
+      await recordInSystemNotification({
+        recipient: 'Manager Team',
+        recipientName: 'Production Manager',
+        recipientRole: 'manager',
+        title: `Faili la Print Lipo Tayari kwa Idhini: ${trackingLabel}`,
+        template: 'print_document_uploaded',
+        message: `Faili la Print-Ready PDF kwa oda ${trackingLabel} (${order.clientName}) limepakiwa na linasubiri idhini kwenye Post-Design Phase.`,
+        orderId: order._id,
+        metadata: { trackingId: trackingLabel, phase: 'post_design' },
+      }),
+    ];
+  }
+
+  const tasks = managers.map((mgr) => {
+    const tpl = emailTemplates.print_document_uploaded({
+      recipientName: mgr.name,
+      trackingId: trackingLabel,
+      formTitle: order.formTitle,
+      clientName: order.clientName,
+      specs: order.printDocument?.specs || {},
+      staffUrl,
+    });
+    return dispatchTriChannelNotification({
+      recipientName: mgr.name,
+      recipientRole: mgr.role,
+      recipientUser: mgr._id,
+      email: mgr.email,
+      phone: mgr.phone,
+      title: tpl.title,
+      message: tpl.text,
+      html: tpl.html,
+      template: 'print_document_uploaded',
+      orderId: order._id,
+      metadata: { trackingId: trackingLabel, phase: 'post_design' },
+    });
+  });
+
+  return Promise.allSettled(tasks);
+};
+
+/**
  * Milestone: Dispatch to Print Partner
- * Sends WhatsApp / SMS directly to the designated printing partner.
+ * Sends WhatsApp / SMS directly to the designated printing partner and records In-System notification.
  */
 export const notifyPrinterDispatch = async (order, printerPhone, printUrl, specs = {}) => {
+  const eventGroupId = `evt-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
   const message =
     `HABARI PRINTER - ODA MPYA YA KUCHAPA!\n` +
     `Jarida: ${order.formTitle || 'Tinzel Magazine'}\n` +
@@ -362,8 +1004,25 @@ export const notifyPrinterDispatch = async (order, printerPhone, printUrl, specs
     `Kiungo cha Faili la Print: ${printUrl}\n` +
     `Tafadhali jibu 'POKEA' kuthibitisha kuanza kazi.`;
 
+  await recordInSystemNotification({
+    recipient: printerPhone,
+    recipientName: 'Printing Partner',
+    recipientRole: 'manager',
+    eventGroupId,
+    title: `Imepelekwa kwa Mchapaji: ${order.trackingId}`,
+    template: 'print_dispatched',
+    message,
+    orderId: order._id,
+    phoneTo: printerPhone,
+    metadata: { trackingId: order.trackingId, phase: 'post_design' },
+  });
+
   return sendNotification({
     to: printerPhone,
+    recipientName: 'Printing Partner',
+    recipientRole: 'printer',
+    eventGroupId,
+    title: `Imepelekwa kwa Mchapaji: ${order.trackingId}`,
     channel: 'whatsapp',
     template: 'print_dispatched',
     message,
@@ -374,23 +1033,54 @@ export const notifyPrinterDispatch = async (order, printerPhone, printUrl, specs
 
 /**
  * Milestone: Printing In Progress
- * Sends WhatsApp and Email to client.
+ * Sends WhatsApp, Email, and In-System notification.
  */
 export const notifyPrintingInProgress = async (order) => {
   const notifications = [];
+  const eventGroupId = `evt-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const sharedMeta = {
+    trackingId: order.trackingId,
+    phase: 'post_design',
+    channelsSummary: {
+      in_system: true,
+      email: Boolean(order.clientEmail),
+      phone: Boolean(order.clientWhatsApp),
+      emailAddress: order.clientEmail || '',
+      phoneNumber: order.clientWhatsApp || '',
+    },
+  };
+
+  const message =
+    `Habari ${order.clientName}! Jarida lako limeanza kuchapwa rasmi kwenye mashine za uchapaji.\n` +
+    `Tutakutaarifu pindi litakapokuwa tayari kusafirishwa.`;
+
+  await recordInSystemNotification({
+    recipient: order.clientName || order.trackingId,
+    recipientName: order.clientName,
+    recipientRole: 'manager',
+    eventGroupId,
+    title: `Uchapaji Umeanza: ${order.trackingId}`,
+    template: 'printing_in_progress',
+    message,
+    orderId: order._id,
+    emailTo: order.clientEmail,
+    phoneTo: order.clientWhatsApp,
+    metadata: sharedMeta,
+  });
 
   if (order.clientWhatsApp) {
-    const message =
-      `Habari ${order.clientName}! Jarida lako limeanza kuchapwa rasmi kwenye mashine za uchapaji.\n` +
-      `Tutakutaarifu pindi litakapokuwa tayari kusafirishwa.`;
-
     notifications.push(
       sendNotification({
         to: order.clientWhatsApp,
+        recipientName: order.clientName,
+        recipientRole: 'client',
+        eventGroupId,
+        title: `Uchapaji Umeanza: ${order.trackingId}`,
         channel: 'whatsapp',
         template: 'printing_in_progress',
         message,
         orderId: order._id,
+        metadata: sharedMeta,
       })
     );
   }
@@ -405,12 +1095,17 @@ export const notifyPrintingInProgress = async (order) => {
     notifications.push(
       sendNotification({
         to: order.clientEmail,
+        recipientName: order.clientName,
+        recipientRole: 'client',
+        eventGroupId,
+        title: templateData.title,
         channel: 'email',
         template: 'printing_in_progress',
         subject: templateData.title,
         html: templateData.html,
         message: templateData.text,
         orderId: order._id,
+        metadata: sharedMeta,
       })
     );
   }
@@ -421,26 +1116,59 @@ export const notifyPrintingInProgress = async (order) => {
 
 /**
  * Milestone: Order Dispatched
- * Sends WhatsApp and Email to client with carrier and tracking info.
+ * Sends WhatsApp, Email, and In-System notification to client with carrier and tracking info.
  */
 export const notifyDispatchRecorded = async (order, trackingRef, carrier, trackingUrl = null) => {
   const notifications = [];
   const resolvedTrackingUrl = trackingUrl || `${process.env.FRONTEND_URL || 'http://localhost:5173'}/track`;
+  const eventGroupId = `evt-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const sharedMeta = {
+    trackingId: order.trackingId,
+    carrier,
+    trackingReference: trackingRef,
+    phase: 'post_design',
+    channelsSummary: {
+      in_system: true,
+      email: Boolean(order.clientEmail),
+      phone: Boolean(order.clientWhatsApp),
+      emailAddress: order.clientEmail || '',
+      phoneNumber: order.clientWhatsApp || '',
+    },
+  };
+
+  const message =
+    `Habari ${order.clientName}! Jarida lako limekamilika na limesafirishwa!\n` +
+    `Msafirishaji: ${carrier || 'Usafiri Maalum'}\n` +
+    `Kumbukumbu ya Mzigo: ${trackingRef || 'Inakuja'}\n` +
+    `Asante kwa kuchagua Tinzel!`;
+
+  await recordInSystemNotification({
+    recipient: order.clientName || order.trackingId,
+    recipientName: order.clientName,
+    recipientRole: 'manager',
+    eventGroupId,
+    title: `Jarida Limesafirishwa: ${order.trackingId}`,
+    template: 'order_dispatched',
+    message,
+    orderId: order._id,
+    emailTo: order.clientEmail,
+    phoneTo: order.clientWhatsApp,
+    metadata: sharedMeta,
+  });
 
   if (order.clientWhatsApp) {
-    const message =
-      `Habari ${order.clientName}! Jarida lako limekamilika na limesafirishwa!\n` +
-      `Msafirishaji: ${carrier || 'Usafiri Maalum'}\n` +
-      `Kumbukumbu ya Mzigo: ${trackingRef || 'Inakuja'}\n` +
-      `Asante kwa kuchagua Tinzel!`;
-
     notifications.push(
       sendNotification({
         to: order.clientWhatsApp,
+        recipientName: order.clientName,
+        recipientRole: 'client',
+        eventGroupId,
+        title: `Jarida Limesafirishwa: ${order.trackingId}`,
         channel: 'whatsapp',
         template: 'order_dispatched',
         message,
         orderId: order._id,
+        metadata: sharedMeta,
       })
     );
   }
@@ -457,12 +1185,17 @@ export const notifyDispatchRecorded = async (order, trackingRef, carrier, tracki
     notifications.push(
       sendNotification({
         to: order.clientEmail,
+        recipientName: order.clientName,
+        recipientRole: 'client',
+        eventGroupId,
+        title: templateData.title,
         channel: 'email',
         template: 'order_dispatched',
         subject: templateData.title,
         html: templateData.html,
         message: templateData.text,
         orderId: order._id,
+        metadata: sharedMeta,
       })
     );
   }
@@ -472,20 +1205,79 @@ export const notifyDispatchRecorded = async (order, trackingRef, carrier, tracki
 };
 
 /**
- * Dispatch Client Login OTP via WhatsApp and Email (if available).
+ * Milestone: Order Delivered & Closed (Post-Design Phase)
+ * Dispatches tri-channel (In-System + Email + Phone) to Client and Staff.
+ */
+export const notifyOrderClosed = async (order, deliveryDetails = {}) => {
+  const trackingLabel = order.trackingId || order.submissionId;
+  const tpl = emailTemplates.order_closed({
+    recipientName: order.clientName,
+    trackingId: trackingLabel,
+    formTitle: order.formTitle,
+    recipientConfirmed: deliveryDetails.recipientName || order.clientName,
+    confirmationMethod: deliveryDetails.confirmationMethod,
+  });
+
+  return dispatchTriChannelNotification({
+    recipientName: order.clientName,
+    recipientRole: 'manager',
+    email: order.clientEmail,
+    phone: order.clientWhatsApp,
+    title: tpl.title,
+    message: tpl.text,
+    html: tpl.html,
+    template: 'order_closed',
+    orderId: order._id,
+    metadata: { trackingId: trackingLabel, phase: 'post_design' },
+  });
+};
+
+/**
+ * Dispatch Client Login OTP via WhatsApp, Email (if available), and In-System log.
  */
 export const notifyClientOtp = async (order, otpCode) => {
   const notifications = [];
+  const eventGroupId = `evt-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const sharedMeta = {
+    trackingId: order.trackingId,
+    channelsSummary: {
+      in_system: true,
+      email: Boolean(order.clientEmail),
+      phone: Boolean(order.clientWhatsApp),
+      emailAddress: order.clientEmail || '',
+      phoneNumber: order.clientWhatsApp || '',
+    },
+  };
+
+  const message = `Namba yako ya siri (OTP) ya kuingia kwenye mfumo wa Tinzel ni: ${otpCode}. Itatumika kwa dakika 10.`;
+
+  await recordInSystemNotification({
+    recipient: order.clientName || order.clientWhatsApp,
+    recipientName: order.clientName,
+    recipientRole: 'manager',
+    eventGroupId,
+    title: `OTP ya Mteja Imetumwa: ${order.trackingId || order.clientName}`,
+    template: 'client_otp',
+    message,
+    orderId: order._id,
+    emailTo: order.clientEmail,
+    phoneTo: order.clientWhatsApp,
+    metadata: sharedMeta,
+  });
 
   if (order.clientWhatsApp) {
-    const message = `Namba yako ya siri (OTP) ya kuingia kwenye mfumo wa Tinzel ni: ${otpCode}. Itatumika kwa dakika 10.`;
     notifications.push(
       sendNotification({
         to: order.clientWhatsApp,
+        recipientName: order.clientName,
+        recipientRole: 'client',
+        eventGroupId,
+        title: 'Namba Yako ya Siri (OTP) ya Kuingia',
         channel: 'whatsapp',
         template: 'client_otp',
         message,
         orderId: order._id,
+        metadata: sharedMeta,
       })
     );
   }
@@ -500,12 +1292,17 @@ export const notifyClientOtp = async (order, otpCode) => {
     notifications.push(
       sendNotification({
         to: order.clientEmail,
+        recipientName: order.clientName,
+        recipientRole: 'client',
+        eventGroupId,
+        title: templateData.title,
         channel: 'email',
         template: 'client_otp',
         subject: templateData.title,
         html: templateData.html,
         message: templateData.text,
         orderId: order._id,
+        metadata: sharedMeta,
       })
     );
   }
@@ -614,25 +1411,62 @@ export const recordInboundNotification = async ({
 };
 
 /**
- * Returns full notification history for admin audit & live monitoring.
+ * Returns full notification history for manager, designer, & admin audit and live monitoring.
  */
 export const getNotificationHistory = async ({
-  limit = 50,
+  limit = 100,
   orderId = null,
   channel = null,
   status = null,
+  unreadOnly = false,
+  search = '',
+  user = null,
 } = {}) => {
   if (mongoose.connection.readyState === 1) {
     try {
       const filter = {};
       if (orderId) filter.orderId = orderId;
-      if (channel) filter.channel = channel;
-      if (status) filter.status = status;
+      if (channel && channel !== 'all') {
+        if (channel === 'phone') {
+          filter.channel = { $in: ['whatsapp', 'sms'] };
+        } else {
+          filter.channel = channel;
+        }
+      }
+      if (status && status !== 'all') filter.status = status;
+      if (unreadOnly) filter.isRead = false;
+
+      if (user?.role === 'designer') {
+        filter.$or = [
+          { recipientUser: user._id },
+          { recipientRole: { $in: ['designer', 'all'] } },
+          { recipient: user.email },
+          ...(user.phone ? [{ recipient: user.phone }] : []),
+        ];
+      }
+
+      if (search && search.trim()) {
+        const rx = new RegExp(search.trim(), 'i');
+        const searchOr = [
+          { recipient: rx },
+          { recipientName: rx },
+          { title: rx },
+          { subject: rx },
+          { message: rx },
+          { template: rx },
+        ];
+        if (filter.$or) {
+          filter.$and = [{ $or: filter.$or }, { $or: searchOr }];
+          delete filter.$or;
+        } else {
+          filter.$or = searchOr;
+        }
+      }
 
       const items = await Notification.find(filter)
         .sort({ createdAt: -1 })
-        .limit(Math.min(limit, 200))
-        .populate('orderId', 'trackingId formTitle clientName status')
+        .limit(Math.min(limit, 300))
+        .populate('orderId', 'trackingId submissionId formTitle clientName status')
         .lean();
 
       if (items && items.length > 0) {
@@ -643,8 +1477,113 @@ export const getNotificationHistory = async ({
     }
   }
 
-  // Fallback to in-memory notifications
-  return simulatedNotifications.slice(0, limit);
+  // Fallback to in-memory notifications (merges in-system and external simulated notifications)
+  const combined = [...simulatedNotifications, ...inSystemNotifications].sort(
+    (a, b) => new Date(b.createdAt || b.timestamp || 0) - new Date(a.createdAt || a.timestamp || 0)
+  );
+
+  return combined
+    .filter((item) => {
+      if (orderId && String(item.orderId) !== String(orderId)) return false;
+      if (channel && channel !== 'all') {
+        if (channel === 'phone') {
+          if (!['whatsapp', 'sms'].includes(item.channel)) return false;
+        } else if (item.channel !== channel) {
+          return false;
+        }
+      }
+      if (status && status !== 'all' && item.status !== status) return false;
+      if (unreadOnly && item.isRead) return false;
+      if (search && search.trim()) {
+        const q = search.trim().toLowerCase();
+        const hay = [item.recipient, item.to, item.recipientName, item.title, item.subject, item.message, item.template]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    })
+    .slice(0, limit);
+};
+
+/**
+ * Marks a single notification (and any siblings sharing its eventGroupId) as read.
+ */
+export const markNotificationRead = async (notificationId) => {
+  const now = new Date();
+
+  const allMemoryLists = [inSystemNotifications, simulatedNotifications];
+  let matchedGroupId = null;
+
+  for (const list of allMemoryLists) {
+    const found = list.find((n) => n.id === notificationId || String(n._id) === String(notificationId));
+    if (found) {
+      found.isRead = true;
+      found.readAt = now.toISOString();
+      if (found.eventGroupId) {
+        matchedGroupId = found.eventGroupId;
+      }
+    }
+  }
+
+  if (matchedGroupId) {
+    for (const list of allMemoryLists) {
+      for (const sub of list) {
+        if (sub.eventGroupId === matchedGroupId) {
+          sub.isRead = true;
+          sub.readAt = now.toISOString();
+        }
+      }
+    }
+  }
+
+  if (mongoose.connection.readyState === 1 && mongoose.isValidObjectId(notificationId)) {
+    const doc = await Notification.findByIdAndUpdate(
+      notificationId,
+      { $set: { isRead: true, readAt: now } },
+      { returnDocument: 'after' }
+    ).lean();
+
+    if (doc?.eventGroupId) {
+      await Notification.updateMany(
+        { eventGroupId: doc.eventGroupId },
+        { $set: { isRead: true, readAt: now } }
+      );
+    }
+    return doc;
+  }
+
+  return { id: notificationId, isRead: true, readAt: now.toISOString() };
+};
+
+/**
+ * Marks all unread notifications as read for the given staff user/role.
+ */
+export const markAllNotificationsRead = async (user = null) => {
+  const now = new Date();
+
+  for (const list of [inSystemNotifications, simulatedNotifications]) {
+    for (const item of list) {
+      item.isRead = true;
+      item.readAt = now.toISOString();
+    }
+  }
+
+  if (mongoose.connection.readyState === 1) {
+    const filter = { isRead: false };
+    if (user?.role === 'designer') {
+      filter.$or = [
+        { recipientUser: user._id },
+        { recipientRole: { $in: ['designer', 'all'] } },
+        { recipient: user.email },
+      ];
+    }
+    const res = await Notification.updateMany(filter, { $set: { isRead: true, readAt: now } });
+    return { modifiedCount: res.modifiedCount || 0 };
+  }
+
+  return { modifiedCount: inSystemNotifications.length };
 };
 
 /**

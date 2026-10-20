@@ -220,6 +220,192 @@ export const emailTemplates = {
       text,
     };
   },
+
+  order_submitted: ({ recipientName, submissionId, formTitle, clientName, isStaff = false, staffUrl }) => {
+    const title = isStaff
+      ? `Oda Mpya Imepokelewa: ${submissionId}`
+      : `Oda Yako Imepokelewa (${submissionId})`;
+    const contentHtml = isStaff
+      ? `
+        <p>Habari <strong>${recipientName || 'Meneja'}</strong>,</p>
+        <p>Oda mpya ya jarida <strong>${formTitle || 'Tinzel Magazine'}</strong> kutoka kwa mteja <strong>${clientName}</strong> imewasilishwa na inasubiri uthibitisho wa malipo (Pre-Design).</p>
+        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 14px; margin: 16px 0;">
+          <p style="margin: 0;"><strong>Submission ID:</strong> ${submissionId}</p>
+        </div>
+      `
+      : `
+        <p>Habari <strong>${clientName}</strong>,</p>
+        <p>Taarifa na picha za jarida lako <strong>${formTitle || 'Tinzel Magazine'}</strong> zimepokelewa rasmi.</p>
+        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 14px; margin: 16px 0;">
+          <p style="margin: 0;"><strong>Namba ya Mawasilisho:</strong> ${submissionId}</p>
+        </div>
+        <p>Tafadhali kamilisha malipo ili tuweze kuthibitisha oda yako na kutoa Namba ya Kufuatilia (Tracking ID).</p>
+      `;
+    const text = isStaff
+      ? `Habari ${recipientName || 'Meneja'}!\nOda mpya (${submissionId}) ya ${formTitle || 'Tinzel Magazine'} kutoka kwa ${clientName} inasubiri uthibitisho wa malipo.`
+      : `Habari ${clientName}!\nTaarifa za jarida lako (${formTitle || 'Tinzel Magazine'}) zimepokelewa (Namba: ${submissionId}). Tafadhali kamilisha malipo ili kupata Tracking ID.`;
+
+    return {
+      title,
+      html: wrapEmailTemplate({
+        title,
+        contentHtml,
+        callToAction: isStaff && staffUrl ? { label: 'Fungua Pre-Design', url: staffUrl } : undefined,
+      }),
+      text,
+    };
+  },
+
+  order_assigned: ({ designerName, trackingId, formTitle, clientName, staffUrl }) => {
+    const title = `Oda Imekabidhiwa Kwako: ${trackingId}`;
+    const contentHtml = `
+      <p>Habari <strong>${designerName || 'Mbunifu'}</strong>,</p>
+      <p>Umekabidhiwa oda ya jarida <strong>${formTitle || 'Tinzel Magazine'}</strong> kwa ajili ya mteja <strong>${clientName}</strong>.</p>
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 14px; margin: 16px 0;">
+        <p style="margin: 0;"><strong>Tracking ID:</strong> ${trackingId}</p>
+      </div>
+      <p>Tafadhali ingia kwenye mfumo wa Tinzel kuanza usanifu wa jarida hili.</p>
+    `;
+    const text = `Habari ${designerName || 'Mbunifu'}!\nUmekabidhiwa oda ${trackingId} (${formTitle || 'Tinzel Magazine'} - ${clientName}). Ingia kwenye mfumo kuanza usanifu.`;
+
+    return {
+      title,
+      html: wrapEmailTemplate({
+        title,
+        contentHtml,
+        callToAction: staffUrl ? { label: 'Fungua Oda ya Usanifu', url: staffUrl } : undefined,
+      }),
+      text,
+    };
+  },
+
+  draft_uploaded: ({ managerName, trackingId, formTitle, clientName, versionNumber, staffUrl }) => {
+    const title = `Rasimu Mpya Inasubiri Mapitio: ${trackingId} (V${versionNumber || 1})`;
+    const contentHtml = `
+      <p>Habari <strong>${managerName || 'Meneja'}</strong>,</p>
+      <p>Rasimu ya Toleo la <strong>${versionNumber || 1}</strong> ya jarida <strong>${formTitle || 'Tinzel Magazine'}</strong> (Mteja: <strong>${clientName}</strong>, Tracking ID: <strong>${trackingId}</strong>) imepakiwa na inasubiri ukaguzi wako kwenye Design Phase.</p>
+    `;
+    const text = `Habari ${managerName || 'Meneja'}!\nRasimu V${versionNumber || 1} ya oda ${trackingId} (${clientName}) imepakiwa na inasubiri mapitio yako ya Meneja.`;
+
+    return {
+      title,
+      html: wrapEmailTemplate({
+        title,
+        contentHtml,
+        callToAction: staffUrl ? { label: 'Kagua Rasimu Sasa', url: staffUrl } : undefined,
+      }),
+      text,
+    };
+  },
+
+  draft_returned: ({ recipientName, trackingId, formTitle, clientName, roundNumber, items = [], source = 'manager', staffUrl }) => {
+    const sourceLabel = source === 'client' ? 'Mteja' : 'Meneja';
+    const title = `Marekebisho Yameombwa (${sourceLabel}): ${trackingId} - Duru ya ${roundNumber || 1}`;
+    const itemsHtml = items.length
+      ? `<ul style="padding-left: 20px; margin: 12px 0;">${items
+          .map((item) => `<li>${item.pageReference ? `<strong>Ukurasa ${item.pageReference}:</strong> ` : ''}${item.text}</li>`)
+          .join('')}</ul>`
+      : '';
+    const contentHtml = `
+      <p>Habari <strong>${recipientName || 'Mbunifu'}</strong>,</p>
+      <p>Jarida la <strong>${formTitle || 'Tinzel Magazine'}</strong> (Tracking ID: <strong>${trackingId}</strong>, Mteja: <strong>${clientName}</strong>) limerudishwa kwenye ukurasa wa <strong>Returns</strong> kwa ajili ya marekebisho (Duru ya ${roundNumber || 1} kutoka kwa ${sourceLabel}).</p>
+      ${itemsHtml}
+      <p>Tafadhali fungua ukurasa wa Returns kukamilisha marekebisho yote yaliyoorodheshwa.</p>
+    `;
+    const itemsText = items.map((item, idx) => `${idx + 1}. ${item.pageReference ? `[Uk. ${item.pageReference}] ` : ''}${item.text}`).join('\n');
+    const text = `Habari ${recipientName || 'Mbunifu'}!\nJarida ${trackingId} (${clientName}) limerudishwa kwa marekebisho (Duru ya ${roundNumber || 1} - ${sourceLabel}).\n${itemsText}`;
+
+    return {
+      title,
+      html: wrapEmailTemplate({
+        title,
+        contentHtml,
+        callToAction: staffUrl ? { label: 'Fungua Ukurasa wa Returns', url: staffUrl } : undefined,
+      }),
+      text,
+    };
+  },
+
+  client_approved: ({ recipientName, trackingId, formTitle, clientName, versionNumber, staffUrl }) => {
+    const title = `Mteja Ameidhinisha Jarida: ${trackingId}`;
+    const contentHtml = `
+      <p>Habari <strong>${recipientName || 'Timu ya Tinzel'}</strong>,</p>
+      <p>Mteja <strong>${clientName}</strong> ameidhinisha rasmi jarida zima la <strong>${formTitle || 'Tinzel Magazine'}</strong> (Tracking ID: <strong>${trackingId}</strong>, Toleo la <strong>${versionNumber || 1}</strong>).</p>
+      <p>Oda imeingia kwenye <strong>Post-Design Phase</strong> kwa ajili ya kuandaa faili la mwisho la uchapaji (Print Preparation).</p>
+    `;
+    const text = `Habari ${recipientName || 'Timu ya Tinzel'}!\nMteja ${clientName} ameidhinisha jarida zima la oda ${trackingId} (Toleo la ${versionNumber || 1}). Oda ipo kwenye Post-Design Phase kwa maandalizi ya uchapaji.`;
+
+    return {
+      title,
+      html: wrapEmailTemplate({
+        title,
+        contentHtml,
+        callToAction: staffUrl ? { label: 'Fungua Post-Design Phase', url: staffUrl } : undefined,
+      }),
+      text,
+    };
+  },
+
+  print_document_uploaded: ({ recipientName, trackingId, formTitle, clientName, specs = {}, staffUrl }) => {
+    const title = `Faili la Print Lipo Tayari kwa Idhini: ${trackingId}`;
+    const contentHtml = `
+      <p>Habari <strong>${recipientName || 'Meneja'}</strong>,</p>
+      <p>Faili la mwisho la uchapaji (Print-Ready PDF) kwa oda <strong>${trackingId}</strong> (${formTitle || 'Tinzel Magazine'} - <strong>${clientName}</strong>) limepakiwa na linasubiri idhini yako ya kupelekwa kwa mchapaji.</p>
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 14px; margin: 16px 0;">
+        <p style="margin: 0 0 4px 0;"><strong>Nakala:</strong> ${specs.quantity || 1}</p>
+        <p style="margin: 0 0 4px 0;"><strong>Karatasi:</strong> ${specs.paperType || 'Glossy 150gsm'}</p>
+        <p style="margin: 0;"><strong>Kava:</strong> ${specs.coverFinish || 'Laminated Matte'}</p>
+      </div>
+    `;
+    const text = `Habari ${recipientName || 'Meneja'}!\nFaili la Print-Ready PDF kwa oda ${trackingId} (${clientName}) limepakiwa na linasubiri idhini yako kwenye Post-Design Phase.`;
+
+    return {
+      title,
+      html: wrapEmailTemplate({
+        title,
+        contentHtml,
+        callToAction: staffUrl ? { label: 'Idhinisha Uchapaji', url: staffUrl } : undefined,
+      }),
+      text,
+    };
+  },
+
+  order_closed: ({ recipientName, trackingId, formTitle, recipientConfirmed, confirmationMethod }) => {
+    const title = `Oda Imekamilika na Kukabidhiwa: ${trackingId}`;
+    const contentHtml = `
+      <p>Habari <strong>${recipientName || 'Mteja'}</strong>,</p>
+      <p>Oda ya jarida <strong>${formTitle || 'Tinzel Magazine'}</strong> (Tracking ID: <strong>${trackingId}</strong>) imethibitishwa kufika salama kwa mpokeaji (<strong>${recipientConfirmed || recipientName}</strong>) na imefungwa rasmi.</p>
+      <p>Asante kwa kutumia mfumo wa Tinzel!</p>
+    `;
+    const text = `Habari ${recipientName || 'Mteja'}!\nOda ya jarida ${trackingId} (${formTitle || 'Tinzel Magazine'}) imethibitishwa kufika salama (${confirmationMethod || 'Delivered'}) na imefungwa rasmi. Asante kwa kuchagua Tinzel!`;
+
+    return {
+      title,
+      html: wrapEmailTemplate({
+        title,
+        contentHtml,
+      }),
+      text,
+    };
+  },
+
+  general_notification: ({ recipientName, title = 'Taarifa kutoka Tinzel', message, actionUrl, actionLabel }) => {
+    const contentHtml = `
+      <p>Habari <strong>${recipientName || 'Mpendwa'}</strong>,</p>
+      <div style="white-space: pre-line; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 16px; margin: 16px 0;">
+        ${message}
+      </div>
+    `;
+    return {
+      title,
+      html: wrapEmailTemplate({
+        title,
+        contentHtml,
+        callToAction: actionUrl ? { label: actionLabel || 'Fungua Mfumo', url: actionUrl } : undefined,
+      }),
+      text: message,
+    };
+  },
 };
 
 /**

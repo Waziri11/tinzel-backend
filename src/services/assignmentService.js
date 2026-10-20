@@ -1,5 +1,6 @@
 import { StaffUser } from '../models/StaffUser.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
+import { notifyOrderAssigned } from './notificationService.js';
 
 /**
  * Automatically assigns an order to the eligible designer with lowest active workload.
@@ -65,6 +66,8 @@ export const autoAssignOrder = async (order, assignedBy = null) => {
       newWorkload: selectedDesigner.currentActiveWorkload + 1,
     },
   });
+
+  await notifyOrderAssigned(order, selectedDesigner);
 
   return {
     success: true,
@@ -134,6 +137,8 @@ export const manualAssignOrder = async (order, targetDesignerId, reason, manager
       reason,
     },
   });
+
+  await notifyOrderAssigned(order, targetDesigner);
 
   return { success: true, designer: targetDesigner };
 };

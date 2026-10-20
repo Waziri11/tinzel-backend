@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 
-export const NOTIFICATION_CHANNELS = ['whatsapp', 'sms', 'email'];
+export const NOTIFICATION_CHANNELS = ['whatsapp', 'sms', 'email', 'in_system'];
 export const NOTIFICATION_DIRECTIONS = ['outbound', 'inbound'];
 export const NOTIFICATION_STATUSES = [
   'queued',
@@ -17,6 +17,33 @@ const notificationSchema = new mongoose.Schema(
       type: String,
       required: true,
       index: true,
+      trim: true,
+    },
+    recipientName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    recipientRole: {
+      type: String,
+      enum: ['manager', 'admin', 'designer', 'client', 'printer', 'all'],
+      default: 'client',
+      index: true,
+    },
+    recipientUser: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'StaffUser',
+      default: null,
+      index: true,
+    },
+    eventGroupId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    title: {
+      type: String,
+      default: null,
       trim: true,
     },
     channel: {
@@ -68,6 +95,15 @@ const notificationSchema = new mongoose.Schema(
       enum: NOTIFICATION_STATUSES,
       default: 'queued',
       index: true,
+    },
+    isRead: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    readAt: {
+      type: Date,
+      default: null,
     },
     errorCode: {
       type: String,

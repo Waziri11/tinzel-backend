@@ -4,7 +4,11 @@ import {
   normalizePhoneNumber,
   sendNotification,
   getSimulatedNotifications,
+  getSimulatedInSystemNotifications,
   clearSimulatedNotifications,
+  dispatchTriChannelNotification,
+  markNotificationRead,
+  markAllNotificationsRead,
   notifyPaymentVerified,
   notifyDraftReleased,
   notifyPrintingInProgress,
@@ -213,4 +217,42 @@ test('Twilio Diagnostics: accurately reports simulation mode when credentials no
   assert.equal(diag.mode, 'simulated');
   assert.equal(diag.configured, false);
 });
+
+test('QAMS Tri-Channel Notification: dispatches simultaneously to In-System, Email, and Phone and supports read state', async () => {
+  clearSimulatedNotifications();
+
+  const results = await dispatchTriChannelNotification({
+    recipientName: 'Manager Asha',
+    recipientRole: 'manager',
+    email: 'asha@tinzel.co.tz',
+    phone: '0712999888',
+    title: 'Rasimu Mpya Inasubiri Mapitio',
+    message: 'Rasimu V2 ya oda TNZ-2026-009 ipo tayari.',
+    template: 'draft_uploaded',
+  });
+
+  assert.equal(results.length, 3);
+  const inSys = getSimulatedInSystemNotifications();
+  const ext = getSimulatedNotifications();
+
+  assert.equal(inSys.length, 1);
+  assert.equal(inSys[0].channel, 'in_system');
+  assert.equal(inSys[0].isRead, false);
+
+  const emailEntry = ext.find((n) => n.channel === 'email');
+  const phoneEntry = ext.find((n) => n.channel === 'whatsapp');
+  assert.ok(emailEntry, 'Should send Email');
+  assert.ok(phoneEntry, 'Should send Phone/WhatsApp');
+  assert.equal(inSys[0].eventGroupId, emailEntry.eventGroupId);
+  assert.equal(inSys[0].eventGroupId, phoneEntry.eventGroupId);
+
+  await markNotificationRead(inSys[0].id);
+  assert.equal(inSys[0].isRead, true);
+  assert.equal(emailEntry.isRead, true);
+  assert.equal(phoneEntry.isRead, true);
+
+  await markAllNotificationsRead();
+  assert.ok(getSimulatedInSystemNotifications().every((n) => n.isRead));
+});
+
 

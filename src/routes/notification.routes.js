@@ -9,8 +9,11 @@ import {
   updateNotificationDeliveryStatus,
   recordInboundNotification,
   getNotificationHistory,
+  markNotificationRead,
+  markAllNotificationsRead,
   resendNotification,
   sendNotification,
+  dispatchTriChannelNotification,
   testTwilioConnection,
   notifyPrintingInProgress,
   isTwilioConfigured,
@@ -199,23 +202,74 @@ router.post('/webhooks/twilio-inbound', verifyTwilioWebhook, async (req, res) =>
 // 2. STAFF & ADMIN MANAGEMENT ENDPOINTS
 // ==========================================
 
-router.use(verifyStaffToken, requireRoles('manager', 'admin'));
+router.use(verifyStaffToken, requireRoles('manager', 'admin', 'designer'));
 
 /**
  * GET /api/notifications/history
- * Returns paginated / filtered notification history from MongoDB.
+ * Returns paginated / filtered notification history from MongoDB alongside unread & channel counts.
  */
 router.get('/history', async (req, res) => {
   try {
-    const { limit = 50, orderId, channel, status } = req.query;
+    const { limit = 100, orderId, channel, status, unreadOnly, search } = req.query;
     const notifications = await getNotificationHistory({
-      limit: parseInt(limit, 10) || 50,
+      limit: parseInt(limit, 10) || 100,
       orderId: orderId || null,
       channel: channel || null,
       status: status || null,
+      unreadOnly: unreadOnly === 'true',
+      search: search || '',
+      user: req.user,
     });
 
-    res.status(200).json({ success: true, notifications });
+    const allForSummary = (channel || status || unreadOnly === 'true' || search)
+      ? await getNotificationHistory({ limit: 250, user: req.user })
+      : notifications;
+
+    const unreadCount = allForSummary.filter(
+      (n) => !n.isRead && (n.channel === 'in_system' || !allForSummary.some((other) => other.channel === 'in_system' && other.eventGroupId && other.eventGroupId === n.eventGroupId))
+    ).length;
+
+    const channelCounts = {
+      all: allForSummary.length,
+      in_system: allForSummary.filter((n) => n.channel === 'in_system').length,
+      email: allForSummary.filter((n) => n.channel === 'email').length,
+      whatsapp: allForSummary.filter((n) => n.channel === 'whatsapp').length,
+      sms: allForSummary.filter((n) => n.channel === 'sms').length,
+      failed: allForSummary.filter((n) => n.status === 'failed' || n.status === 'undelivered').length,
+    };
+
+    res.status(200).json({
+      success: true,
+      notifications,
+      unreadCount,
+      channelCounts,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * PATCH /api/notifications/:id/read
+ * Marks a notification (and any grouped tri-channel siblings) as read.
+ */
+router.patch('/:id/read', async (req, res) => {
+  try {
+    const updated = await markNotificationRead(req.params.id);
+    res.status(200).json({ success: true, notification: updated });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * POST /api/notifications/mark-all-read
+ * Marks all unread notifications for the current staff user/role as read.
+ */
+router.post('/mark-all-read', async (req, res) => {
+  try {
+    const result = await markAllNotificationsRead(req.user);
+    res.status(200).json({ success: true, ...result });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -225,7 +279,7 @@ router.get('/history', async (req, res) => {
  * POST /api/notifications/resend/:id
  * Manually re-dispatches a notification (with optional channel override).
  */
-router.post('/resend/:id', async (req, res) => {
+router.post('/resend/:id', requireRoles('manager', 'admin'), async (req, res) => {
   try {
     const { channel } = req.body;
     const result = await resendNotification(req.params.id, { channelOverride: channel });
@@ -237,20 +291,57 @@ router.post('/resend/:id', async (req, res) => {
 
 /**
  * POST /api/notifications/test-send
- * Dispatches an ad-hoc test notification to verify Twilio connectivity.
+ * Dispatches an ad-hoc notification across either a single channel or all 3 channels (In-System + Email + Phone).
  */
-router.post('/test-send', async (req, res) => {
+router.post('/test-send', requireRoles('manager', 'admin'), async (req, res) => {
   try {
-    const { to, channel = 'whatsapp', message = 'Jaribio la ujumbe kutoka Tinzel platform' } = req.body;
-    if (!to) {
-      return res.status(400).json({ success: false, message: 'Namba ya mpokeaji (to) inahitajika' });
+    const {
+      to,
+      email,
+      phone,
+      recipientName = '',
+      recipientRole = 'client',
+      title = 'Taarifa kutoka Tinzel',
+      channel = 'whatsapp',
+      triChannel = false,
+      orderId = null,
+      message = 'Jaribio la ujumbe kutoka Tinzel platform',
+    } = req.body;
+
+    if (triChannel || (email && phone)) {
+      const results = await dispatchTriChannelNotification({
+        recipientName: recipientName || email || phone || to || 'Recipient',
+        recipientRole,
+        email: email || (to && to.includes('@') ? to : ''),
+        phone: phone || (to && !to.includes('@') ? to : ''),
+        title,
+        message,
+        template: 'manual_broadcast',
+        orderId: orderId || null,
+        metadata: { sentBy: req.user?._id, sentByName: req.user?.name },
+      });
+      return res.status(200).json({
+        success: true,
+        message: 'Tri-channel notification dispatched across In-System, Email, and Phone.',
+        results,
+      });
     }
 
+    if (!to && !phone && !email) {
+      return res.status(400).json({ success: false, message: 'Namba ya mpokeaji au barua pepe inahitajika' });
+    }
+
+    const targetTo = to || phone || email;
     const result = await sendNotification({
-      to,
+      to: targetTo,
+      recipientName: recipientName || targetTo,
+      recipientRole,
+      title,
       channel,
       template: 'manual_test',
+      subject: title,
       message,
+      orderId: orderId || null,
       metadata: { sentBy: req.user?._id, test: true },
     });
 
@@ -264,7 +355,7 @@ router.post('/test-send', async (req, res) => {
  * GET /api/notifications/diagnostics
  * Tests Twilio credentials and reports configuration state.
  */
-router.get('/diagnostics', async (_req, res) => {
+router.get('/diagnostics', requireRoles('manager', 'admin'), async (_req, res) => {
   try {
     const report = await testTwilioConnection();
     res.status(200).json({ success: true, diagnostics: report });

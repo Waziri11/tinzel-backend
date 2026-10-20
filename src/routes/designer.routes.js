@@ -10,6 +10,7 @@ import { enqueueArchive, createPhotoArchive } from '../services/mediaJobService.
 import { archiveStatus } from './mediaOperations.routes.js';
 import { deleteDraftPdf, isPdf, saveDraftPdf, streamDraftPdf } from '../services/draftFileService.js';
 import { activeRevisionRequest, assertExpectedVersion } from '../services/revisionRequestService.js';
+import { notifyDraftUploaded, notifyPrintDocumentUploaded } from '../services/notificationService.js';
 
 const router = Router();
 
@@ -60,24 +61,78 @@ router.get('/orders', async (req, res) => {
 router.get('/returns', async (req, res) => {
   try {
     const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 25));
-    const status = req.query.status === 'resolved' ? 'resolved' : 'active';
-    const revisionMatch = status === 'resolved'
-      ? { $elemMatch: { status: 'resolved' } }
-      : { $elemMatch: { status: { $in: ['open', 'submitted_for_review'] } } };
-    const query = { revisionRequests: revisionMatch };
+    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
+    const status = req.query.status || 'active';
+    const sourceFilter = req.query.source || 'all';
+    const search = (req.query.search || '').trim().toLowerCase();
+
+    const query = { 'revisionRequests.0': { $exists: true } };
     if (req.user.role === 'designer') query.assignedDesigner = req.user._id;
-    const [orders, total] = await Promise.all([
-      Order.find(query).select('submissionId trackingId clientName formTitle status currentDraftVersion revisionRequests assignedDesigner updatedAt')
-        .populate('assignedDesigner', 'name').sort({ updatedAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
-      Order.countDocuments(query),
-    ]);
-    const rows = orders.flatMap((order) => order.revisionRequests
-      .filter((request) => status === 'resolved' ? request.status === 'resolved' : request.status !== 'resolved')
-      .map((request) => ({ orderId: order._id, trackingId: order.trackingId || order.submissionId,
-        clientName: order.clientName, formTitle: order.formTitle, orderStatus: order.status,
-        assignedDesigner: order.assignedDesigner, ...request })));
-    return res.json({ success: true, returns: rows, total, page, pageCount: Math.max(1, Math.ceil(total / limit)) });
+
+    const orders = await Order.find(query)
+      .select('submissionId trackingId clientName clientWhatsApp formTitle status currentDraftVersion revisionRequests assignedDesigner updatedAt')
+      .populate('assignedDesigner', 'name email phone')
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    const allRows = orders.flatMap((order) =>
+      (order.revisionRequests || []).map((request) => ({
+        orderId: order._id,
+        trackingId: order.trackingId || order.submissionId,
+        submissionId: order.submissionId,
+        clientName: order.clientName,
+        clientWhatsApp: order.clientWhatsApp,
+        formTitle: order.formTitle,
+        orderStatus: order.status,
+        currentDraftVersion: order.currentDraftVersion,
+        assignedDesigner: order.assignedDesigner,
+        ...request,
+      }))
+    );
+
+    const summary = {
+      open: allRows.filter((r) => r.status === 'open').length,
+      submitted_for_review: allRows.filter((r) => r.status === 'submitted_for_review').length,
+      active: allRows.filter((r) => r.status !== 'resolved').length,
+      resolved: allRows.filter((r) => r.status === 'resolved').length,
+      manager: allRows.filter((r) => r.source === 'manager' && r.status !== 'resolved').length,
+      client: allRows.filter((r) => r.source === 'client' && r.status !== 'resolved').length,
+    };
+
+    const filteredRows = allRows.filter((request) => {
+      if (status === 'resolved' && request.status !== 'resolved') return false;
+      if (status === 'active' && request.status === 'resolved') return false;
+      if (status === 'open' && request.status !== 'open') return false;
+      if (status === 'submitted_for_review' && request.status !== 'submitted_for_review') return false;
+      if (sourceFilter !== 'all' && request.source !== sourceFilter) return false;
+      if (search) {
+        const hay = [
+          request.trackingId,
+          request.submissionId,
+          request.clientName,
+          request.formTitle,
+          request.assignedDesigner?.name,
+          ...(request.items || []).map((i) => i.text),
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        if (!hay.includes(search)) return false;
+      }
+      return true;
+    });
+
+    const total = filteredRows.length;
+    const pagedRows = filteredRows.slice((page - 1) * limit, page * limit);
+
+    return res.json({
+      success: true,
+      returns: pagedRows,
+      summary,
+      total,
+      page,
+      pageCount: Math.max(1, Math.ceil(total / limit)),
+    });
   } catch (error) { return res.status(500).json({ success: false, message: error.message }); }
 });
 
@@ -240,6 +295,8 @@ router.post(
         },
       });
 
+      await notifyDraftUploaded(order, nextVersion);
+
       return res.status(200).json({
         success: true,
         message: `Draft Version ${nextVersion} uploaded successfully. Awaiting manager review.`,
@@ -296,6 +353,8 @@ router.post('/orders/:id/upload-print-document', requireRoles('designer', 'admin
       orderId: order._id,
       details: { printUrl, specs },
     });
+
+    await notifyPrintDocumentUploaded(order);
 
     return res.status(200).json({
       success: true,

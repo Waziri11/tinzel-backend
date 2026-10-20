@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyClientToken, generateClientToken } from '../middlewares/auth.middleware.js';
-import { sendNotification, notifyClientOtp } from '../services/notificationService.js';
+import { sendNotification, notifyClientOtp, notifyClientApproved, notifyDraftReturned } from '../services/notificationService.js';
 import { sanitizeOrderForClient } from '../services/workflowService.js';
 import { streamDraftPdf } from '../services/draftFileService.js';
 import { assertExpectedVersion, createRevisionRequest, normalizeCorrectionItems } from '../services/revisionRequestService.js';
@@ -187,6 +187,8 @@ router.post('/approve-draft', verifyClientToken, async (req, res) => {
       },
     });
 
+    await notifyClientApproved(order);
+
     return res.status(200).json({
       success: true,
       message: 'Whole magazine approved successfully! It has now proceeded to print document preparation.',
@@ -248,6 +250,8 @@ router.post('/request-revision', verifyClientToken, async (req, res) => {
         items,
       },
     });
+
+    await notifyDraftReturned(order, revisionRequest, 'client');
 
     return res.status(200).json({
       success: true,
