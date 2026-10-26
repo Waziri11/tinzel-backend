@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
@@ -16,6 +17,7 @@ import adminRoutes from './routes/admin.routes.js';
 import mediaRoutes from './routes/media.routes.js';
 import mediaOperationsRoutes from './routes/mediaOperations.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
+import smsRoutes from './routes/smsRoutes.js';
 
 const app = express();
 
@@ -56,7 +58,12 @@ app.use('/api', async (req, res, next) => {
   const started = performance.now();
   const connected = await connectDB();
   req.dbWaitMs = Math.round(performance.now() - started);
-  if (connected || req.path.startsWith('/health') || req.path.startsWith('/items')) {
+  if (
+    connected ||
+    req.path.startsWith('/health') ||
+    req.path.startsWith('/items') ||
+    req.path.startsWith('/v1/sms')
+  ) {
     return next();
   }
   return res.status(503).json({
@@ -83,6 +90,7 @@ app.get('/', (req, res) => {
       manager: '/api/manager/orders',
       designer: '/api/designer/orders',
       admin: '/api/admin/forms',
+      sms: '/api/v1/sms/send',
     },
   });
 });
@@ -99,6 +107,7 @@ app.use('/api/manager', managerRoutes);
 app.use('/api/designer', designerRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/v1/sms', smsRoutes);
 
 // 404 Handler
 app.use((req, res) => {
