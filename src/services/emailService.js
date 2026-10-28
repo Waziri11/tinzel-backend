@@ -455,3 +455,62 @@ export const sendEmail = async ({ to, subject, html, text }) => {
     };
   }
 };
+
+/**
+ * Checks the health and live connectivity of the Google SMTP / Nodemailer service.
+ */
+export const getEmailHealth = async () => {
+  const configured = isEmailConfigured();
+  const host = process.env.SMTP_HOST || 'smtp.gmail.com';
+  const port = parseInt(process.env.SMTP_PORT, 10) || 465;
+  const secure =
+    process.env.SMTP_SECURE !== undefined ? process.env.SMTP_SECURE === 'true' : port === 465;
+  const from = process.env.SMTP_FROM || `Tinzel <${process.env.SMTP_USER || 'notifications@tinzel.com'}>`;
+  const user = process.env.SMTP_USER || '';
+
+  if (!configured) {
+    return {
+      configured: false,
+      connected: false,
+      mode: 'simulated',
+      host,
+      port,
+      secure,
+      from,
+      user,
+      latencyMs: 0,
+      message: 'SMTP credentials (SMTP_USER / SMTP_PASS) are not configured. Operating in simulation mode.',
+    };
+  }
+
+  const startedAt = Date.now();
+  try {
+    const transporter = getTransporter();
+    await transporter.verify();
+    return {
+      configured: true,
+      connected: true,
+      mode: 'smtp_live',
+      host,
+      port,
+      secure,
+      from,
+      user,
+      latencyMs: Date.now() - startedAt,
+      message: 'SMTP server connection verified and ready to send emails.',
+    };
+  } catch (error) {
+    return {
+      configured: true,
+      connected: false,
+      mode: 'error',
+      host,
+      port,
+      secure,
+      from,
+      user,
+      latencyMs: Date.now() - startedAt,
+      message: `SMTP verification failed: ${error.message}`,
+    };
+  }
+};

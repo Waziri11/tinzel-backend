@@ -17,6 +17,12 @@ import {
   testTwilioConnection,
   notifyPrintingInProgress,
   isTwilioConfigured,
+  getNotificationSettings,
+  updateNotificationSettings,
+  resetNotificationSettings,
+  getUnifiedDiagnostics,
+  runSmsHealthTest,
+  runEmailHealthTest,
 } from '../services/notificationService.js';
 
 const router = Router();
@@ -352,15 +358,146 @@ router.post('/test-send', requireRoles('manager', 'admin'), async (req, res) => 
 });
 
 /**
+ * GET /api/notifications/settings
+ * Returns QAMS notification trigger matrix and global channel settings.
+ */
+router.get('/settings', requireRoles('manager', 'admin'), async (_req, res) => {
+  try {
+    const settings = await getNotificationSettings();
+    res.status(200).json({ success: true, settings });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * PUT /api/notifications/settings
+ * Updates global channel toggles, NextSMS Sender ID, and per-trigger channel toggles.
+ */
+router.put('/settings', requireRoles('manager', 'admin'), async (req, res) => {
+  try {
+    const settings = await updateNotificationSettings(req.body || {}, req.user?._id);
+    try {
+      await AuditLog.create({
+        actor: { type: req.user?.role || 'admin', id: req.user?._id, name: req.user?.name || 'Admin' },
+        action: 'NOTIFICATION_SETTINGS_UPDATED',
+        details: {
+          channels: settings.channels,
+          smsSenderId: settings.smsSenderId,
+        },
+      });
+    } catch {
+      // Continue cleanly if audit log fails in isolated mode
+    }
+    res.status(200).json({
+      success: true,
+      message: 'Notification settings saved successfully.',
+      settings,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * POST /api/notifications/settings/reset
+ * Resets all notification triggers and channel settings to factory defaults.
+ */
+router.post('/settings/reset', requireRoles('manager', 'admin'), async (req, res) => {
+  try {
+    const settings = await resetNotificationSettings(req.user?._id);
+    res.status(200).json({
+      success: true,
+      message: 'Notification settings reset to defaults.',
+      settings,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
  * GET /api/notifications/diagnostics
- * Tests Twilio credentials and reports configuration state.
+ * Tests NextSMS, Email SMTP, and Twilio credentials and reports unified health diagnostics.
  */
 router.get('/diagnostics', requireRoles('manager', 'admin'), async (_req, res) => {
   try {
-    const report = await testTwilioConnection();
+    const report = await getUnifiedDiagnostics();
     res.status(200).json({ success: true, diagnostics: report });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * POST /api/notifications/health-test/sms
+ * Dispatches an interactive SMS health test via NextSMS and logs to history.
+ */
+router.post('/health-test/sms', requireRoles('manager', 'admin'), async (req, res) => {
+  try {
+    const { to, message, from } = req.body || {};
+    if (!to || typeof to !== 'string' || !to.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'A valid recipient phone number ("to") is required.',
+      });
+    }
+
+    const report = await runSmsHealthTest({
+      to: to.trim(),
+      message,
+      from,
+      user: req.user,
+    });
+
+    res.status(report.success ? 200 : 422).json({
+      success: report.success,
+      message: report.success
+        ? `Test SMS dispatched to ${report.to} via NextSMS (${report.senderId}).`
+        : report.error || 'NextSMS rejected or failed the test message.',
+      report,
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'SMS health test failed.',
+    });
+  }
+});
+
+/**
+ * POST /api/notifications/health-test/email
+ * Dispatches an interactive Email health test via Google SMTP (or simulation fallback) and logs to history.
+ */
+router.post('/health-test/email', requireRoles('manager', 'admin'), async (req, res) => {
+  try {
+    const { to, subject, message } = req.body || {};
+    if (!to || typeof to !== 'string' || !to.includes('@')) {
+      return res.status(400).json({
+        success: false,
+        message: 'A valid recipient email address ("to") is required.',
+      });
+    }
+
+    const report = await runEmailHealthTest({
+      to: to.trim(),
+      subject,
+      message,
+      user: req.user,
+    });
+
+    res.status(report.success ? 200 : 502).json({
+      success: report.success,
+      message: report.success
+        ? `Test email dispatched to ${report.to} (${report.mode === 'smtp_live' ? 'Live SMTP' : 'Simulated Mode'}).`
+        : report.error || 'Email health test failed.',
+      report,
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Email health test failed.',
+    });
   }
 });
 

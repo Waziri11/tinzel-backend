@@ -18,6 +18,12 @@ import {
   recordInboundNotification,
   getNotificationHistory,
   testTwilioConnection,
+  getNotificationSettings,
+  updateNotificationSettings,
+  resetNotificationSettings,
+  isTriggerChannelEnabled,
+  runSmsHealthTest,
+  runEmailHealthTest,
 } from '../src/services/notificationService.js';
 import {
   emailTemplates,
@@ -253,6 +259,96 @@ test('QAMS Tri-Channel Notification: dispatches simultaneously to In-System, Ema
 
   await markAllNotificationsRead();
   assert.ok(getSimulatedInSystemNotifications().every((n) => n.isRead));
+});
+
+test('QAMS Notification Settings: supports configuring per-trigger channel toggles and enforces them', async () => {
+  clearSimulatedNotifications();
+  await resetNotificationSettings();
+
+  const initial = await getNotificationSettings();
+  assert.equal(initial.channels.sms, true);
+  assert.equal(initial.triggers.payment_verified.enabled, true);
+  assert.equal(initial.triggers.payment_verified.sms, true);
+
+  // Disable SMS channel specifically for payment_verified trigger
+  const updated = await updateNotificationSettings({
+    smsSenderId: 'ORDER',
+    triggers: {
+      payment_verified: {
+        enabled: true,
+        in_system: true,
+        email: true,
+        sms: false,
+      },
+    },
+  });
+
+  assert.equal(updated.triggers.payment_verified.sms, false);
+  assert.equal(isTriggerChannelEnabled('payment_verified', 'sms'), false);
+  assert.equal(isTriggerChannelEnabled('payment_verified', 'whatsapp'), false);
+  assert.equal(isTriggerChannelEnabled('payment_verified', 'email'), true);
+
+  // Verify sendNotification skips disabled channel
+  const skippedPhone = await sendNotification({
+    to: '+255762022730',
+    channel: 'sms',
+    template: 'payment_verified',
+    message: 'Should be skipped while disabled',
+  });
+  assert.equal(skippedPhone.skipped, true);
+  assert.equal(skippedPhone.status, 'skipped');
+
+  // Restore defaults
+  const restored = await resetNotificationSettings();
+  assert.equal(restored.triggers.payment_verified.sms, true);
+});
+
+test('QAMS Health Tests: runSmsHealthTest and runEmailHealthTest dispatch and log to history', async () => {
+  clearSimulatedNotifications();
+  const originalFetch = global.fetch;
+  const originalApiKey = process.env.NEXTSMS_API_KEY;
+  process.env.NEXTSMS_API_KEY = '48562cb88e7b630991a2256404b37cda';
+
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    text: async () =>
+      JSON.stringify({
+        messages: [
+          {
+            to: '255762022730',
+            status: { groupId: 18, groupName: 'PENDING', id: 51, name: 'ENROUTE (SENT)' },
+            messageId: 373054020287210300,
+            smsCount: 1,
+            price: 16,
+          },
+        ],
+      }),
+  });
+
+  try {
+    const smsReport = await runSmsHealthTest({
+      to: '+255762022730',
+      from: 'ORDER',
+      message: 'Health check test SMS',
+    });
+    assert.equal(smsReport.success, true);
+    assert.equal(smsReport.to, '255762022730');
+    assert.equal(smsReport.senderId, 'ORDER');
+    assert.equal(smsReport.mode, 'nextsms_live');
+
+    const emailReport = await runEmailHealthTest({
+      to: 'admin@tinzel.co.tz',
+      subject: 'SMTP Health Test',
+      message: 'Testing email health check',
+    });
+    assert.equal(emailReport.success, true);
+    assert.equal(emailReport.to, 'admin@tinzel.co.tz');
+  } finally {
+    global.fetch = originalFetch;
+    if (originalApiKey === undefined) delete process.env.NEXTSMS_API_KEY;
+    else process.env.NEXTSMS_API_KEY = originalApiKey;
+  }
 });
 
 

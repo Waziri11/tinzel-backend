@@ -1,8 +1,8 @@
-import { sendNextSMS } from '../services/smsService.js';
+import { sendNextSMS, getNextSMSHealth } from '../services/smsService.js';
 
 /**
  * Controller to trigger a transactional SMS notification via NextSMS.
- * Expects `{ to, message }` in `req.body`.
+ * Expects `{ to, message, from? }` in `req.body`.
  *
  * @param {import('express').Request} req
  * @param {import('express').Response} res
@@ -10,7 +10,7 @@ import { sendNextSMS } from '../services/smsService.js';
  */
 export const sendSmsNotification = async (req, res, next) => {
   try {
-    const { to, message } = req.body || {};
+    const { to, message, from } = req.body || {};
 
     if (!to || typeof to !== 'string' || !to.trim()) {
       return res.status(400).json({
@@ -26,11 +26,16 @@ export const sendSmsNotification = async (req, res, next) => {
       });
     }
 
-    const result = await sendNextSMS(to, message);
+    const result = await sendNextSMS(to, message, from);
 
-    return res.status(200).json({
-      success: true,
-      message: 'SMS sent successfully',
+    const firstStatus = result?.messages?.[0]?.status;
+    const isRejected = firstStatus?.groupName === 'REJECTED';
+
+    return res.status(isRejected ? 422 : 200).json({
+      success: !isRejected,
+      message: isRejected
+        ? `NextSMS rejected the message: ${firstStatus.description || firstStatus.name}`
+        : 'SMS sent successfully',
       data: result,
     });
   } catch (error) {
@@ -43,5 +48,23 @@ export const sendSmsNotification = async (req, res, next) => {
       });
     }
     return next(error);
+  }
+};
+
+/**
+ * Controller to check NextSMS API health, authentication status, and SMS balance.
+ */
+export const checkSmsHealth = async (_req, res) => {
+  try {
+    const health = await getNextSMSHealth();
+    return res.status(health.authenticated ? 200 : 502).json({
+      success: health.authenticated,
+      ...health,
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to check NextSMS health',
+    });
   }
 };

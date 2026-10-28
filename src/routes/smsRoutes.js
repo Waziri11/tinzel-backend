@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { sendSmsNotification } from '../controllers/smsController.js';
+import { sendSmsNotification, checkSmsHealth } from '../controllers/smsController.js';
 
 const router = Router();
 
@@ -9,6 +9,18 @@ const router = Router();
  *   name: SMS
  *   description: Transactional SMS order notifications via NextSMS API
  */
+
+/**
+ * @swagger
+ * /api/v1/sms/health:
+ *   get:
+ *     summary: Check NextSMS gateway health and SMS credit balance
+ *     tags: [SMS]
+ *     responses:
+ *       200:
+ *         description: NextSMS gateway is reachable and authenticated
+ */
+router.get('/health', checkSmsHealth);
 
 /**
  * @swagger
@@ -32,54 +44,24 @@ const router = Router();
  *               to:
  *                 type: string
  *                 description: Recipient phone number in Tanzanian format (+255..., 255..., or 07...)
- *                 example: "+255712345678"
+ *                 example: "+255762022730"
  *               message:
  *                 type: string
  *                 description: Transactional SMS message content
  *                 example: "Hello! Your Tinzel order #TNZ-2026-001 status has been updated to Ready."
+ *               from:
+ *                 type: string
+ *                 description: Optional registered Sender ID override (defaults to NEXTSMS_SENDER_ID or NEXTSMS)
+ *                 example: "NEXTSMS"
  *     responses:
  *       200:
  *         description: SMS dispatched successfully via NextSMS
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 message:
- *                   type: string
- *                   example: "SMS sent successfully"
- *                 data:
- *                   type: object
- *                   description: Raw response returned by NextSMS API
  *       400:
  *         description: Missing or invalid phone number or message body
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: false
- *                 message:
- *                   type: string
- *                   example: "Recipient phone number (\"to\") is required."
+ *       422:
+ *         description: Request authenticated, but NextSMS rejected the payload (e.g. unregistered Sender ID)
  *       500:
  *         description: Server configuration error (e.g. missing NEXTSMS credentials)
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: false
- *                 message:
- *                   type: string
- *                   example: "NextSMS credentials are not configured. Please set NEXTSMS_USERNAME and NEXTSMS_PASSWORD in the environment."
  *       502:
  *         description: Upstream NextSMS gateway error
  */

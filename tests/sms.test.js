@@ -17,13 +17,16 @@ test('formatTanzanianPhone: throws 400 for empty or invalid phone numbers', () =
   assert.throws(() => formatTanzanianPhone('+15551234567'), { status: 400 });
 });
 
-test('sendNextSMS: sends Basic Auth header and expected JSON payload to NextSMS endpoint', async () => {
+test('sendNextSMS: uses v1 Basic Auth when only NEXTSMS_USERNAME and NEXTSMS_PASSWORD are set', async () => {
   const originalFetch = global.fetch;
+  const originalApiKey = process.env.NEXTSMS_API_KEY;
   const originalUser = process.env.NEXTSMS_USERNAME;
   const originalPass = process.env.NEXTSMS_PASSWORD;
 
+  delete process.env.NEXTSMS_API_KEY;
   process.env.NEXTSMS_USERNAME = 'tinzel_user';
   process.env.NEXTSMS_PASSWORD = 'secret_password';
+  process.env.NEXTSMS_SENDER_ID = 'ORDER';
 
   let capturedUrl = null;
   let capturedOptions = null;
@@ -39,7 +42,7 @@ test('sendNextSMS: sends Basic Auth header and expected JSON payload to NextSMS 
           messages: [
             {
               to: '255712345678',
-              status: { groupId: 1, groupName: 'PENDING', id: 7, name: 'PENDING_ENROUTE' },
+              status: { groupId: 18, groupName: 'PENDING', id: 51, name: 'ENROUTE (SENT)' },
               smsCount: 1,
             },
           ],
@@ -59,44 +62,12 @@ test('sendNextSMS: sends Basic Auth header and expected JSON payload to NextSMS 
 
     const parsedBody = JSON.parse(capturedOptions.body);
     assert.deepEqual(parsedBody, {
-      from: 'NEXTSMS',
+      from: 'ORDER',
       to: '255712345678',
       text: 'Order #TNZ-101 is Ready.',
     });
 
     assert.equal(result.messages[0].to, '255712345678');
-  } finally {
-    global.fetch = originalFetch;
-    if (originalUser === undefined) delete process.env.NEXTSMS_USERNAME;
-    else process.env.NEXTSMS_USERNAME = originalUser;
-    if (originalPass === undefined) delete process.env.NEXTSMS_PASSWORD;
-    else process.env.NEXTSMS_PASSWORD = originalPass;
-  }
-});
-
-test('sendNextSMS: supports pre-encoded NEXTSMS_API_KEY directly', async () => {
-  const originalFetch = global.fetch;
-  const originalApiKey = process.env.NEXTSMS_API_KEY;
-  const originalUser = process.env.NEXTSMS_USERNAME;
-  const originalPass = process.env.NEXTSMS_PASSWORD;
-
-  delete process.env.NEXTSMS_USERNAME;
-  delete process.env.NEXTSMS_PASSWORD;
-  process.env.NEXTSMS_API_KEY = 'dGluemVsX3VzZXI6c2VjcmV0X3Bhc3N3b3Jk';
-
-  let capturedAuthHeader = null;
-  global.fetch = async (_url, options) => {
-    capturedAuthHeader = options.headers.Authorization;
-    return {
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({ messages: [{ to: '255712345678' }] }),
-    };
-  };
-
-  try {
-    await sendNextSMS('0712345678', 'Order Ready');
-    assert.equal(capturedAuthHeader, 'Basic dGluemVsX3VzZXI6c2VjcmV0X3Bhc3N3b3Jk');
   } finally {
     global.fetch = originalFetch;
     if (originalApiKey === undefined) delete process.env.NEXTSMS_API_KEY;
@@ -105,6 +76,35 @@ test('sendNextSMS: supports pre-encoded NEXTSMS_API_KEY directly', async () => {
     else process.env.NEXTSMS_USERNAME = originalUser;
     if (originalPass === undefined) delete process.env.NEXTSMS_PASSWORD;
     else process.env.NEXTSMS_PASSWORD = originalPass;
+  }
+});
+
+test('sendNextSMS: uses v2 Bearer token endpoint when NEXTSMS_API_KEY is set', async () => {
+  const originalFetch = global.fetch;
+  const originalApiKey = process.env.NEXTSMS_API_KEY;
+
+  process.env.NEXTSMS_API_KEY = '48562cb88e7b630991a2256404b37cda';
+
+  let capturedUrl = null;
+  let capturedAuthHeader = null;
+  global.fetch = async (url, options) => {
+    capturedUrl = url;
+    capturedAuthHeader = options.headers.Authorization;
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ messages: [{ to: '255762022730' }] }),
+    };
+  };
+
+  try {
+    await sendNextSMS('+255762022730', 'Order Ready');
+    assert.equal(capturedUrl, 'https://messaging-service.co.tz/api/sms/v2/text/single');
+    assert.equal(capturedAuthHeader, 'Bearer 48562cb88e7b630991a2256404b37cda');
+  } finally {
+    global.fetch = originalFetch;
+    if (originalApiKey === undefined) delete process.env.NEXTSMS_API_KEY;
+    else process.env.NEXTSMS_API_KEY = originalApiKey;
   }
 });
 

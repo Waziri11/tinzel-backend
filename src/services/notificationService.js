@@ -3,11 +3,298 @@ import mongoose from 'mongoose';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { Notification } from '../models/Notification.model.js';
 import { StaffUser } from '../models/StaffUser.model.js';
-import { sendEmail, emailTemplates, isEmailConfigured } from './emailService.js';
+import { SystemConfig } from '../models/SystemConfig.model.js';
+import { sendEmail, emailTemplates, isEmailConfigured, getEmailHealth } from './emailService.js';
+import {
+  sendNextSMS,
+  getNextSMSHealth,
+  isNextSMSConfigured,
+  formatTanzanianPhone,
+} from './smsService.js';
 
 // In-memory simulation log for development & inspection
 const simulatedNotifications = [];
 const inSystemNotifications = [];
+
+export const NOTIFICATION_TRIGGER_CATALOG = [
+  {
+    key: 'order_submitted',
+    label: 'Order Submitted (Client & Staff)',
+    description: 'Triggered when a client submits a new magazine order form in Pre-Design.',
+    category: 'Pre-Design',
+    recipient: 'Client & Manager',
+    defaults: { enabled: true, in_system: true, email: true, sms: true },
+  },
+  {
+    key: 'payment_verified',
+    label: 'Payment Verified & Tracking ID Issued',
+    description: 'Triggered when a manager verifies Lipa Namba payment and generates a Tracking ID.',
+    category: 'Pre-Design',
+    recipient: 'Client',
+    defaults: { enabled: true, in_system: true, email: true, sms: true },
+  },
+  {
+    key: 'order_assigned',
+    label: 'Designer Assigned to Order',
+    description: 'Triggered when an order is assigned or reassigned to an editorial designer.',
+    category: 'Design Phase',
+    recipient: 'Designer',
+    defaults: { enabled: true, in_system: true, email: true, sms: true },
+  },
+  {
+    key: 'draft_uploaded',
+    label: 'Draft Uploaded for Manager Review',
+    description: 'Triggered when a designer uploads a magazine draft PDF for manager QA.',
+    category: 'Design Phase',
+    recipient: 'Manager',
+    defaults: { enabled: true, in_system: true, email: true, sms: true },
+  },
+  {
+    key: 'draft_released',
+    label: 'Draft Released to Client for Proof Review',
+    description: 'Triggered when a manager approves a draft and releases it to the client portal.',
+    category: 'Design Phase',
+    recipient: 'Client',
+    defaults: { enabled: true, in_system: true, email: true, sms: true },
+  },
+  {
+    key: 'draft_returned',
+    label: 'Draft Returned for Changes (Internal)',
+    description: 'Triggered when a manager returns a draft to the designer with revision items.',
+    category: 'Returns',
+    recipient: 'Designer',
+    defaults: { enabled: true, in_system: true, email: true, sms: true },
+  },
+  {
+    key: 'client_revision_requested',
+    label: 'Client Requested Revisions',
+    description: 'Triggered when a client submits page-by-page revision notes on a draft proof.',
+    category: 'Returns',
+    recipient: 'Designer & Manager',
+    defaults: { enabled: true, in_system: true, email: true, sms: true },
+  },
+  {
+    key: 'client_approved',
+    label: 'Client Approved Magazine Proof',
+    description: 'Triggered when a client approves the entire magazine proof to enter Post-Design.',
+    category: 'Post-Design',
+    recipient: 'Designer & Manager',
+    defaults: { enabled: true, in_system: true, email: true, sms: true },
+  },
+  {
+    key: 'print_document_uploaded',
+    label: 'Print-Ready PDF Uploaded',
+    description: 'Triggered when the designer uploads the final high-resolution print PDF.',
+    category: 'Post-Design',
+    recipient: 'Manager',
+    defaults: { enabled: true, in_system: true, email: true, sms: true },
+  },
+  {
+    key: 'print_dispatched',
+    label: 'Order Sent to Printing Partner',
+    description: 'Triggered when a manager dispatches print specifications to the printing partner.',
+    category: 'Post-Design',
+    recipient: 'Printer',
+    defaults: { enabled: true, in_system: true, email: false, sms: true },
+  },
+  {
+    key: 'printing_in_progress',
+    label: 'Printing In Progress',
+    description: 'Triggered when the printer confirms order receipt and printing begins.',
+    category: 'Post-Design',
+    recipient: 'Client',
+    defaults: { enabled: true, in_system: true, email: true, sms: true },
+  },
+  {
+    key: 'order_dispatched',
+    label: 'Order Dispatched via Courier',
+    description: 'Triggered when courier and tracking reference details are recorded for delivery.',
+    category: 'Post-Design',
+    recipient: 'Client',
+    defaults: { enabled: true, in_system: true, email: true, sms: true },
+  },
+  {
+    key: 'order_closed',
+    label: 'Order Delivered & Closed',
+    description: 'Triggered when final magazine delivery is confirmed and the order is closed.',
+    category: 'Post-Design',
+    recipient: 'Client & Manager',
+    defaults: { enabled: true, in_system: true, email: true, sms: true },
+  },
+  {
+    key: 'client_otp',
+    label: 'Client Portal Login OTP',
+    description: 'Triggered when a client requests a one-time password to access the tracking portal.',
+    category: 'Security',
+    recipient: 'Client',
+    defaults: { enabled: true, in_system: true, email: true, sms: true },
+  },
+];
+
+export const buildDefaultNotificationSettings = () => {
+  const triggers = {};
+  for (const item of NOTIFICATION_TRIGGER_CATALOG) {
+    triggers[item.key] = { ...item.defaults };
+  }
+  return {
+    channels: {
+      in_system: true,
+      email: true,
+      sms: true,
+    },
+    smsSenderId: process.env.NEXTSMS_SENDER_ID || 'ORDER',
+    triggers,
+  };
+};
+
+let inMemoryNotificationSettings = buildDefaultNotificationSettings();
+
+const mergeWithDefaults = (raw = {}) => {
+  const base = buildDefaultNotificationSettings();
+  const merged = {
+    channels: {
+      in_system: raw?.channels?.in_system !== undefined ? Boolean(raw.channels.in_system) : base.channels.in_system,
+      email: raw?.channels?.email !== undefined ? Boolean(raw.channels.email) : base.channels.email,
+      sms: raw?.channels?.sms !== undefined ? Boolean(raw.channels.sms) : base.channels.sms,
+    },
+    smsSenderId:
+      typeof raw?.smsSenderId === 'string' && raw.smsSenderId.trim()
+        ? raw.smsSenderId.trim().toUpperCase()
+        : base.smsSenderId,
+    triggers: { ...base.triggers },
+  };
+
+  if (raw?.triggers && typeof raw.triggers === 'object') {
+    for (const item of NOTIFICATION_TRIGGER_CATALOG) {
+      const incoming = raw.triggers[item.key];
+      if (incoming && typeof incoming === 'object') {
+        merged.triggers[item.key] = {
+          enabled: incoming.enabled !== undefined ? Boolean(incoming.enabled) : item.defaults.enabled,
+          in_system: incoming.in_system !== undefined ? Boolean(incoming.in_system) : item.defaults.in_system,
+          email: incoming.email !== undefined ? Boolean(incoming.email) : item.defaults.email,
+          sms: incoming.sms !== undefined ? Boolean(incoming.sms) : item.defaults.sms,
+        };
+      }
+    }
+  }
+
+  return merged;
+};
+
+/**
+ * Loads active notification settings from MongoDB SystemConfig (or in-memory fallback).
+ */
+export const getNotificationSettings = async () => {
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const doc = await SystemConfig.findOne({ key: 'notification_settings' }).lean();
+      if (doc?.value && typeof doc.value === 'object') {
+        inMemoryNotificationSettings = mergeWithDefaults(doc.value);
+      }
+    } catch {
+      // Fallback to in-memory settings
+    }
+  }
+  return {
+    ...inMemoryNotificationSettings,
+    catalog: NOTIFICATION_TRIGGER_CATALOG,
+  };
+};
+
+/**
+ * Updates notification settings in MongoDB SystemConfig and in-memory cache.
+ */
+export const updateNotificationSettings = async (updates = {}, updatedBy = null) => {
+  const current = await getNotificationSettings();
+  const merged = mergeWithDefaults({
+    channels: {
+      ...current.channels,
+      ...(updates.channels || {}),
+    },
+    smsSenderId: updates.smsSenderId !== undefined ? updates.smsSenderId : current.smsSenderId,
+    triggers: {
+      ...current.triggers,
+      ...(updates.triggers || {}),
+    },
+  });
+
+  inMemoryNotificationSettings = merged;
+
+  if (mongoose.connection.readyState === 1) {
+    try {
+      await SystemConfig.findOneAndUpdate(
+        { key: 'notification_settings' },
+        {
+          key: 'notification_settings',
+          value: merged,
+          description: 'QAMS Notification Triggers & Channel Settings',
+          ...(updatedBy ? { updatedBy } : {}),
+        },
+        { upsert: true, returnDocument: 'after' }
+      );
+    } catch {
+      // Keep in-memory settings updated even if DB write fails
+    }
+  }
+
+  return {
+    ...merged,
+    catalog: NOTIFICATION_TRIGGER_CATALOG,
+  };
+};
+
+/**
+ * Resets notification settings to defaults.
+ */
+export const resetNotificationSettings = async (updatedBy = null) => {
+  const defaults = buildDefaultNotificationSettings();
+  inMemoryNotificationSettings = defaults;
+
+  if (mongoose.connection.readyState === 1) {
+    try {
+      await SystemConfig.findOneAndUpdate(
+        { key: 'notification_settings' },
+        {
+          key: 'notification_settings',
+          value: defaults,
+          description: 'QAMS Notification Triggers & Channel Settings',
+          ...(updatedBy ? { updatedBy } : {}),
+        },
+        { upsert: true, returnDocument: 'after' }
+      );
+    } catch {
+      // Ignore DB error in isolated tests
+    }
+  }
+
+  return {
+    ...defaults,
+    catalog: NOTIFICATION_TRIGGER_CATALOG,
+  };
+};
+
+/**
+ * Evaluates whether a given notification template and channel are enabled.
+ */
+export const isTriggerChannelEnabled = (template, channel, settings = inMemoryNotificationSettings) => {
+  const normalizedChannel = channel === 'whatsapp' ? 'sms' : channel;
+  if (settings?.channels && settings.channels[normalizedChannel] === false) {
+    return false;
+  }
+
+  const triggerKey = template === 'order_submitted_staff' ? 'order_submitted' : template;
+  const triggerConfig = settings?.triggers?.[triggerKey];
+  if (!triggerConfig) {
+    return true;
+  }
+  if (triggerConfig.enabled === false) {
+    return false;
+  }
+  if (triggerConfig[normalizedChannel] === false) {
+    return false;
+  }
+  return true;
+};
 
 export const getSimulatedNotifications = () => [...simulatedNotifications];
 export const getSimulatedInSystemNotifications = () => [...inSystemNotifications];
@@ -103,6 +390,15 @@ export const sendNotification = async ({
     status: 'delivered',
   };
 
+  if (!metadata?.bypassSettings && !isTriggerChannelEnabled(template, channel)) {
+    return {
+      ...logEntry,
+      mode: 'disabled_by_settings',
+      status: 'skipped',
+      skipped: true,
+    };
+  }
+
   // Channel: IN-SYSTEM Notification
   if (channel === 'in_system') {
     logEntry.mode = 'in_system';
@@ -127,11 +423,53 @@ export const sendNotification = async ({
     }
   }
 
-  // Channel: SMS or WHATSAPP (Twilio)
+  // Channel: SMS or WHATSAPP (NextSMS / Twilio)
   else if (channel === 'sms' || channel === 'whatsapp') {
     const client = getTwilioClient();
+    const isUnitTestContext = Boolean(process.env.NODE_TEST_CONTEXT) && !metadata?.forceNextSms;
+    const useNextSms =
+      !isUnitTestContext &&
+      isNextSMSConfigured() &&
+      (channel === 'sms' || !client);
 
-    if (client) {
+    if (useNextSms) {
+      try {
+        const senderId =
+          metadata?.senderId ||
+          inMemoryNotificationSettings?.smsSenderId ||
+          process.env.NEXTSMS_SENDER_ID ||
+          'ORDER';
+        const formatted = formatTanzanianPhone(to);
+        const nextSmsRes = await sendNextSMS(formatted, message, senderId);
+        const firstMsg = nextSmsRes?.messages?.[0];
+        const isRejected = firstMsg?.status?.groupName === 'REJECTED';
+
+        logEntry.channel = 'sms';
+        if (channel === 'whatsapp') {
+          logEntry.fallbackFromChannel = 'whatsapp';
+        }
+        logEntry.mode = 'nextsms_live';
+        logEntry.sid = String(firstMsg?.messageId || firstMsg?.sendReference || '');
+        logEntry.status = isRejected ? 'failed' : 'sent';
+        if (isRejected) {
+          logEntry.error =
+            firstMsg?.status?.description || firstMsg?.status?.name || 'NextSMS rejected message';
+        }
+        logEntry.metadata = {
+          ...metadata,
+          senderId,
+          nextSmsStatus: firstMsg?.status || null,
+          smsCount: firstMsg?.smsCount ?? 1,
+          price: firstMsg?.price ?? null,
+        };
+      } catch (nextErr) {
+        console.warn(`[NextSMS Error] ${nextErr.message}`);
+        logEntry.channel = 'sms';
+        logEntry.mode = 'nextsms_failed';
+        logEntry.status = 'failed';
+        logEntry.error = nextErr.message;
+      }
+    } else if (client) {
       const formattedRecipient = normalizePhoneNumber(to);
       const isWhatsApp = channel === 'whatsapp';
       const fromNumber = isWhatsApp
@@ -1661,4 +1999,150 @@ export const testTwilioConnection = async () => {
       message: `Failed to authenticate with Twilio API: ${error.message}`,
     };
   }
+};
+
+/**
+ * Returns a unified QAMS diagnostics report covering NextSMS, Google SMTP Email, Twilio, and active settings.
+ */
+export const getUnifiedDiagnostics = async () => {
+  const [smsHealth, emailHealth, twilioHealth, settings] = await Promise.all([
+    getNextSMSHealth(),
+    getEmailHealth(),
+    testTwilioConnection(),
+    getNotificationSettings(),
+  ]);
+
+  const primarySmsHealthy = Boolean(smsHealth.authenticated);
+  const primaryEmailHealthy = Boolean(emailHealth.connected);
+
+  return {
+    mode: primarySmsHealthy ? 'nextsms_live' : twilioHealth.mode,
+    configured: Boolean(smsHealth.configured || emailHealth.configured || twilioHealth.configured),
+    sms: smsHealth,
+    email: emailHealth,
+    twilio: twilioHealth,
+    inSystem: {
+      configured: true,
+      connected: true,
+      mode: 'in_system',
+      enabled: settings.channels.in_system,
+      message: 'In-system staff & client notification inbox is active.',
+    },
+    settings: {
+      channels: settings.channels,
+      smsSenderId: settings.smsSenderId,
+    },
+    message: primarySmsHealthy
+      ? `NextSMS Live (${smsHealth.balance?.display || 'Connected'}) | Email: ${
+          primaryEmailHealthy ? 'SMTP Live' : 'Simulation Mode'
+        }`
+      : smsHealth.message,
+  };
+};
+
+/**
+ * Executes an interactive SMS health test via NextSMS and logs the result to Notification history.
+ */
+export const runSmsHealthTest = async ({ to, message, from, user = null }) => {
+  const startedAt = Date.now();
+  const settings = await getNotificationSettings();
+  const senderId = (from || settings.smsSenderId || process.env.NEXTSMS_SENDER_ID || 'ORDER').trim();
+  const formattedPhone = formatTanzanianPhone(to);
+  const testMessage =
+    (message && message.trim()) ||
+    `Tinzel SMS Health Check: Gateway verified at ${new Date().toISOString()}.`;
+
+  const notif = await sendNotification({
+    to: formattedPhone,
+    recipientName: user?.name || 'SMS Health Test',
+    recipientRole: user?.role || 'admin',
+    recipientUser: user?._id || null,
+    title: `SMS Health Test (${senderId})`,
+    channel: 'sms',
+    template: 'manual_test',
+    subject: `SMS Health Test (${senderId})`,
+    message: testMessage,
+    metadata: {
+      bypassSettings: true,
+      forceNextSms: true,
+      healthTest: true,
+      senderId,
+      triggeredBy: user?.email || 'system',
+    },
+  });
+
+  const latencyMs = Date.now() - startedAt;
+  const succeeded = notif.status === 'sent' || notif.status === 'delivered';
+
+  return {
+    success: succeeded,
+    latencyMs,
+    to: formattedPhone,
+    senderId,
+    mode: notif.mode,
+    status: notif.status,
+    messageId: notif.sid || null,
+    nextSmsStatus: notif.metadata?.nextSmsStatus || null,
+    smsCount: notif.metadata?.smsCount ?? 1,
+    price: notif.metadata?.price ?? null,
+    error: notif.error || null,
+    notification: notif,
+  };
+};
+
+/**
+ * Executes an interactive Email health test via Google SMTP (or simulation fallback) and logs to history.
+ */
+export const runEmailHealthTest = async ({ to, subject, message, user = null }) => {
+  if (!to || typeof to !== 'string' || !to.includes('@')) {
+    const error = new Error('A valid recipient email address ("to") is required.');
+    error.status = 400;
+    throw error;
+  }
+
+  const startedAt = Date.now();
+  const resolvedSubject =
+    (subject && subject.trim()) || 'Tinzel Email Health Check - SMTP Diagnostic';
+  const resolvedMessage =
+    (message && message.trim()) ||
+    `This is an automated Email Health Check dispatched from the Tinzel Notification Center at ${new Date().toISOString()}.`;
+
+  const tpl = emailTemplates.general_notification({
+    recipientName: user?.name || to.split('@')[0],
+    title: resolvedSubject,
+    message: resolvedMessage,
+  });
+
+  const notif = await sendNotification({
+    to: to.trim(),
+    recipientName: user?.name || to.trim(),
+    recipientRole: user?.role || 'admin',
+    recipientUser: user?._id || null,
+    title: resolvedSubject,
+    channel: 'email',
+    template: 'manual_test',
+    subject: resolvedSubject,
+    html: tpl.html,
+    message: resolvedMessage,
+    metadata: {
+      bypassSettings: true,
+      healthTest: true,
+      triggeredBy: user?.email || 'system',
+    },
+  });
+
+  const latencyMs = Date.now() - startedAt;
+  const succeeded = notif.status !== 'failed';
+
+  return {
+    success: succeeded,
+    latencyMs,
+    to: to.trim(),
+    subject: resolvedSubject,
+    mode: notif.mode,
+    status: notif.status,
+    messageId: notif.messageId || null,
+    error: notif.error || null,
+    notification: notif,
+  };
 };
