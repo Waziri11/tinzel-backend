@@ -40,13 +40,4 @@ export const openDraftPdf = (draft) => {
   throw error;
 };
 
-export const streamDraftPdf = (res, draft, { download = false } = {}) => {
-  const filename = (draft.originalName || `magazine-v${draft.versionNumber}.pdf`).replace(/["\r\n]/g, '');
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `${download ? 'attachment' : 'inline'}; filename="${filename}"`);
-  res.setHeader('Cache-Control', 'private, no-store, max-age=0');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  const stream = openDraftPdf(draft);
-  stream.on('error', (error) => { if (!res.headersSent) res.status(error.status || 404).json({ success: false, message: error.message }); else res.destroy(error); });
-  stream.pipe(res);
-};
+export const streamDraftPdf = (res) => res.status(403).json({ success: false, message: 'Original magazine files are restricted. Use the protected book reader.' });

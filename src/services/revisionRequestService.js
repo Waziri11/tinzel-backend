@@ -7,6 +7,7 @@ export const normalizeCorrectionItems = (body = {}) => {
   const raw = supplied.length ? supplied : body.feedback ? [{ text: body.feedback }] : [];
   const items = raw.map((item) => ({
     text: String(item?.text || '').trim(),
+    ...(item?.annotationId ? { annotationId: item.annotationId } : {}),
     pageReference: String(item?.pageReference || '').trim(),
   })).filter((item) => item.text);
   if (!items.length) {

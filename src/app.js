@@ -1,3 +1,4 @@
+import proofReaderRoutes from './routes/proofReader.routes.js';
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -74,6 +75,13 @@ app.use('/api', async (req, res, next) => {
 
 // Drafts are private and only stream through authenticated routes. Other legacy uploads remain available.
 app.use('/uploads/drafts', (_req, res) => res.status(404).json({ success: false, message: 'Not found' }));
+app.use('/uploads', (req, res, next) => {
+  try {
+    const normalized = path.posix.normalize(decodeURIComponent(req.path).replaceAll('\\', '/')).toLowerCase();
+    if (normalized === '/drafts' || normalized.startsWith('/drafts/')) return res.status(404).json({ message: 'Not found' });
+    next();
+  } catch { res.status(404).json({ message: 'Not found' }); }
+});
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Root Route
@@ -95,6 +103,26 @@ app.get('/', (req, res) => {
   });
 });
 
+// Remove private proof storage and unpublished annotations from all order responses.
+app.use((req, res, next) => {
+  const json = res.json.bind(res);
+  res.json = (body) => {
+    const clean = (value) => {
+      if (!value || typeof value !== 'object') return;
+      delete value.proofAnnotations;
+      if (String(value.action || '').startsWith('DRAFT_') && value.details) delete value.details.assetId;
+      if (Array.isArray(value.draftVersions)) value.draftVersions = value.draftVersions.map((draft) => {
+        const d = draft.toObject ? draft.toObject() : { ...draft };
+        for (const key of ['assetId', 'fileUrl', 'previewPages']) delete d[key];
+        return d;
+      });
+      for (const child of Object.values(value)) if (child && typeof child === 'object') clean(child);
+    };
+    const payload = JSON.parse(JSON.stringify(body)); clean(payload); return json(payload);
+  };
+  next();
+});
+app.use('/api/proofs', proofReaderRoutes);
 // Route Mounts
 app.use('/api/health', healthRoutes);
 app.use('/api/items', itemRoutes);
@@ -120,7 +148,7 @@ app.use((req, res) => {
 // Centralized Error Handler
 app.use((err, req, res, next) => {
   console.error('[Server Error]', err.stack || err.message);
-  res.status(err.status || 500).json({
+  res.status(err.name === 'VersionError' ? 409 : err.status || 500).json({
     success: false,
     message: err.message || 'Internal Server Error',
   });

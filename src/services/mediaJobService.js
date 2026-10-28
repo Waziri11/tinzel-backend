@@ -1,3 +1,4 @@
+import { buildProof } from './proofReaderService.js';
 import mongoose from 'mongoose';
 import { randomUUID, createHash } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
@@ -7,7 +8,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { ZipArchive } from 'archiver';
 import { del } from '@vercel/blob';
-import { MediaAsset, MediaJob, UploadSession } from '../models/Media.model.js';
+import { MediaAsset, MediaJob, UploadSession, ProofPage } from '../models/Media.model.js';
 import { Order } from '../models/Order.model.js';
 import { digest, blobPath } from './mediaSessionService.js';
 import { openAssetStream } from './mediaReadService.js';
@@ -29,13 +30,14 @@ export async function cleanDerivedMedia() {
   const cutoff = new Date(Date.now() - (Number(process.env.MEDIA_ARCHIVE_TTL_HOURS) || 24) * 3600000);
   await MediaJob.updateMany({ kind: 'archive', state: 'ready', completedAt: { $lt: cutoff },
     $or: [{ lastDownloadAt: null }, { lastDownloadAt: { $lt: new Date(Date.now() - 15 * 60000) } }] }, { $set: { state: 'expired' } });
-  const jobs = await MediaJob.find({ kind: { $in: ['archive', 'preview'] }, state: { $ne: 'running' }, 'outputIds.0': { $exists: true },
+  const jobs = await MediaJob.find({ kind: { $in: ['archive', 'preview', 'proof'] }, state: { $ne: 'running' }, 'outputIds.0': { $exists: true },
     $or: [{ state: { $in: ['expired', 'failed', 'queued'] } }, { 'outputIds.1': { $exists: true } }] }).limit(100).lean();
   for (const job of jobs) {
     for (const outputId of job.outputIds) {
       if (job.state === 'ready' && outputId === job.outputId) continue;
       if (job.kind === 'preview' && await MediaAsset.exists({ thumbnailId: outputId })) continue;
-      const prefix = job.kind === 'preview' ? 'mediaDerivatives' : 'mediaArchives';
+      if (job.kind === 'proof' && await ProofPage.exists({ imageId: new mongoose.Types.ObjectId(outputId) })) continue;
+      const prefix = job.kind === 'proof' ? 'proofPages' : job.kind === 'preview' ? 'mediaDerivatives' : 'mediaArchives';
       const id = new mongoose.Types.ObjectId(outputId);
       await mongoose.connection.db.collection(`${prefix}.files`).deleteOne({ _id: id });
       await mongoose.connection.db.collection(`${prefix}.chunks`).deleteMany({ files_id: id });
@@ -116,7 +118,7 @@ export async function runMediaJobs({ maxJobs = 100, budgetMs = 230000 } = {}) {
     await cleanDerivedMedia();
     while (count < maxJobs && Date.now() - started < budgetMs - 1000) {
       const outputId = new mongoose.Types.ObjectId().toString();
-      const job = await MediaJob.findOneAndUpdate({ kind: { $in: ['preview', 'archive'] }, attempts: { $lt: 3 }, $or: [
+      const job = await MediaJob.findOneAndUpdate({ kind: { $in: ['preview', 'archive', 'proof'] }, attempts: { $lt: 3 }, $or: [
         { state: 'queued', runAfter: { $lte: new Date() } }, { state: 'running', leaseUntil: { $lt: new Date() } },
       ] }, { $set: { state: 'running', owner, leaseUntil: new Date(Date.now() + 60000), outputId }, $push: { outputIds: outputId }, $inc: { attempts: 1 } },
       { sort: { kind: 1, createdAt: 1 }, returnDocument: 'after' }).lean();
@@ -132,7 +134,7 @@ export async function runMediaJobs({ maxJobs = 100, budgetMs = 230000 } = {}) {
         } catch { controller.abort(); }
       }, 15000);
       try {
-        if (job.kind === 'preview') await buildPreview(job, signal); else await buildArchive(job, signal);
+        if (job.kind === 'proof') await buildProof(job, signal); else if (job.kind === 'preview') await buildPreview(job, signal); else await buildArchive(job, signal);
         await MediaJob.updateOne({ _id: job._id, owner }, { $set: { state: 'ready', completedAt: new Date() } });
       } catch (error) {
         await MediaJob.updateOne({ _id: job._id, owner }, { $set: {

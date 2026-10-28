@@ -52,45 +52,25 @@ export const validateTransition = (currentStatus, targetStatus) => {
 export const sanitizeOrderForClient = (order) => {
   const obj = order.toObject ? order.toObject() : { ...order };
 
-  // Only expose draft versions if current status has passed manager review release gate
-  const clientCanSeeDraft = [
-    'client_review',
-    'revision_requested',
-    'client_approved',
-    'print_document_prep',
-    'print_manager_review',
-    'printing_sent',
-    'printing_in_progress',
-    'printing_completed',
-    'dispatched',
-    'delivered',
-    'closed',
-  ].includes(obj.status);
-
-  if (!clientCanSeeDraft) {
-    obj.draftVersions = [];
-  } else {
-    // Only the current manager-approved version is client-visible; storage identifiers never leave the API.
-    obj.draftVersions = obj.draftVersions.filter(
-      (v) => v.versionNumber === obj.currentDraftVersion && v.managerReview?.status === 'approved'
-    ).map((v) => ({
-      _id: v._id,
-      versionNumber: v.versionNumber,
-      uploadedAt: v.uploadedAt,
-      managerReview: { status: v.managerReview.status, reviewedAt: v.managerReview.reviewedAt },
-      clientReview: v.clientReview,
-    }));
-  }
+  // Previously released versions remain readable while replacement drafts stay private.
+  obj.draftVersions = (obj.draftVersions || []).filter(
+    (v) => v.managerReview?.status === 'approved'
+  ).map((v) => ({
+    _id: v._id, versionNumber: v.versionNumber, uploadedAt: v.uploadedAt,
+    managerReview: { status: v.managerReview.status, reviewedAt: v.managerReview.reviewedAt },
+    clientReview: v.clientReview,
+  }));
 
   obj.revisionRequests = (obj.revisionRequests || [])
     .filter((request) => request.source === 'client')
     .map((request) => ({
       _id: request._id, roundNumber: request.roundNumber, draftVersionNumber: request.draftVersionNumber,
       status: request.status, requestedAt: request.requestedAt, resolvedAt: request.resolvedAt,
-      items: (request.items || []).map((item) => ({ _id: item._id, text: item.text, pageReference: item.pageReference, status: item.status })),
+      items: (request.items || []).map((item) => ({ _id: item._id, annotationId: item.annotationId, text: item.text, pageReference: item.pageReference, status: item.status })),
     }));
 
   // Remove internal OTP details and internal staff identifiers
+  delete obj.proofAnnotations;
   delete obj.otp;
   delete obj.__v;
   delete obj.assignedDesigner;

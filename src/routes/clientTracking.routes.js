@@ -1,3 +1,4 @@
+import { assertNoPendingAnnotations, submitAnnotations } from '../services/proofReaderService.js';
 import { Router } from 'express';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
@@ -66,7 +67,7 @@ router.post('/request-otp', async (req, res) => {
       devOtp: process.env.NODE_ENV !== 'production' ? otpCode : undefined,
     });
   } catch (error) {
-    return res.status(error.status || 500).json({ success: false, message: error.message });
+    return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message });
   }
 });
 
@@ -105,7 +106,7 @@ router.post('/verify-otp', async (req, res) => {
       message: 'Access granted',
     });
   } catch (error) {
-    return res.status(error.status || 500).json({ success: false, message: error.message });
+    return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message });
   }
 });
 
@@ -123,7 +124,7 @@ router.get('/order', verifyClientToken, async (req, res) => {
     const sanitized = sanitizeOrderForClient(order);
     return res.status(200).json({ success: true, order: sanitized });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });
   }
 });
 
@@ -137,7 +138,7 @@ router.get('/draft/view', verifyClientToken, async (req, res) => {
       return res.status(404).json({ success: false, message: 'No magazine proof is currently available' });
     }
     return streamDraftPdf(res, draft);
-  } catch (error) { return res.status(error.status || 500).json({ success: false, message: error.message }); }
+  } catch (error) { return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message }); }
 });
 
 // Whole-Magazine Client Approval
@@ -166,6 +167,8 @@ router.post('/approve-draft', verifyClientToken, async (req, res) => {
       });
     }
 
+    assertExpectedVersion(order, req.body.expectedVersion);
+    assertNoPendingAnnotations(order, 'client');
     // Record Client Whole-Magazine Approval
     currentVersion.clientReview = {
       status: 'approved',
@@ -195,14 +198,13 @@ router.post('/approve-draft', verifyClientToken, async (req, res) => {
       order: sanitizeOrderForClient(order),
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });
   }
 });
 
 // Request Revisions (Restarts approval loop)
 router.post('/request-revision', verifyClientToken, async (req, res) => {
   try {
-    const items = normalizeCorrectionItems(req.body);
 
     const order = await Order.findById(req.clientAuth.orderId);
     if (!order) {
@@ -216,6 +218,8 @@ router.post('/request-revision', verifyClientToken, async (req, res) => {
       });
     }
     assertExpectedVersion(order, req.body.expectedVersion);
+
+    const items = normalizeCorrectionItems({ ...req.body, items: submitAnnotations(order, 'client', (Array.isArray(req.body.items) ? req.body.items : []).filter((i) => String(i?.text || '').trim()).map((i) => ({ text: i.text, pageReference: i.pageReference }))) });
 
     const currentVersion = order.draftVersions.find(
       (v) => v.versionNumber === order.currentDraftVersion
@@ -259,7 +263,7 @@ router.post('/request-revision', verifyClientToken, async (req, res) => {
       order: sanitizeOrderForClient(order),
     });
   } catch (error) {
-    return res.status(error.status || 500).json({ success: false, message: error.message });
+    return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message });
   }
 });
 

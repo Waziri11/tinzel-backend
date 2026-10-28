@@ -1,3 +1,4 @@
+import { enqueueProof } from '../services/proofReaderService.js';
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import { Order } from '../models/Order.model.js';
@@ -32,7 +33,7 @@ router.param('id', async (req, res, next, id) => {
     req.order = order;
     next();
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });
   }
 });
 
@@ -54,7 +55,7 @@ router.get('/orders', async (req, res) => {
 
     return res.status(200).json({ success: true, count: orders.length, orders });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });
   }
 });
 
@@ -133,7 +134,7 @@ router.get('/returns', async (req, res) => {
       page,
       pageCount: Math.max(1, Math.ceil(total / limit)),
     });
-  } catch (error) { return res.status(500).json({ success: false, message: error.message }); }
+  } catch (error) { return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message }); }
 });
 
 // Get single order with complete client assets & revision notes
@@ -144,20 +145,20 @@ router.get('/orders/:id', async (req, res) => {
     const auditLogs = await AuditLog.find({ orderId: order._id }).sort({ createdAt: -1 }).lean();
     return res.status(200).json({ success: true, order, auditLogs });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });
   }
 });
 
 router.get('/orders/:id/drafts/:version/view', async (req, res) => {
   const draft = req.order.draftVersions.find((item) => item.versionNumber === Number(req.params.version));
   if (!draft) return res.status(404).json({ success: false, message: 'Draft version not found' });
-  try { return streamDraftPdf(res, draft); } catch (error) { return res.status(error.status || 500).json({ success: false, message: error.message }); }
+  try { return streamDraftPdf(res, draft); } catch (error) { return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message }); }
 });
 
 router.get('/orders/:id/drafts/:version/download', requireRoles('manager', 'admin'), async (req, res) => {
   const draft = req.order.draftVersions.find((item) => item.versionNumber === Number(req.params.version));
   if (!draft) return res.status(404).json({ success: false, message: 'Draft version not found' });
-  try { return streamDraftPdf(res, draft, { download: true }); } catch (error) { return res.status(error.status || 500).json({ success: false, message: error.message }); }
+  try { return streamDraftPdf(res, draft, { download: true }); } catch (error) { return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message }); }
 });
 
 router.patch('/orders/:id/returns/:requestId/items/:itemId', requireRoles('designer', 'admin'), async (req, res) => {
@@ -172,7 +173,7 @@ router.patch('/orders/:id/returns/:requestId/items/:itemId', requireRoles('desig
     await AuditLog.create({ actor: { type: req.user.role, id: req.user._id, name: req.user.name }, action: 'CORRECTION_ITEM_ADDRESSED', orderId: req.order._id,
       details: { requestId: request._id, itemId: item._id, roundNumber: request.roundNumber } });
     return res.json({ success: true, request });
-  } catch (error) { return res.status(error.status || 500).json({ success: false, message: error.message }); }
+  } catch (error) { return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message }); }
 });
 
 // New clients prepare a cached archive and use a normal browser download.
@@ -201,7 +202,7 @@ router.get('/orders/:id/photo-folder.zip', async (req, res) => {
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', `attachment; filename="${photoArchiveFileName(req.order.trackingId || req.order.submissionId, req.query.folder)}"`);
   try { await createPhotoArchive(req.order, req.query.folder, res, controller.signal); }
-  catch (error) { if (res.headersSent) res.destroy(error); else res.status(error.status || 500).json({ message: error.message }); }
+  catch (error) { if (res.headersSent) res.destroy(error); else res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ message: error.message }); }
 });
 
 // Start Design
@@ -225,7 +226,7 @@ router.post('/orders/:id/start-design', requireRoles('designer', 'admin'), async
 
     return res.status(200).json({ success: true, message: 'Design status updated to in_design', order });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });
   }
 });
 
@@ -295,6 +296,7 @@ router.post(
         },
       });
 
+      await enqueueProof(order._id, nextVersion);
       await notifyDraftUploaded(order, nextVersion);
 
       return res.status(200).json({
@@ -303,8 +305,8 @@ router.post(
         order,
       });
     } catch (error) {
-      await deleteDraftPdf(assetId);
-      return res.status(error.status || 500).json({ success: false, message: error.message });
+      if (assetId && !await Order.exists({ 'draftVersions.assetId': assetId })) await deleteDraftPdf(assetId);
+      return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message });
     }
   }
 );
@@ -362,7 +364,7 @@ router.post('/orders/:id/upload-print-document', requireRoles('designer', 'admin
       order,
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });
   }
 });
 
@@ -391,7 +393,7 @@ router.post('/orders/:id/flag-issue', requireRoles('designer', 'admin'), async (
 
     return res.status(200).json({ success: true, message: 'Issue flagged for manager review', order });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });
   }
 });
 

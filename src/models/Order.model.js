@@ -75,8 +75,16 @@ const draftVersionSchema = new mongoose.Schema(
   { _id: true }
 );
 
+const proofAnnotationSchema = new mongoose.Schema({
+  version: Number, page: Number, kind: { type: String, enum: ['text', 'area'] },
+  rects: [{ x: Number, y: Number, width: Number, height: Number, _id: false }],
+  selectedText: String, text: String, source: { type: String, enum: ['manager', 'client'] },
+  authorId: String, authorName: String, createdAt: { type: Date, default: Date.now }, submittedAt: Date,
+});
+
 const correctionItemSchema = new mongoose.Schema({
   text: { type: String, required: true, trim: true },
+  annotationId: mongoose.Schema.Types.ObjectId,
   pageReference: { type: String, default: '', trim: true },
   status: { type: String, enum: ['open', 'addressed'], default: 'open' },
   designerResponse: { type: String, default: '', trim: true },
@@ -206,6 +214,7 @@ const orderSchema = new mongoose.Schema(
       type: String,
     },
     draftVersions: [draftVersionSchema],
+    proofAnnotations: { type: [proofAnnotationSchema], default: [] },
     revisionRequests: { type: [revisionRequestSchema], default: [] },
     currentDraftVersion: {
       type: Number,
@@ -273,6 +282,7 @@ const orderSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    optimisticConcurrency: true,
   }
 );
 

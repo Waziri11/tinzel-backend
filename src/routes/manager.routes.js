@@ -1,3 +1,4 @@
+import { pendingAnnotations, assertNoPendingAnnotations, submitAnnotations } from '../services/proofReaderService.js';
 import { Router } from 'express';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
@@ -34,7 +35,7 @@ const handleManagerError = (res, error) => {
   if (error instanceof ManagerWorkflowError) {
     return res.status(error.status).json({ success: false, message: error.message });
   }
-  return res.status(error.status || 500).json({ success: false, message: error.message });
+  return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message });
 };
 
 // Manager or Admin only for all manager routes
@@ -210,7 +211,7 @@ router.get('/orders/:id', async (req, res) => {
 
     return res.status(200).json({ success: true, order, auditLogs });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });
   }
 });
 
@@ -341,12 +342,13 @@ router.post('/orders/:id/hold', async (req, res) => {
 // Manager Review Draft: Approve/Release to Client OR Return to Designer
 router.post('/orders/:id/review-draft', async (req, res) => {
   try {
-    const { action, feedback, items } = validateDraftDecision(req.body);
     const order = await Order.findById(req.params.id);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
+    const saved = pendingAnnotations(order, 'manager');
+    const { action, feedback } = validateDraftDecision({ ...req.body, items: [...(Array.isArray(req.body.items) ? req.body.items : []), ...saved.map((a) => ({ text: a.text }))] });
     if (order.status !== 'draft_manager_review') {
       return res.status(400).json({
         success: false,
@@ -361,6 +363,7 @@ router.post('/orders/:id/review-draft', async (req, res) => {
     }
 
     if (action === 'release_to_client') {
+      assertNoPendingAnnotations(order, 'manager');
       currentDraft.managerReview = {
         status: 'approved',
         reviewedBy: req.user._id,
@@ -398,7 +401,7 @@ router.post('/orders/:id/review-draft', async (req, res) => {
       };
 
       closeActiveRevision(order, 'returned');
-      const correctionItems = normalizeCorrectionItems({ items, feedback });
+      const correctionItems = normalizeCorrectionItems({ items: submitAnnotations(order, 'manager', (Array.isArray(req.body.items) ? req.body.items : []).filter((i) => String(i?.text || '').trim()).map((i) => ({ text: i.text, pageReference: i.pageReference }))), feedback });
       const revisionRequest = createRevisionRequest(order, {
         source: 'manager',
         actor: { type: req.user.role, id: String(req.user._id), name: req.user.name },

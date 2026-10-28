@@ -23,6 +23,7 @@ export const MediaAsset = mongoose.model('MediaAsset', new mongoose.Schema({
 
 export const MediaJob = mongoose.model('MediaJob', new mongoose.Schema({
   _id: String, kind: String, assetId: String, orderId: mongoose.Schema.Types.ObjectId,
+  version: Number, page: Number,
   folder: String, state: { type: String, default: 'queued' }, attempts: { type: Number, default: 0 },
   leaseUntil: Date, runAfter: { type: Date, default: Date.now }, owner: String,
   outputId: String, outputIds: { type: [String], default: [] }, error: String, completedAt: Date, lastDownloadAt: Date,
@@ -32,3 +33,8 @@ export const MediaDownloadTicket = mongoose.model('MediaDownloadTicket', new mon
   _id: String, staffId: mongoose.Schema.Types.ObjectId, orderId: mongoose.Schema.Types.ObjectId,
   jobId: String, expiresAt: { type: Date, expires: 0 },
 }));
+
+export const ProofPage = mongoose.model('ProofPage', new mongoose.Schema({
+  orderId: mongoose.Schema.Types.ObjectId, version: Number, page: Number, width: Number, height: Number,
+  imageId: mongoose.Schema.Types.ObjectId, text: mongoose.Schema.Types.Mixed,
+}).index({ orderId: 1, version: 1, page: 1 }, { unique: true }));
