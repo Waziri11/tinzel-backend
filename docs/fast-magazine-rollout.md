@@ -94,3 +94,18 @@ npm run proof:smoke -- --function-dir /tmp/tinzel-proof-build/functions/index.fu
 ```
 
 A macOS build checks bundle completeness using macOS native dependencies; it is not Linux runtime proof. Deploy through the normal Vercel Linux build, rather than uploading this macOS prebuilt bundle. After the backend is deployed, retry preparation for the existing version; no source re-upload is needed. Confirm the production job becomes ready before calling the live failure resolved. Deployment was not performed during diagnosis.
+
+
+## Reader fit and performance update — 29 October 2026
+
+The shared reader now fits page surfaces to available width **and** height. Desktop uses a separate cover and book spreads, with a temporary two-sided 3D turning leaf using already decoded images. Mobile/touch devices remain single-page in portrait and landscape, with horizontal swipe navigation. Reduced-motion mode switches instantly. The comments drawer is closed initially and opens when a correction is selected; fullscreen portals the reader outside staff cards/modals and supports a viewport fallback when native fullscreen is unavailable. Fit/zoom, page jumps, fullscreen and comments remain available without the former stacked panels or empty sidebar.
+
+Cached page navigation no longer fetches metadata. It prepares the destination before replacing the current spread, keeps the old page visible during slow loads, and prioritizes the next spread ahead of other five-page batch assets. Annotation text spans are mounted only in text-selection mode. Page components are memoized so typing a correction does not rebuild each page's text layer. Page images retain their own aspect ratio, including rotated/landscape pages; annotation coordinates remain normalized to the actual displayed image.
+
+Backend metadata reads run in parallel and omit unrelated order photos/answers. Batch readiness uses one query instead of one request per page. Ready metadata requests do not enqueue jobs. PDF range reads now align with 1MiB GridFS chunks, avoiding repeated small reads that transfer and discard much of each stored chunk; the source is still private and range-based. `proof_page_phases` includes range-request counts.
+
+For Vercel deployments still using compatibility mode, authenticated preparation requests and completed resumable uploads now register a bounded `waitUntil` continuation. This starts requested-page work without waiting for the next minute's cron and without holding the HTTP response. The continuation uses existing job leases, permits one rendering loop per function instance, processes six jobs at a time within a 45-second budget, and bounds its pending version queue. Unfinished work stays durable in MongoDB for subsequent requests/cron. Set `PROOF_WORKER_MODE=dedicated` to retain exclusively dedicated rendering. Vercel's configured function duration still applies; this compatibility path does not provision Render or replace the large-file load-test release gates.
+
+Reference: [Vercel waitUntil](https://vercel.com/docs/functions/functions-api-reference/vercel-functions-package).
+
+The standalone Vercel bundle was rebuilt locally and passed the PDF/text/canvas/WebP smoke check with the new continuation dependency. This checks packaging on macOS; production execution latency and Linux resource use still require deployment verification. No deployment was performed for this update.

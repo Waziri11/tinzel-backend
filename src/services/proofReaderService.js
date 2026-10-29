@@ -5,6 +5,9 @@ import { MediaJob, ProofPage } from '../models/Media.model.js';
 import { Order } from '../models/Order.model.js';
 import { draftRangeSource } from './draftFileService.js';
 
+// Match draft GridFS chunk size: a 64KiB range previously fetched and discarded most
+// of a 1MiB stored chunk on every read. Larger aligned ranges also reduce remote Blob round trips.
+const PDF_RANGE_BYTES=1024*1024;
 const bucket = () => new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'proofPages' });
 export const proofJobId = (orderId, version, page = 0) => `proof:${orderId}:${version}:${page}`;
 export async function enqueueProof(orderId, version, page = 0, priority = 50) {
@@ -28,9 +31,8 @@ export async function requestProofBatch(orderId, version, pages) {
     const start = Math.floor((number - 1) / 5) * 5 + 1;
     for (let page = start; page < start + 5 && page <= meta.text.pageCount; page++) wanted.add(page);
   }
-  for (const page of wanted) {
-    if (!await ProofPage.exists({ orderId, version, page })) await enqueueProof(orderId, version, page, pages.includes(page) ? 400 : 100);
-  }
+  const ready=new Set((await ProofPage.find({orderId,version,page:{$in:[...wanted]}}).select('page -_id').lean()).map(p=>p.page));
+  await Promise.all([...wanted].filter(page=>!ready.has(page)).map(page=>enqueueProof(orderId,version,page,pages.includes(page)?400:100)));
 }
 export async function readBuffer(stream, maxBytes = 100 * 1024 * 1024, signal) {
   const abort=()=>stream.destroy(signal.reason);signal?.addEventListener('abort',abort,{once:true});
@@ -45,16 +47,16 @@ export async function openPrivatePdf(draft, signal) {
   const canvas = await import('@napi-rs/canvas');
   globalThis.DOMMatrix ??= canvas.DOMMatrix; globalThis.ImageData ??= canvas.ImageData; globalThis.Path2D ??= canvas.Path2D;
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const initial = new Uint8Array(await readBuffer(source.read(0, Math.min(65536, source.length),signal), 65536,signal));
+  const initial = new Uint8Array(await readBuffer(source.read(0, Math.min(PDF_RANGE_BYTES, source.length),signal), PDF_RANGE_BYTES,signal));
   const transport = new pdfjs.PDFDataRangeTransport(source.length, initial, true);
   let readSignal=signal;
-  let task, proxy, stopped = false, bytesRead = initial.length, rejectFailure;
+  let task, proxy, stopped = false, bytesRead = initial.length, rangeRequests=1, rejectFailure;
   const failure = new Promise((_, reject) => { rejectFailure = reject; });
   // Attach immediately so errors between parser operations cannot become unhandled rejections.
   failure.catch(() => {});
   const fail = (error) => { if (!stopped) { if(proxy)proxy.proofClosed=true; rejectFailure(error); task?.destroy().catch(() => {}); } };
   transport.requestDataRange = (start, end) => {
-    if (stopped) return;
+    if (stopped) return;rangeRequests++;
     readBuffer(source.read(start, end,readSignal), source.length,readSignal).then((bytes) => {
       readSignal?.throwIfAborted(); bytesRead += bytes.length;
       if (!stopped) transport.onDataRange(start, new Uint8Array(bytes));
@@ -63,14 +65,14 @@ export async function openPrivatePdf(draft, signal) {
   transport.abort = () => { stopped = true; };
   const abort = () => fail(signal.reason || new Error('Page preparation cancelled'));
   signal?.addEventListener('abort', abort, { once: true });
-  task = pdfjs.getDocument({ range: transport, length: source.length, rangeChunkSize: 65536, disableAutoFetch: true, disableStream: true, isEvalSupported: false, useSystemFonts: true });
+  task = pdfjs.getDocument({ range: transport, length: source.length, rangeChunkSize: PDF_RANGE_BYTES, disableAutoFetch: true, disableStream: true, isEvalSupported: false, useSystemFonts: true });
   try {
     signal?.throwIfAborted();
     const pdf = await Promise.race([task.promise, failure]);proxy=pdf;
     signal?.removeEventListener('abort',abort);
     const destroy = task.destroy.bind(task);
     pdf.proofFailure = failure;
-    pdf.proofBytesRead = () => bytesRead;
+    pdf.proofBytesRead = () => bytesRead;pdf.proofRangeRequests=()=>rangeRequests;
     pdf.proofClosed = false;pdf.proofCachedAt=Date.now();
     pdf.bindProofSignal=(jobSignal)=>{readSignal=jobSignal;const onAbort=()=>fail(jobSignal.reason);jobSignal?.addEventListener('abort',onAbort,{once:true});jobSignal?.throwIfAborted();return()=>{jobSignal?.removeEventListener('abort',onAbort);if(readSignal===jobSignal)readSignal=undefined;};};
     pdf.destroy = async () => { pdf.proofClosed = true; stopped = true; signal?.removeEventListener('abort', abort); await destroy(); };
@@ -130,7 +132,7 @@ export async function buildProof(job, signal, context = new Map()) {
         $set: { format: 'webp', renderVersion: 2, width: rendered.width, height: rendered.height, imageId: output.id, text: rendered.text },
       }, { upsert: true });
       if (old?.imageId) await bucket().delete(old.imageId).catch(() => {});
-      console.info(JSON.stringify({event:'proof_page_phases',job:job._id,sourceOpenMs:Math.round(openedAt-phaseStarted),renderMs:Math.round(renderedAt-openedAt),persistMs:Math.round(performance.now()-renderedAt),parserBytesRead:pdf.proofBytesRead(),outputBytes:rendered.image.length}));
+      console.info(JSON.stringify({event:'proof_page_phases',job:job._id,sourceOpenMs:Math.round(openedAt-phaseStarted),renderMs:Math.round(renderedAt-openedAt),persistMs:Math.round(performance.now()-renderedAt),parserBytesRead:pdf.proofBytesRead(),rangeRequests:pdf.proofRangeRequests(),outputBytes:rendered.image.length}));
     }
   } catch (error) { context.delete(key); await pdf.destroy(); throw error; } finally { unbind(); }
 }

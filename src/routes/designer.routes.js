@@ -1,3 +1,4 @@
+import {scheduleProofPreparation,afterProofResponse} from '../services/proofPreparationService.js';
 import { enqueueProof } from '../services/proofReaderService.js';
 import express, { Router } from 'express';
 import { DraftUpload } from '../models/DraftUpload.model.js';
@@ -254,7 +255,8 @@ router.post('/orders/:id/draft-uploads/:uploadId/checkpoint', requireRoles('desi
   res.json(await checkpointDraftUpload(session,req.body));
 }));
 router.post('/orders/:id/draft-uploads/:uploadId/complete', requireRoles('designer','admin'), draftRoute(async (req,res) => {
-  res.json(await finishDraftUpload(await getDraftUpload(req.params.uploadId,req.order._id,req.user._id),req.user));
+  const result=await finishDraftUpload(await getDraftUpload(req.params.uploadId,req.order._id,req.user._id),req.user);
+  scheduleProofPreparation(req.order._id,result.version,{startAfter:afterProofResponse(res)});res.json(result);
 }));
 router.delete('/orders/:id/draft-uploads/:uploadId', requireRoles('designer','admin'), draftRoute(async (req,res) => {
   const session=await getDraftUpload(req.params.uploadId,req.order._id,req.user._id);

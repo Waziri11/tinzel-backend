@@ -1,3 +1,4 @@
+import {scheduleProofPreparation,afterProofResponse} from '../services/proofPreparationService.js';
 import { publicProofDiagnostic } from '../services/proofDiagnostics.js';
 import { Router } from 'express';
 import mongoose from 'mongoose';
@@ -14,7 +15,7 @@ async function access(req, res, next) {
   try {
     const orderId = req.clientAuth?.orderId || req.params.id;
     if (!mongoose.isValidObjectId(orderId)) return res.status(404).json({ message: 'Order not found' });
-    const order = await Order.findById(orderId);
+    const order = await Order.findById(orderId).select('assignedDesigner status currentDraftVersion trackingId submissionId clientName draftVersions proofAnnotations');
     const version = Number(req.params.version);
     const draft = order?.draftVersions.find((d) => d.versionNumber === version);
     if (!order || !draft) return res.status(404).json({ message: 'Magazine version not found' });
@@ -41,12 +42,14 @@ function routes() {
   const r = Router({ mergeParams: true });
   const describe = async (req) => {
     const orderId=req.proofOrder._id, version=req.proofVersion;
-    const job = await MediaJob.findById(proofJobId(orderId,version)).lean();
-    const metadata=await ProofPage.findOne({orderId,version,page:0}).lean();
-    const pages=await ProofPage.find({orderId,version,page:{$gt:0}}).select('page width height -_id').lean();
+    const [job,metadata,pages,failed]=await Promise.all([
+      MediaJob.findById(proofJobId(orderId,version)).select('state').lean(),
+      ProofPage.findOne({orderId,version,page:0}).select('text').lean(),
+      ProofPage.find({orderId,version,page:{$gt:0}}).select('page width height -_id').lean(),
+      MediaJob.find({orderId,version,kind:'proof',requested:true,state:'failed'}).select('page errorCode errorReference attempts retryable _id').lean(),
+    ]);
     const pageCount=metadata?.text?.pageCount||0;
     const total=Math.min(5,pageCount);
-    const failed=await MediaJob.find({orderId,version,kind:'proof',requested:true,state:'failed'}).select('page errorCode errorReference attempts retryable _id').lean();
     const coverReady=pages.some((p)=>p.page===1);
     const diagnostic=failed.find((j)=>j.page===0)||failed.find((j)=>j.page===1);
     return {pageBundle:process.env.PROOF_PAGE_BUNDLE!=='false',coverReady,state:coverReady?'ready':job?.state||'queued',message:!coverReady&&diagnostic?publicProofDiagnostic(diagnostic).message:undefined,diagnostics:failed.map(publicProofDiagnostic),
@@ -54,7 +57,7 @@ function routes() {
       canComment:req.proofCanComment,annotations:visibleAnnotations(req)};
   };
   r.get('/',async(req,res,next)=>{
-    try { await requestProofBatch(req.proofOrder._id,req.proofVersion,[1]);res.json(await describe(req)); } catch(e){next(e);}
+    try { const data=await describe(req);if(!data.pageCount)await requestProofBatch(req.proofOrder._id,req.proofVersion,[1]);if(!data.coverReady)scheduleProofPreparation(req.proofOrder._id,req.proofVersion,{startAfter:afterProofResponse(res)});res.json(data); } catch(e){next(e);}
   });
   r.post('/prepare',async(req,res,next)=>{
     try {
@@ -62,14 +65,15 @@ function routes() {
       const metadata=await ProofPage.findOne({orderId:req.proofOrder._id,version:req.proofVersion,page:0}).lean();
       if(!Array.isArray(pages)||!pages.length||pages.length>2||pages.some((n)=>!Number.isInteger(n)||n<1||n>(metadata?.text?.pageCount||500)))return res.status(400).json({message:'Choose up to two valid pages to prepare'});
       await requestProofBatch(req.proofOrder._id,req.proofVersion,pages);
-      // Dedicated workers consume the queue; HTTP requests never perform rendering.
+      scheduleProofPreparation(req.proofOrder._id,req.proofVersion,{startAfter:afterProofResponse(res)});
+      // Dedicated workers or the bounded Vercel continuation consume the queue after response.
       res.json(await describe(req));
     }catch(e){next(e);}
   });
   r.post('/retry', async (req, res, next) => {
     try {
       await MediaJob.updateMany({ orderId: req.proofOrder._id, version: req.proofVersion, kind: 'proof', state: 'failed' }, { $set: { state: 'queued', attempts: 0, runAfter: new Date(), error: '', errorCode: null, errorReference: null } });
-      await enqueueProof(req.proofOrder._id, req.proofVersion); res.json({ success: true });
+      await enqueueProof(req.proofOrder._id, req.proofVersion);scheduleProofPreparation(req.proofOrder._id,req.proofVersion,{startAfter:afterProofResponse(res)}); res.json({ success: true });
     } catch (e) { next(e); }
   });
   r.get('/pages/:page', async (req, res, next) => {
@@ -81,6 +85,7 @@ function routes() {
         const metadata=await ProofPage.findOne({orderId:req.proofOrder._id,version:req.proofVersion,page:0}).lean();
         if(metadata&&number>metadata.text.pageCount)return res.status(404).json({message:'Page not found'});
         await requestProofBatch(req.proofOrder._id,req.proofVersion,[number]);
+        scheduleProofPreparation(req.proofOrder._id,req.proofVersion,{startAfter:afterProofResponse(res)});
         const job = await MediaJob.findById(proofJobId(req.proofOrder._id, req.proofVersion, number)).lean();
         return res.status(job?.state === 'failed' ? 422 : 202).json({ message: job?.state === 'failed' ? publicProofDiagnostic(job).message : 'Page is being prepared', ...(job?.state === 'failed' ? { diagnostic: publicProofDiagnostic(job) } : {}) });
       }
