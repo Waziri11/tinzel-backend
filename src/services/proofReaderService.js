@@ -171,7 +171,7 @@ async function makeWatermarkedPage(page, identity) {
     lines.forEach((line, index) => rows.push(`<text x="20" y="${y + index * (fontSize + 4)}" fill="#333" fill-opacity="0.30" font-size="${fontSize}" font-family="sans-serif">${escapeXml(line)}</text>`));
   }
   const overlay = Buffer.from(`<svg width="${page.width}" height="${page.height}" xmlns="http://www.w3.org/2000/svg">${rows.join('')}</svg>`);
-  return sharp(image).composite([{ input: overlay }]).webp({ quality: 85 }).toBuffer();
+  return sharp(image).composite([{ input: overlay }]).webp({ quality: 85, effort: 2 }).toBuffer();
 }
 export function pendingAnnotations(order, source) {
   return (order.proofAnnotations || []).filter((a) => a.version === order.currentDraftVersion && a.source === source && !a.submittedAt);

@@ -1,9 +1,11 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import app from '../src/app.js';
 import { Order } from '../src/models/Order.model.js';
+import { AuditLog } from '../src/models/AuditLog.model.js';
 import { MagazineForm } from '../src/models/MagazineForm.model.js';
 import { StaffUser } from '../src/models/StaffUser.model.js';
 import { MediaJob, ProofPage } from '../src/models/Media.model.js';
@@ -43,7 +45,7 @@ test('protected magazine review completes upload, render, manager and client cor
   const metadata=await request(path());assert.equal(metadata.data.pageCount,2,JSON.stringify(await MediaJob.find({kind:'proof'}).select('state error').lean()));assert.equal(metadata.data.pages.length,2);assert.equal(metadata.data.canComment,true);
   const positions=await request(path()+'/pages/1?text=1');assert.match(positions.data.text[0].str,/Magazine/);
   const rotated=await request(path()+'/pages/2?text=1');assert.ok(rotated.data.height>rotated.data.width);
-  const page=await fetch(base+path()+'/pages/1',{headers:{Authorization:`Bearer ${tokens.manager}`}});assert.equal(page.status,200);assert.match(page.headers.get('content-type'),/image\/webp/);assert.match(page.headers.get('cache-control'),/no-store/);const image=Buffer.from(await page.arrayBuffer());assert.ok(image.length>1000);
+  const page=await fetch(base+path()+'/pages/1',{headers:{Authorization:`Bearer ${tokens.manager}`}});assert.equal(page.status,200);assert.match(page.headers.get('content-type'),/image\/webp/);assert.match(page.headers.get('cache-control'),/no-store/);const image=Buffer.from(await page.arrayBuffer());assert.ok(image.length>1000);assert.match(page.headers.get('server-timing'),/watermark;dur=\d+, audit;dur=\d+/);assert.ok(await AuditLog.exists({orderId:order._id,action:'PROOF_PAGE_VIEWED','details.page':1}));
   const adminPage=await fetch(base+path()+'/pages/1',{headers:{Authorization:`Bearer ${tokens.admin}`}});assert.notDeepEqual(Buffer.from(await adminPage.arrayBuffer()),image);
   const bundleUrl=base+path()+'/pages/1?bundle=1&view=reader-session-test';
   const bundle=await fetch(bundleUrl,{headers:{Authorization:`Bearer ${tokens.manager}`}});assert.equal(bundle.status,200);assert.match(bundle.headers.get('content-type'),/application\/vnd.tinzel.proof-page/);assert.match(bundle.headers.get('cache-control'),/no-store/);
@@ -98,4 +100,18 @@ test('reader checks authentication, assignment, immutable historical annotations
   assert.equal((await request(path()+'/retry','manager',{})).status,200);
   assert.equal((await MediaJob.findById(`proof:${order._id}:1:0`)).state,'queued');
   const record=await Order.findById(order._id);const a=record.proofAnnotations[0];assert.equal((await request(path()+`/annotations/${a._id}`,'manager',undefined,'DELETE')).status,403);
+});
+
+
+test('comment retries are idempotent and mutation references are scoped to author, version and content',async()=>{
+  const record=await Order.create({submissionId:`SUB-${randomUUID()}`,formId:order.formId,clientName:'Comment retry test',clientWhatsApp:'0712000000',assignedDesigner:tokens.designerId,status:'draft_manager_review',currentDraftVersion:1,draftVersions:[{versionNumber:1,managerReview:{status:'pending'}}]});
+  await ProofPage.create({orderId:record._id,version:1,page:0,text:{pageCount:2}});
+  const url=`/api/proofs/staff/${record._id}/1/annotations`,body={...annotation,clientMutationId:randomUUID()};
+  const concurrent=await Promise.all([request(url,'manager',body),request(url,'manager',body)]);assert.ok(concurrent.every(r=>[200,409].includes(r.status)));assert.ok(concurrent.some(r=>r.status===200));
+  const retry=await request(url,'manager',body);assert.equal(retry.status,200);assert.equal(retry.data.annotations.length,1);assert.equal((await Order.findById(record._id)).proofAnnotations.length,1);
+  assert.equal((await request(url,'manager',{...body,text:'Different correction'})).status,409);
+  assert.equal((await request(url,'manager',{...body,rects:[null]})).status,409);
+  assert.equal((await request(url,'manager',{...body,clientMutationId:'bad-reference'})).status,400);
+  assert.equal((await request(url,'admin',body)).status,200);assert.equal((await Order.findById(record._id)).proofAnnotations.length,2);
+  assert.equal((await request(url,'designer',body)).status,403);
 });

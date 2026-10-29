@@ -15,7 +15,11 @@ async function access(req, res, next) {
   try {
     const orderId = req.clientAuth?.orderId || req.params.id;
     if (!mongoose.isValidObjectId(orderId)) return res.status(404).json({ message: 'Order not found' });
-    const order = await Order.findById(orderId).select('assignedDesigner status currentDraftVersion trackingId submissionId clientName draftVersions proofAnnotations');
+    // Page bytes need current permissions, not the entire annotation/history payload.
+    const pageRequest=/\/pages\/[^/]+$/.test(req.path);
+    const order = await Order.findById(orderId).select(pageRequest
+      ? 'assignedDesigner status currentDraftVersion trackingId submissionId clientName draftVersions.versionNumber draftVersions.managerReview __v'
+      : 'assignedDesigner status currentDraftVersion trackingId submissionId clientName draftVersions proofAnnotations __v');
     const version = Number(req.params.version);
     const draft = order?.draftVersions.find((d) => d.versionNumber === version);
     if (!order || !draft) return res.status(404).json({ message: 'Magazine version not found' });
@@ -90,12 +94,17 @@ function routes() {
         return res.status(job?.state === 'failed' ? 422 : 202).json({ message: job?.state === 'failed' ? publicProofDiagnostic(job).message : 'Page is being prepared', ...(job?.state === 'failed' ? { diagnostic: publicProofDiagnostic(job) } : {}) });
       }
       const identity = req.clientAuth ? `${req.proofOrder.clientName} (${req.proofOrder.trackingId})` : `${req.user.name} (${req.user.email})`;
-      await AuditLog.create({ actor: { type: req.clientAuth ? 'client' : req.user.role, name: identity }, action: 'PROOF_PAGE_VIEWED', orderId: req.proofOrder._id, details: { version: req.proofVersion, page: number } });
-      if (req.query.text === '1') return res.json({ width: page.width, height: page.height, text: page.text });
+      const recordView=()=>AuditLog.create({ actor: { type: req.clientAuth ? 'client' : req.user.role, name: identity }, action: 'PROOF_PAGE_VIEWED', orderId: req.proofOrder._id, details: { version: req.proofVersion, page: number } });
+      if (req.query.text === '1') { await recordView();return res.json({ width: page.width, height: page.height, text: page.text }); }
       const started=performance.now();
       const view = /^[a-zA-Z0-9-]{8,80}$/.test(req.query.view||'') ? req.query.view : '';
-      const image = await watermarkedPage(page, `${identity} · ${req.proofOrder.trackingId || req.proofOrder.submissionId} · v${req.proofVersion}`, view);
-      res.set('Server-Timing',`watermark;dur=${Math.round(performance.now()-started)}`);
+      let watermarkMs=0,auditMs=0;
+      // Keep audit durability before delivery, but overlap its database round trip with image work.
+      const [image] = await Promise.all([
+        watermarkedPage(page, `${identity} · ${req.proofOrder.trackingId || req.proofOrder.submissionId} · v${req.proofVersion}`, view).then(image=>{watermarkMs=performance.now()-started;return image;}),
+        recordView().then(()=>{auditMs=performance.now()-started;}),
+      ]);
+      res.set('Server-Timing',`watermark;dur=${Math.round(watermarkMs)}, audit;dur=${Math.round(auditMs)}`);
       if(req.query.bundle==='1' && process.env.PROOF_PAGE_BUNDLE !== 'false'){
         const metadata=Buffer.from(JSON.stringify({width:page.width,height:page.height,text:page.text}));
         const length=Buffer.alloc(4);length.writeUInt32BE(metadata.length);
@@ -116,11 +125,21 @@ function routes() {
       if (!req.proofCanComment) return res.status(403).json({ message: 'This version is not open for your review' });
       const { page, rects, kind } = req.body;
       const text = String(req.body.text || '').trim();
+      const clientMutationId=req.body.clientMutationId;
+      if(clientMutationId!==undefined&&!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(clientMutationId))return res.status(400).json({message:'Invalid comment save reference'});
+      const authorId=String(req.user?._id||req.proofOrder._id);
+      const existing=clientMutationId&&req.proofOrder.proofAnnotations.find(a=>a.clientMutationId===clientMutationId&&a.authorId===authorId&&a.source===req.proofSource&&a.version===req.proofVersion);
+      if(existing){
+        const clean=items=>items.map(rect=>rect&&typeof rect==='object'?{x:rect.x,y:rect.y,width:rect.width,height:rect.height}:null);
+        if(existing.page!==page||existing.kind!==kind||existing.text!==text||existing.selectedText!==String(req.body.selectedText||'').slice(0,8000)||!Array.isArray(rects)||JSON.stringify(clean(existing.rects))!==JSON.stringify(clean(rects)))return res.status(409).json({message:'This save reference was already used for a different comment'});
+        return res.json({annotations:visibleAnnotations(req)});
+      }
+
       const metadata = await ProofPage.findOne({ orderId: req.proofOrder._id, version: req.proofVersion, page: 0 });
       if (!Number.isInteger(page) || page < 1 || page > (metadata?.text?.pageCount || 0) || !['text', 'area'].includes(kind) || !text || text.length > 4000 || !Array.isArray(rects) || !rects.length || rects.length > 200 || rects.some((r) => !['x','y','width','height'].every((k) => Number.isFinite(r[k]) && r[k] >= 0 && r[k] <= 1) || !r.width || !r.height || r.x + r.width > 1.002 || r.y + r.height > 1.002)) return res.status(400).json({ message: 'Choose a valid page selection and a comment of up to 4000 characters' });
       if (req.proofOrder.proofAnnotations.length >= 2000) return res.status(400).json({ message: 'This magazine has reached its comment limit' });
-      req.proofOrder.proofAnnotations.push({ version: req.proofVersion, page, rects, kind, text, selectedText: String(req.body.selectedText || '').slice(0, 8000), source: req.proofSource,
-        authorId: String(req.user?._id || req.proofOrder._id), authorName: req.user?.name || req.proofOrder.clientName });
+      req.proofOrder.proofAnnotations.push({ clientMutationId, version: req.proofVersion, page, rects, kind, text, selectedText: String(req.body.selectedText || '').slice(0, 8000), source: req.proofSource,
+        authorId, authorName: req.user?.name || req.proofOrder.clientName });
       await req.proofOrder.save(); res.json({ annotations: visibleAnnotations(req) });
     } catch (e) { next(e); }
   });
