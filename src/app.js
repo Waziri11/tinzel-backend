@@ -110,10 +110,11 @@ app.use((req, res, next) => {
     const clean = (value) => {
       if (!value || typeof value !== 'object') return;
       delete value.proofAnnotations;
+      delete value.draftEvents;
       if (String(value.action || '').startsWith('DRAFT_') && value.details) delete value.details.assetId;
       if (Array.isArray(value.draftVersions)) value.draftVersions = value.draftVersions.map((draft) => {
         const d = draft.toObject ? draft.toObject() : { ...draft };
-        for (const key of ['assetId', 'fileUrl', 'previewPages', 'uploadSessionId']) delete d[key];
+        for (const key of ['assetId', 'fileUrl', 'previewPages', 'uploadSessionId', 'blobPath', 'storageProvider']) delete d[key];
         return d;
       });
       for (const child of Object.values(value)) if (child && typeof child === 'object') clean(child);

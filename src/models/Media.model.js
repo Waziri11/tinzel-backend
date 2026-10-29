@@ -25,9 +25,10 @@ export const MediaJob = mongoose.model('MediaJob', new mongoose.Schema({
   _id: String, kind: String, assetId: String, orderId: mongoose.Schema.Types.ObjectId,
   version: Number, page: Number, priority: { type: Number, default: 0 }, requested: Boolean,
   folder: String, state: { type: String, default: 'queued' }, attempts: { type: Number, default: 0 },
+  errorCode: String, errorReference: String, errorName: String, retryable: Boolean, attemptHistory: { type: [mongoose.Schema.Types.Mixed], default: [] },
   leaseUntil: Date, runAfter: { type: Date, default: Date.now }, owner: String,
   outputId: String, outputIds: { type: [String], default: [] }, error: String, completedAt: Date, lastDownloadAt: Date,
-}, { timestamps: true }));
+}, { timestamps: true }).index({ kind: 1, state: 1, requested: 1, priority: -1, runAfter: 1, createdAt: 1 }));
 
 export const MediaDownloadTicket = mongoose.model('MediaDownloadTicket', new mongoose.Schema({
   _id: String, staffId: mongoose.Schema.Types.ObjectId, orderId: mongoose.Schema.Types.ObjectId,
@@ -36,5 +37,5 @@ export const MediaDownloadTicket = mongoose.model('MediaDownloadTicket', new mon
 
 export const ProofPage = mongoose.model('ProofPage', new mongoose.Schema({
   orderId: mongoose.Schema.Types.ObjectId, version: Number, page: Number, width: Number, height: Number,
-  imageId: mongoose.Schema.Types.ObjectId, text: mongoose.Schema.Types.Mixed,
+  imageId: mongoose.Schema.Types.ObjectId, format: String, renderVersion: { type: Number, default: 1 }, text: mongoose.Schema.Types.Mixed,
 }).index({ orderId: 1, version: 1, page: 1 }, { unique: true }));

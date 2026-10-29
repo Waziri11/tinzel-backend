@@ -1,0 +1,11 @@
+FROM node:24-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY --chown=node:node src ./src
+COPY --chown=node:node scripts ./scripts
+ENV NODE_ENV=production PROOF_WORKER_MODE=dedicated PROOF_PROCESS_COUNT=2
+USER node
+RUN node scripts/proofSmoke.js
+CMD ["node", "scripts/proofWorker.js"]

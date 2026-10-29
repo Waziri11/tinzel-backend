@@ -1,0 +1,19 @@
+# Select region by measured database latency BEFORE importing. This template does not deploy itself.
+services:
+  - type: worker
+    name: tinzel-proof-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile.proof-worker
+    plan: 4c-8g
+    numInstances: 2
+    region: REPLACE_WITH_MEASURED_REGION
+    autoDeployTrigger: off
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: DRAFT_BLOB_READ_WRITE_TOKEN
+        sync: false
+      - key: PROOF_WORKER_MODE
+        value: dedicated
+      - key: PROOF_PROCESS_COUNT
+        value: "2"

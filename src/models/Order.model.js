@@ -27,6 +27,7 @@ const draftVersionSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
+    storageProvider: String, blobPath: String,
     fileUrl: { type: String, default: '' },
     uploadSessionId: { type: mongoose.Schema.Types.ObjectId },
     assetId: { type: mongoose.Schema.Types.ObjectId },
@@ -215,6 +216,7 @@ const orderSchema = new mongoose.Schema(
       type: String,
     },
     draftVersions: [draftVersionSchema],
+    draftEvents: { type: [new mongoose.Schema({ key: String, version: Number, state: String, actor: mongoose.Schema.Types.Mixed, createdAt: Date, completedAt: Date, attempts: Number, owner: String, leaseUntil: Date, runAfter: Date, error: String }, { _id: false })], default: [] },
     proofAnnotations: { type: [proofAnnotationSchema], default: [] },
     revisionRequests: { type: [revisionRequestSchema], default: [] },
     currentDraftVersion: {

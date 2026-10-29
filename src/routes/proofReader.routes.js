@@ -1,4 +1,4 @@
-import { runMediaJobs } from '../services/mediaJobService.js';
+import { publicProofDiagnostic } from '../services/proofDiagnostics.js';
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import { Order } from '../models/Order.model.js';
@@ -41,13 +41,15 @@ function routes() {
   const r = Router({ mergeParams: true });
   const describe = async (req) => {
     const orderId=req.proofOrder._id, version=req.proofVersion;
-    const job = await enqueueProof(orderId,version);
+    const job = await MediaJob.findById(proofJobId(orderId,version)).lean();
     const metadata=await ProofPage.findOne({orderId,version,page:0}).lean();
     const pages=await ProofPage.find({orderId,version,page:{$gt:0}}).select('page width height -_id').lean();
     const pageCount=metadata?.text?.pageCount||0;
     const total=Math.min(5,pageCount);
-    const failed=await MediaJob.find({orderId,version,kind:'proof',requested:true,state:'failed'}).select('page -_id').lean();
-    return {state:job.state,message:job.state==='failed'?'Magazine preparation failed. Retry preparation or contact staff.':undefined,
+    const failed=await MediaJob.find({orderId,version,kind:'proof',requested:true,state:'failed'}).select('page errorCode errorReference attempts retryable _id').lean();
+    const coverReady=pages.some((p)=>p.page===1);
+    const diagnostic=failed.find((j)=>j.page===0)||failed.find((j)=>j.page===1);
+    return {pageBundle:process.env.PROOF_PAGE_BUNDLE!=='false',coverReady,state:coverReady?'ready':job?.state||'queued',message:!coverReady&&diagnostic?publicProofDiagnostic(diagnostic).message:undefined,diagnostics:failed.map(publicProofDiagnostic),
       pageCount,pages,opening:{total,ready:pages.filter((p)=>p.page<=total).length},failedPages:failed.map((j)=>j.page),
       canComment:req.proofCanComment,annotations:visibleAnnotations(req)};
   };
@@ -60,15 +62,13 @@ function routes() {
       const metadata=await ProofPage.findOne({orderId:req.proofOrder._id,version:req.proofVersion,page:0}).lean();
       if(!Array.isArray(pages)||!pages.length||pages.length>2||pages.some((n)=>!Number.isInteger(n)||n<1||n>(metadata?.text?.pageCount||500)))return res.status(400).json({message:'Choose up to two valid pages to prepare'});
       await requestProofBatch(req.proofOrder._id,req.proofVersion,pages);
-      // Await bounded work so navigation does not depend on the next minute's cron.
-      await runMediaJobs({maxJobs:6,budgetMs:55000,proofFilter:{orderId:req.proofOrder._id,version:req.proofVersion}});
-      await requestProofBatch(req.proofOrder._id,req.proofVersion,pages);
+      // Dedicated workers consume the queue; HTTP requests never perform rendering.
       res.json(await describe(req));
     }catch(e){next(e);}
   });
   r.post('/retry', async (req, res, next) => {
     try {
-      await MediaJob.updateMany({ orderId: req.proofOrder._id, version: req.proofVersion, kind: 'proof', state: 'failed' }, { $set: { state: 'queued', attempts: 0, runAfter: new Date(), error: '' } });
+      await MediaJob.updateMany({ orderId: req.proofOrder._id, version: req.proofVersion, kind: 'proof', state: 'failed' }, { $set: { state: 'queued', attempts: 0, runAfter: new Date(), error: '', errorCode: null, errorReference: null } });
       await enqueueProof(req.proofOrder._id, req.proofVersion); res.json({ success: true });
     } catch (e) { next(e); }
   });
@@ -82,14 +82,29 @@ function routes() {
         if(metadata&&number>metadata.text.pageCount)return res.status(404).json({message:'Page not found'});
         await requestProofBatch(req.proofOrder._id,req.proofVersion,[number]);
         const job = await MediaJob.findById(proofJobId(req.proofOrder._id, req.proofVersion, number)).lean();
-        return res.status(job?.state === 'failed' ? 422 : 202).json({ message: job?.state === 'failed' ? 'Page preparation failed. Retry preparation.' : 'Page is being prepared' });
+        return res.status(job?.state === 'failed' ? 422 : 202).json({ message: job?.state === 'failed' ? publicProofDiagnostic(job).message : 'Page is being prepared', ...(job?.state === 'failed' ? { diagnostic: publicProofDiagnostic(job) } : {}) });
       }
       const identity = req.clientAuth ? `${req.proofOrder.clientName} (${req.proofOrder.trackingId})` : `${req.user.name} (${req.user.email})`;
       await AuditLog.create({ actor: { type: req.clientAuth ? 'client' : req.user.role, name: identity }, action: 'PROOF_PAGE_VIEWED', orderId: req.proofOrder._id, details: { version: req.proofVersion, page: number } });
       if (req.query.text === '1') return res.json({ width: page.width, height: page.height, text: page.text });
-      const image = await watermarkedPage(page, `${identity} · ${req.proofOrder.trackingId || req.proofOrder.submissionId} · v${req.proofVersion} · ${new Date().toISOString()}`);
+      const started=performance.now();
+      const view = /^[a-zA-Z0-9-]{8,80}$/.test(req.query.view||'') ? req.query.view : '';
+      const image = await watermarkedPage(page, `${identity} · ${req.proofOrder.trackingId || req.proofOrder.submissionId} · v${req.proofVersion}`, view);
+      res.set('Server-Timing',`watermark;dur=${Math.round(performance.now()-started)}`);
+      if(req.query.bundle==='1' && process.env.PROOF_PAGE_BUNDLE !== 'false'){
+        const metadata=Buffer.from(JSON.stringify({width:page.width,height:page.height,text:page.text}));
+        const length=Buffer.alloc(4);length.writeUInt32BE(metadata.length);
+        return res.type('application/vnd.tinzel.proof-page').send(Buffer.concat([length,metadata,image]));
+      }
       res.type('webp').send(image);
     } catch (e) { next(e); }
+  });
+  r.get('/diagnostics', async(req,res,next)=>{
+    try{
+      if(!req.user||!['manager','admin'].includes(req.user.role))return res.status(403).json({message:'Staff diagnostics permission required'});
+      const jobs=await MediaJob.find({orderId:req.proofOrder._id,version:req.proofVersion,kind:'proof'}).select('page state attempts error errorCode errorName errorReference attemptHistory leaseUntil updatedAt').lean();
+      res.json({jobs});
+    }catch(e){next(e);}
   });
   r.post('/annotations', async (req, res, next) => {
     try {

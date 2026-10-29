@@ -45,6 +45,13 @@ test('protected magazine review completes upload, render, manager and client cor
   const rotated=await request(path()+'/pages/2?text=1');assert.ok(rotated.data.height>rotated.data.width);
   const page=await fetch(base+path()+'/pages/1',{headers:{Authorization:`Bearer ${tokens.manager}`}});assert.equal(page.status,200);assert.match(page.headers.get('content-type'),/image\/webp/);assert.match(page.headers.get('cache-control'),/no-store/);const image=Buffer.from(await page.arrayBuffer());assert.ok(image.length>1000);
   const adminPage=await fetch(base+path()+'/pages/1',{headers:{Authorization:`Bearer ${tokens.admin}`}});assert.notDeepEqual(Buffer.from(await adminPage.arrayBuffer()),image);
+  const bundleUrl=base+path()+'/pages/1?bundle=1&view=reader-session-test';
+  const bundle=await fetch(bundleUrl,{headers:{Authorization:`Bearer ${tokens.manager}`}});assert.equal(bundle.status,200);assert.match(bundle.headers.get('content-type'),/application\/vnd.tinzel.proof-page/);assert.match(bundle.headers.get('cache-control'),/no-store/);
+  const packed=Buffer.from(await bundle.arrayBuffer()),length=packed.readUInt32BE(0),geometry=JSON.parse(packed.subarray(4,4+length));assert.match(geometry.text[0].str,/Magazine/);assert.ok(packed.length>length+1000);
+  const cached=await fetch(bundleUrl,{headers:{Authorization:`Bearer ${tokens.manager}`}});assert.deepEqual(Buffer.from(await cached.arrayBuffer()),packed);
+  const isolated=await fetch(bundleUrl,{headers:{Authorization:`Bearer ${tokens.admin}`}});assert.notDeepEqual(Buffer.from(await isolated.arrayBuffer()),packed);
+  assert.equal((await request(path()+'/diagnostics','designer')).status,403);assert.equal((await request(path()+'/diagnostics','manager')).status,200);
+
   for(const role of ['designer','manager','admin']) for(const suffix of ['view','download']) assert.equal((await request(`/api/designer/orders/${order._id}/drafts/1/${suffix}`,role)).status,403);
   assert.equal((await request('/api/client/draft/view','client')).status,404);
   assert.equal((await fetch(base+'/uploads/drafts/legacy.pdf')).status,404);
@@ -87,7 +94,7 @@ test('reader checks authentication, assignment, immutable historical annotations
   const other=await StaffUser.create({name:'Other',email:'other@example.test',role:'designer',passwordHash:'unused'});tokens.other=generateToken(other);
   assert.equal((await request(path(),'other')).status,403);
   await MediaJob.updateOne({_id:`proof:${order._id}:1:0`},{$set:{state:'failed',attempts:3}});
-  assert.equal((await request(path())).data.state,'failed');
+  const reopened=(await request(path())).data;assert.equal(reopened.state,'ready');assert.equal(reopened.coverReady,true);assert.equal(reopened.diagnostics.length,1);
   assert.equal((await request(path()+'/retry','manager',{})).status,200);
   assert.equal((await MediaJob.findById(`proof:${order._id}:1:0`)).state,'queued');
   const record=await Order.findById(order._id);const a=record.proofAnnotations[0];assert.equal((await request(path()+`/annotations/${a._id}`,'manager',undefined,'DELETE')).status,403);

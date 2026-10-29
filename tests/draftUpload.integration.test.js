@@ -1,10 +1,13 @@
-import { test,before,after } from 'node:test';
+import { test,before,after,mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp,open,rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import express from 'express';
+import {Readable} from 'node:stream';
+import {privateDraftStorage,BLOB_PART_BYTES} from '../src/services/privateDraftStorage.js';
+import {runDraftOutbox} from '../src/services/draftOutboxService.js';
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import app from '../src/app.js';
@@ -68,9 +71,11 @@ for(const size of [120*1024*1024,MAX_DRAFT_BYTES])test(`valid ${size/1024/1024} 
     const persisted=await Order.findById(order._id);const pdf=await openPrivatePdf(persisted.draftVersions[0],AbortSignal.timeout(30000));
     assert.equal(pdf.numPages,12);await pdf.getPage(1);const read=pdf.proofBytesRead();assert.ok(read<3*1024*1024,`Range parser read ${read} bytes`);await pdf.destroy();
     const proof=`${base}/api/proofs/staff/${order._id}/1`;
-    const prepare=await fetch(proof+'/prepare',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({pages:[1]})});const ready=await prepare.json();assert.equal(prepare.status,200,JSON.stringify(ready));assert.equal(ready.opening.ready,5);
+    const prepare=await fetch(proof+'/prepare',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({pages:[1]})});const ready=await prepare.json();assert.equal(prepare.status,200,JSON.stringify(ready));assert.equal(ready.opening.ready,0);
+    await runMediaJobs({maxJobs:6,proofFilter:{orderId:order._id,version:1}});
+    assert.equal((await (await fetch(proof,{headers:{Authorization:`Bearer ${token}`}})).json()).opening.ready,5);
     assert.equal(await MediaJob.countDocuments({orderId:order._id,page:{$gt:5}}),0);
-    const later=await fetch(proof+'/prepare',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({pages:[10,11]})});const laterData=await later.json();assert.equal(later.status,200);if(laterData.pages.length<12)await runMediaJobs({maxJobs:6,proofFilter:{orderId:order._id,version:1}});
+    const later=await fetch(proof+'/prepare',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({pages:[10,11]})});const laterData=await later.json();assert.equal(later.status,200);if(laterData.pages.length<12)await runMediaJobs({maxJobs:10,proofFilter:{orderId:order._id,version:1}});
     assert.equal(await ProofPage.countDocuments({orderId:order._id,page:{$in:[10,11,12]}}),3);
     console.info(JSON.stringify({event:'large_draft_validation',sizeBytes:size,durationMs:Math.round(performance.now()-started),peakRssBytes:peak,parserBytesRead:read}));
   }finally{await file.close();}
@@ -115,8 +120,8 @@ async function imageProofFile(size){
   for(let i=0;i<5;i++){tail=tail.replace(/startxref\n\d+/,`startxref\n${size-Buffer.byteLength(tail)}`);header=`${extra} 0 obj\n<< /Length ${size-position-Buffer.byteLength(header)-end.length-Buffer.byteLength(tail)} >>\nstream\n`;}
   await write(header);await file.write(end,0,end.length,size-Buffer.byteLength(tail)-end.length);await file.write(Buffer.from(tail),0,Buffer.byteLength(tail),size-Buffer.byteLength(tail));return file;
 }
-test('image-heavy 120 MB proof opens five pages without preparing the remaining fifteen',{timeout:180000},async()=>{
-  const size=120*1024*1024,order=await newOrder(),file=await imageProofFile(size);let peak=process.memoryUsage().rss;
+test('image-heavy 150 MiB proof opens five pages without preparing the remaining fifteen',{timeout:180000},async()=>{
+  const size=150*1024*1024,order=await newOrder(),file=await imageProofFile(size);let peak=process.memoryUsage().rss;
   const monitor=setInterval(()=>peak=Math.max(peak,process.memoryUsage().rss),20);
   try{
     const session=(await request(order,'',input(size))).data;const buffer=Buffer.alloc(DRAFT_CHUNK_BYTES);
@@ -148,4 +153,28 @@ test('correction completion is checked when creating and committing a session',a
   assert.equal((await part(order,created.data,0,proofPdf())).status,200);
   round.items[0].status='open';await order.save();const commit=await request(order,`/${created.data.id}/complete`,{});assert.equal(commit.status,409);assert.match(commit.data.message,/verify every/);
   assert.equal((await Order.findById(order._id)).draftVersions.length,0);
+});
+
+test('private Blob sessions commit once without proxying PDF bytes and keep durable notification events',async()=>{
+ const oldProvider=process.env.DRAFT_UPLOAD_PROVIDER;process.env.DRAFT_UPLOAD_PROVIDER='blob';process.env.DRAFT_BLOB_READ_WRITE_TOKEN='test-only';
+ const size=150*1024*1024;let removed;
+ const mocks=[mock.method(privateDraftStorage,'authorize',async s=>({token:`scoped:${s.blobPath}`,validUntil:Date.now()+3600000})),mock.method(privateDraftStorage,'inspect',async()=>({size,contentType:'application/pdf'})),mock.method(privateDraftStorage,'range',async()=>Readable.from(Buffer.from('%PDF-'))),mock.method(privateDraftStorage,'remove',async p=>{removed=p;})];
+ try{
+  const order=await newOrder(),session=(await request(order,'',input(size))).data;assert.equal(session.provider,'blob');assert.equal(session.chunkBytes,BLOB_PART_BYTES);assert.equal(session.concurrency,4);
+  assert.equal((await part(order,session,0,proofPdf())).status,400);
+  assert.equal((await request(order,`/${session.id}/complete`,{})).status,409);
+  const other=await StaffUser.create({name:'Blob outsider',email:'bloboutsider@example.test',role:'designer',passwordHash:'unused'});
+  assert.equal((await request(order,`/${session.id}`,undefined,'GET',generateToken(other))).status,403);
+  const count=Math.ceil(size/BLOB_PART_BYTES),parts=Array.from({length:count},(_,i)=>({partNumber:i+1,etag:`etag-${i+1}`,sha256:'a'.repeat(64)}));
+  const checkpoint=parts=>request(order,`/${session.id}/checkpoint`,{multipartId:'multipart',multipartKey:'key',parts});
+  for(let i=0;i<count;i+=4)assert.equal((await checkpoint(parts.slice(i,i+4))).status,200);
+  assert.equal((await checkpoint([{...parts[0],sha256:'b'.repeat(64)}])).status,409);
+  const complete=await request(order,`/${session.id}/complete`,{});assert.equal(complete.status,200,JSON.stringify(complete.data));assert.equal(complete.data.order.draftVersions[0].blobPath,undefined);assert.equal(complete.data.order.draftEvents,undefined);
+  assert.equal((await request(order,`/${session.id}/complete`,{})).status,200);
+  let saved=await Order.findById(order._id);assert.equal(saved.draftVersions.length,1);assert.equal(saved.draftEvents.length,1);assert.equal(saved.draftEvents[0].state,'pending');assert.equal(saved.draftVersions[0].storageProvider,'blob');
+  assert.equal(await mongoose.connection.db.collection('draftFiles.chunks').countDocuments({files_id:(await DraftUpload.findById(session.id)).assetId}),0);
+  await runDraftOutbox();saved=await Order.findById(order._id);assert.equal(saved.draftEvents[0].state,'done');
+  const abandonedOrder=await newOrder(),abandoned=(await request(abandonedOrder,'',input(size))).data;
+  await request(abandonedOrder,`/${abandoned.id}`,undefined,'DELETE');await DraftUpload.updateOne({_id:abandoned.id},{$set:{expiresAt:new Date(Date.now()-1000)}});await cleanExpiredDraftUploads();assert.equal(removed,abandoned.pathname);assert.equal(await DraftUpload.findById(abandoned.id),null);
+ }finally{for(const m of mocks)m.mock.restore();if(oldProvider===undefined)delete process.env.DRAFT_UPLOAD_PROVIDER;else process.env.DRAFT_UPLOAD_PROVIDER=oldProvider;delete process.env.DRAFT_BLOB_READ_WRITE_TOKEN;}
 });

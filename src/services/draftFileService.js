@@ -1,3 +1,4 @@
+import { privateDraftStorage } from './privateDraftStorage.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -44,6 +45,10 @@ export const streamDraftPdf = (res) => res.status(403).json({ success: false, me
 
 // Internal range access only: no endpoint exposes the original PDF.
 export async function draftRangeSource(draft) {
+  if (draft.storageProvider === 'blob') {
+    const info = await privateDraftStorage.inspect(draft.blobPath);
+    return { length: info.size, read: (start,end,signal) => Readable.from((async function*(){ const source=await privateDraftStorage.range(draft.blobPath,start,end,signal); try { for await(const chunk of source)yield chunk; }finally{source.destroy();} })()) };
+  }
   if (draft.assetId) {
     const file = await mongoose.connection.db.collection('draftFiles.files').findOne({ _id: new mongoose.Types.ObjectId(draft.assetId) });
     if (!file) throw Object.assign(new Error('Draft PDF is unavailable'), { status: 404 });

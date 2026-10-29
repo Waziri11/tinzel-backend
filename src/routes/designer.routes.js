@@ -1,7 +1,7 @@
 import { enqueueProof } from '../services/proofReaderService.js';
 import express, { Router } from 'express';
 import { DraftUpload } from '../models/DraftUpload.model.js';
-import { DRAFT_CHUNK_BYTES, createDraftUpload, getDraftUpload, draftUploadStatus, writeDraftChunk, finishDraftUpload } from '../services/draftUploadService.js';
+import { DRAFT_CHUNK_BYTES, createDraftUpload, getDraftUpload, draftUploadStatus, writeDraftChunk, finishDraftUpload, checkpointDraftUpload } from '../services/draftUploadService.js';
 import mongoose from 'mongoose';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
@@ -249,12 +249,16 @@ router.put('/orders/:id/draft-uploads/:uploadId/chunks/:n', requireRoles('design
   await writeDraftChunk(session,Number(req.params.n),req.body,req.get('X-Chunk-SHA256'));
   res.json({success:true});
 }));
+router.post('/orders/:id/draft-uploads/:uploadId/checkpoint', requireRoles('designer','admin'), draftRoute(async (req,res)=>{
+  const session=await getDraftUpload(req.params.uploadId,req.order._id,req.user._id);
+  res.json(await checkpointDraftUpload(session,req.body));
+}));
 router.post('/orders/:id/draft-uploads/:uploadId/complete', requireRoles('designer','admin'), draftRoute(async (req,res) => {
   res.json(await finishDraftUpload(await getDraftUpload(req.params.uploadId,req.order._id,req.user._id),req.user));
 }));
 router.delete('/orders/:id/draft-uploads/:uploadId', requireRoles('designer','admin'), draftRoute(async (req,res) => {
   const session=await getDraftUpload(req.params.uploadId,req.order._id,req.user._id);
-  const result=await DraftUpload.updateOne({_id:session._id,state:'open'},{$set:{state:'cancelled',expiresAt:new Date()}});
+  const result=await DraftUpload.updateOne({_id:session._id,state:'open'},{$set:{state:'cancelled',expiresAt:new Date(Date.now()+(session.provider==='blob'?3600000:0))}});
   if(!result.modifiedCount)return res.status(409).json({message:'This upload is being finalized or is already complete. Refresh the order.'});
   res.json({success:true});
 }));
