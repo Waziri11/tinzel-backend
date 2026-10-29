@@ -22,6 +22,14 @@ Use the production environment with read-only database credentials first:
 npm run proof:diagnose -- 6ad3bc5c0d539e5d089b915f 1
 ```
 
+If the reader displays a reference ID, look up that exact failure (including references retained in earlier attempts):
+
+```
+npm run proof:diagnose -- --reference REFERENCE_ID
+```
+
+Run this in the environment connected to the affected production database. A reference alone does not identify which dependency failed; inspect the returned `error`, `errorName`, and attempt history before changing packages.
+
 The command reads the source's availability, stored attempts and errors, leases, derived-page metadata and runtime revision. It does not expose source URLs or modify jobs. Correlate reference IDs and job IDs with deployment logs. A missing order means the selected database is not the relevant production database; do not upload another copy as a workaround.
 
 Repair the diagnosed issue (source availability, encrypted/invalid PDF, Linux dependencies, memory, timeout or worker lease). On Linux reproduce the existing source using the staging copy and native smoke test. The authenticated `/api/proofs/staff/ORDER_ID/VERSION/diagnostics` endpoint is limited to manager/admin. Once the cause is repaired, the existing reader's Retry preparation action resets failed jobs only and reuses the original PDF; already prepared pages remain available. Verify cover visibility, annotations and repeated reopen without new rendering before release. Deterministic failures do not retry automatically.
@@ -63,4 +71,26 @@ Additionally interrupt/reload/reselect, cancel, repeat completion, restart worke
 
 ## Current validation boundary
 
-Local integration tests use real GridFS, PDF.js, native canvas and WebP. Blob protocol integration uses a stubbed private-storage adapter; frontend multipart tests exercise concurrency/checkpoints/resume but do not prove the live provider. The configured development database has no affected production version. Private Blob credentials and production deployment logs are unavailable, and the Docker daemon is not running. Consequently the production failure, Linux compatibility, live 150/300/500MiB throughput and 5-upload/20-reader acceptance targets remain release gates, not claimed results.
+Local integration tests use real GridFS, PDF.js, native canvas and WebP. Blob protocol integration uses a stubbed private-storage adapter; frontend multipart tests exercise concurrency/checkpoints/resume but do not prove the live provider. The configured development database has no affected production version. Private Blob credentials and the production database secret are unavailable locally, and the Docker daemon is not running. Vercel CLI access was subsequently verified; the packaging diagnosis below records the available production evidence. Consequently the production failure, Linux compatibility, live 150/300/500MiB throughput and 5-upload/20-reader acceptance targets remain release gates, not claimed results.
+
+
+## Vercel packaging diagnosis — 29 October 2026
+
+Authenticated Vercel inspection confirmed production deployment `dpl_4BjdLYx4Bas4Ftgoqv126rRLURwT` uses commit `14de668`, Node.js 24, with the affected metadata job executed at 10:02:40 UTC (13:02:40 EAT). The production environment has neither `PROOF_WORKER_MODE=dedicated` nor the private Blob configuration enabled, so it is running the compatibility renderer and GridFS path.
+
+A fresh standalone Vercel build of that code omitted `node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs`, although `pdf.mjs` and the canvas binding were included. Loading a small valid PDF from the isolated function reproduced:
+
+```
+Setting up fake worker failed: "Cannot find module '…/pdfjs-dist/legacy/build/pdf.worker.mjs' imported from …/pdf.mjs".
+```
+
+PDF.js imports that worker at runtime. `vercel.json` now explicitly includes this asset. A second standalone build contains the worker and passes the full canvas/PDF/text/WebP smoke test when all package resolution is anchored in the isolated function directory. The original bundle fails the same test. This establishes a reproducible packaging defect that produces the screenshot's renderer-unavailable classification; the exact stored production exception remains unverified because Vercel redacts the sensitive database variable on export and the failure was not logged with its detailed error.
+
+Reproduce before deployment:
+
+```
+vercel build --prod --standalone --output /tmp/tinzel-proof-build --yes
+npm run proof:smoke -- --function-dir /tmp/tinzel-proof-build/functions/index.func
+```
+
+A macOS build checks bundle completeness using macOS native dependencies; it is not Linux runtime proof. Deploy through the normal Vercel Linux build, rather than uploading this macOS prebuilt bundle. After the backend is deployed, retry preparation for the existing version; no source re-upload is needed. Confirm the production job becomes ready before calling the live failure resolved. Deployment was not performed during diagnosis.

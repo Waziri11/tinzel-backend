@@ -1,6 +1,18 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "regions": ["iad1"],
-  "functions": { "src/app.js": { "maxDuration": 300 } },
-  "crons": [{ "path": "/api/internal/media-jobs", "schedule": "* * * * *" }]
+  "regions": [
+    "iad1"
+  ],
+  "functions": {
+    "src/app.js": {
+      "maxDuration": 300,
+      "includeFiles": "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/internal/media-jobs",
+      "schedule": "* * * * *"
+    }
+  ]
 }
