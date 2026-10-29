@@ -28,6 +28,7 @@ const draftVersionSchema = new mongoose.Schema(
       required: true,
     },
     fileUrl: { type: String, default: '' },
+    uploadSessionId: { type: mongoose.Schema.Types.ObjectId },
     assetId: { type: mongoose.Schema.Types.ObjectId },
     originalName: { type: String, default: '' },
     mimeType: { type: String, default: 'application/pdf' },

@@ -1,10 +1,11 @@
+import { runMediaJobs } from '../services/mediaJobService.js';
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import { Order } from '../models/Order.model.js';
 import { MediaJob, ProofPage } from '../models/Media.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyStaffToken, verifyClientToken, requireRoles } from '../middlewares/auth.middleware.js';
-import { enqueueProof, proofJobId, watermarkedPage } from '../services/proofReaderService.js';
+import { enqueueProof, proofJobId, watermarkedPage, requestProofBatch } from '../services/proofReaderService.js';
 
 const router = Router();
 const windows = new Map();
@@ -38,14 +39,32 @@ function install(prefix, auth) {
 }
 function routes() {
   const r = Router({ mergeParams: true });
-  r.get('/', async (req, res, next) => {
+  const describe = async (req) => {
+    const orderId=req.proofOrder._id, version=req.proofVersion;
+    const job = await enqueueProof(orderId,version);
+    const metadata=await ProofPage.findOne({orderId,version,page:0}).lean();
+    const pages=await ProofPage.find({orderId,version,page:{$gt:0}}).select('page width height -_id').lean();
+    const pageCount=metadata?.text?.pageCount||0;
+    const total=Math.min(5,pageCount);
+    const failed=await MediaJob.find({orderId,version,kind:'proof',requested:true,state:'failed'}).select('page -_id').lean();
+    return {state:job.state,message:job.state==='failed'?'Magazine preparation failed. Retry preparation or contact staff.':undefined,
+      pageCount,pages,opening:{total,ready:pages.filter((p)=>p.page<=total).length},failedPages:failed.map((j)=>j.page),
+      canComment:req.proofCanComment,annotations:visibleAnnotations(req)};
+  };
+  r.get('/',async(req,res,next)=>{
+    try { await requestProofBatch(req.proofOrder._id,req.proofVersion,[1]);res.json(await describe(req)); } catch(e){next(e);}
+  });
+  r.post('/prepare',async(req,res,next)=>{
     try {
-      const job = await enqueueProof(req.proofOrder._id, req.proofVersion);
-      const metadata = await ProofPage.findOne({ orderId: req.proofOrder._id, version: req.proofVersion, page: 0 }).lean();
-      const pages = await ProofPage.find({ orderId: req.proofOrder._id, version: req.proofVersion, page: { $gt: 0 } }).select('page width height -_id').lean();
-      res.json({ state: job.state, message: job.state === 'failed' ? 'Magazine preparation failed. Retry preparation or contact staff.' : undefined,
-        pageCount: metadata?.text?.pageCount || 0, pages, canComment: req.proofCanComment, annotations: visibleAnnotations(req) });
-    } catch (e) { next(e); }
+      const pages=req.body.pages||[1];
+      const metadata=await ProofPage.findOne({orderId:req.proofOrder._id,version:req.proofVersion,page:0}).lean();
+      if(!Array.isArray(pages)||!pages.length||pages.length>2||pages.some((n)=>!Number.isInteger(n)||n<1||n>(metadata?.text?.pageCount||500)))return res.status(400).json({message:'Choose up to two valid pages to prepare'});
+      await requestProofBatch(req.proofOrder._id,req.proofVersion,pages);
+      // Await bounded work so navigation does not depend on the next minute's cron.
+      await runMediaJobs({maxJobs:6,budgetMs:55000,proofFilter:{orderId:req.proofOrder._id,version:req.proofVersion}});
+      await requestProofBatch(req.proofOrder._id,req.proofVersion,pages);
+      res.json(await describe(req));
+    }catch(e){next(e);}
   });
   r.post('/retry', async (req, res, next) => {
     try {
@@ -59,6 +78,9 @@ function routes() {
       if (!Number.isInteger(number) || number < 1) return res.status(404).json({ message: 'Page not found' });
       const page = await ProofPage.findOne({ orderId: req.proofOrder._id, version: req.proofVersion, page: number }).lean();
       if (!page) {
+        const metadata=await ProofPage.findOne({orderId:req.proofOrder._id,version:req.proofVersion,page:0}).lean();
+        if(metadata&&number>metadata.text.pageCount)return res.status(404).json({message:'Page not found'});
+        await requestProofBatch(req.proofOrder._id,req.proofVersion,[number]);
         const job = await MediaJob.findById(proofJobId(req.proofOrder._id, req.proofVersion, number)).lean();
         return res.status(job?.state === 'failed' ? 422 : 202).json({ message: job?.state === 'failed' ? 'Page preparation failed. Retry preparation.' : 'Page is being prepared' });
       }

@@ -113,7 +113,7 @@ app.use((req, res, next) => {
       if (String(value.action || '').startsWith('DRAFT_') && value.details) delete value.details.assetId;
       if (Array.isArray(value.draftVersions)) value.draftVersions = value.draftVersions.map((draft) => {
         const d = draft.toObject ? draft.toObject() : { ...draft };
-        for (const key of ['assetId', 'fileUrl', 'previewPages']) delete d[key];
+        for (const key of ['assetId', 'fileUrl', 'previewPages', 'uploadSessionId']) delete d[key];
         return d;
       });
       for (const child of Object.values(value)) if (child && typeof child === 'object') clean(child);
@@ -148,9 +148,9 @@ app.use((req, res) => {
 // Centralized Error Handler
 app.use((err, req, res, next) => {
   console.error('[Server Error]', err.stack || err.message);
-  res.status(err.name === 'VersionError' ? 409 : err.status || 500).json({
+  res.status(err.code === 'LIMIT_FILE_SIZE' || err.type === 'entity.too.large' ? 413 : err.name === 'VersionError' ? 409 : err.status || 500).json({
     success: false,
-    message: err.message || 'Internal Server Error',
+    message: err.code === 'LIMIT_FILE_SIZE' ? 'This endpoint accepts small PDFs only. Refresh the application to use resumable uploads up to 500 MB.' : err.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : err.message || 'Internal Server Error',
   });
 });
 

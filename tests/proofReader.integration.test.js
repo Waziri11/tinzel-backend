@@ -40,7 +40,7 @@ test('protected magazine review completes upload, render, manager and client cor
   assert.equal((await request(path('client'),'client')).status,404);
   assert.equal((await request(path())).status,200);
   await runMediaJobs({maxJobs:5});
-  const metadata=await request(path());assert.equal(metadata.data.pageCount,2);assert.equal(metadata.data.pages.length,2);assert.equal(metadata.data.canComment,true);
+  const metadata=await request(path());assert.equal(metadata.data.pageCount,2,JSON.stringify(await MediaJob.find({kind:'proof'}).select('state error').lean()));assert.equal(metadata.data.pages.length,2);assert.equal(metadata.data.canComment,true);
   const positions=await request(path()+'/pages/1?text=1');assert.match(positions.data.text[0].str,/Magazine/);
   const rotated=await request(path()+'/pages/2?text=1');assert.ok(rotated.data.height>rotated.data.width);
   const page=await fetch(base+path()+'/pages/1',{headers:{Authorization:`Bearer ${tokens.manager}`}});assert.equal(page.status,200);assert.match(page.headers.get('content-type'),/image\/webp/);assert.match(page.headers.get('cache-control'),/no-store/);const image=Buffer.from(await page.arrayBuffer());assert.ok(image.length>1000);

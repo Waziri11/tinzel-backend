@@ -41,3 +41,20 @@ export const openDraftPdf = (draft) => {
 };
 
 export const streamDraftPdf = (res) => res.status(403).json({ success: false, message: 'Original magazine files are restricted. Use the protected book reader.' });
+
+// Internal range access only: no endpoint exposes the original PDF.
+export async function draftRangeSource(draft) {
+  if (draft.assetId) {
+    const file = await mongoose.connection.db.collection('draftFiles.files').findOne({ _id: new mongoose.Types.ObjectId(draft.assetId) });
+    if (!file) throw Object.assign(new Error('Draft PDF is unavailable'), { status: 404 });
+    return { length: file.length, read: (start, end) => bucket().openDownloadStream(file._id, { start, end }) };
+  }
+  if (draft.fileUrl?.startsWith('/uploads/drafts/')) {
+    const root = path.resolve(process.cwd(), 'uploads/drafts');
+    const filename = path.resolve(process.cwd(), draft.fileUrl.slice(1));
+    if (!filename.startsWith(root + path.sep)) throw new Error('Invalid legacy draft path');
+    const stat = await fs.promises.stat(filename);
+    return { length: stat.size, read: (start, end) => fs.createReadStream(filename, { start, end: end - 1 }) };
+  }
+  throw Object.assign(new Error('Draft PDF is unavailable'), { status: 404 });
+}

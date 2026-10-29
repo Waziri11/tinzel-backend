@@ -1,3 +1,4 @@
+import { cleanExpiredDraftUploads } from './draftUploadService.js';
 import { buildProof } from './proofReaderService.js';
 import mongoose from 'mongoose';
 import { randomUUID, createHash } from 'node:crypto';
@@ -104,24 +105,25 @@ async function buildArchive(job, signal) {
 
 // A database lease keeps preview decoding/archive generation to one job globally.
 // Work is awaited by a scheduled invocation or a persistent worker, never detached.
-export async function runMediaJobs({ maxJobs = 100, budgetMs = 230000 } = {}) {
+export async function runMediaJobs({ maxJobs = 100, budgetMs = 230000, proofFilter = null } = {}) {
   const owner = randomUUID(); const started = Date.now(); let count = 0;
   try {
     const lock = await MediaJob.findOneAndUpdate({ _id: 'worker-lock', $or: [{ leaseUntil: { $lt: new Date() } }, { leaseUntil: null }] },
       { $set: { kind: 'lock', owner, leaseUntil: new Date(Date.now() + 60000) } }, { upsert: true, returnDocument: 'after' });
     if (!lock) return { processed: 0 };
   } catch (e) { if (e.code === 11000) return { processed: 0 }; throw e; }
+  const proofContext = new Map();
   let heartbeat;
   try {
     await MediaJob.updateMany({ state: 'running', leaseUntil: { $lt: new Date() }, attempts: { $gte: 3 } },
       { $set: { state: 'failed', error: 'Worker stopped repeatedly. Please contact staff.' } });
-    await cleanDerivedMedia();
+    if (!proofFilter) { await cleanDerivedMedia(); await cleanExpiredDraftUploads(); }
     while (count < maxJobs && Date.now() - started < budgetMs - 1000) {
       const outputId = new mongoose.Types.ObjectId().toString();
-      const job = await MediaJob.findOneAndUpdate({ kind: { $in: ['preview', 'archive', 'proof'] }, attempts: { $lt: 3 }, $or: [
+      const job = await MediaJob.findOneAndUpdate({ ...(proofFilter ? { kind: 'proof', ...proofFilter, requested: true } : { $and: [{ $or: [{ kind: { $in: ['preview', 'archive'] } }, { kind: 'proof', requested: true }] }] }), attempts: { $lt: 3 }, $or: [
         { state: 'queued', runAfter: { $lte: new Date() } }, { state: 'running', leaseUntil: { $lt: new Date() } },
       ] }, { $set: { state: 'running', owner, leaseUntil: new Date(Date.now() + 60000), outputId }, $push: { outputIds: outputId }, $inc: { attempts: 1 } },
-      { sort: { kind: 1, createdAt: 1 }, returnDocument: 'after' }).lean();
+      { sort: { priority: -1, createdAt: 1 }, returnDocument: 'after' }).lean();
       if (!job) break;
       const jobStarted = performance.now();
       const controller = new AbortController();
@@ -134,7 +136,7 @@ export async function runMediaJobs({ maxJobs = 100, budgetMs = 230000 } = {}) {
         } catch { controller.abort(); }
       }, 15000);
       try {
-        if (job.kind === 'proof') await buildProof(job, signal); else if (job.kind === 'preview') await buildPreview(job, signal); else await buildArchive(job, signal);
+        if (job.kind === 'proof') await buildProof(job, signal, proofContext); else if (job.kind === 'preview') await buildPreview(job, signal); else await buildArchive(job, signal);
         await MediaJob.updateOne({ _id: job._id, owner }, { $set: { state: 'ready', completedAt: new Date() } });
       } catch (error) {
         await MediaJob.updateOne({ _id: job._id, owner }, { $set: {
@@ -150,6 +152,7 @@ export async function runMediaJobs({ maxJobs = 100, budgetMs = 230000 } = {}) {
     }
   } finally {
     clearInterval(heartbeat);
+    for (const pdf of proofContext.values()) await pdf.destroy().catch(() => {});
     await MediaJob.updateOne({ _id: 'worker-lock', owner }, { $set: { leaseUntil: new Date(0) } });
   }
   return { processed: count };

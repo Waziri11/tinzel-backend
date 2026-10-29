@@ -1,5 +1,7 @@
 import { enqueueProof } from '../services/proofReaderService.js';
-import { Router } from 'express';
+import express, { Router } from 'express';
+import { DraftUpload } from '../models/DraftUpload.model.js';
+import { DRAFT_CHUNK_BYTES, createDraftUpload, getDraftUpload, draftUploadStatus, writeDraftChunk, finishDraftUpload } from '../services/draftUploadService.js';
 import mongoose from 'mongoose';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
@@ -229,6 +231,33 @@ router.post('/orders/:id/start-design', requireRoles('designer', 'admin'), async
     return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });
   }
 });
+
+// Small authenticated requests keep large PDFs below the hosting gateway's body limit.
+const draftRoute = (handler) => async (req, res, next) => {
+  res.set('Cache-Control', 'private, no-store');
+  try { await handler(req, res); } catch (error) { next(error); }
+};
+router.post('/orders/:id/draft-uploads', requireRoles('designer','admin'), draftRoute(async (req,res) => {
+  const session = await createDraftUpload(req.order,req.user,req.body);
+  res.status(201).json(await draftUploadStatus(session));
+}));
+router.get('/orders/:id/draft-uploads/:uploadId', requireRoles('designer','admin'), draftRoute(async (req,res) => {
+  res.json(await draftUploadStatus(await getDraftUpload(req.params.uploadId,req.order._id,req.user._id)));
+}));
+router.put('/orders/:id/draft-uploads/:uploadId/chunks/:n', requireRoles('designer','admin'), express.raw({type:'application/octet-stream',limit:DRAFT_CHUNK_BYTES}), draftRoute(async (req,res) => {
+  const session=await getDraftUpload(req.params.uploadId,req.order._id,req.user._id);
+  await writeDraftChunk(session,Number(req.params.n),req.body,req.get('X-Chunk-SHA256'));
+  res.json({success:true});
+}));
+router.post('/orders/:id/draft-uploads/:uploadId/complete', requireRoles('designer','admin'), draftRoute(async (req,res) => {
+  res.json(await finishDraftUpload(await getDraftUpload(req.params.uploadId,req.order._id,req.user._id),req.user));
+}));
+router.delete('/orders/:id/draft-uploads/:uploadId', requireRoles('designer','admin'), draftRoute(async (req,res) => {
+  const session=await getDraftUpload(req.params.uploadId,req.order._id,req.user._id);
+  const result=await DraftUpload.updateOne({_id:session._id,state:'open'},{$set:{state:'cancelled',expiresAt:new Date()}});
+  if(!result.modifiedCount)return res.status(409).json({message:'This upload is being finalized or is already complete. Refresh the order.'});
+  res.json({success:true});
+}));
 
 // Upload Draft (PDF / Spreads)
 router.post(

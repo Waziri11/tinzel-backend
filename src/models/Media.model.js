@@ -23,7 +23,7 @@ export const MediaAsset = mongoose.model('MediaAsset', new mongoose.Schema({
 
 export const MediaJob = mongoose.model('MediaJob', new mongoose.Schema({
   _id: String, kind: String, assetId: String, orderId: mongoose.Schema.Types.ObjectId,
-  version: Number, page: Number,
+  version: Number, page: Number, priority: { type: Number, default: 0 }, requested: Boolean,
   folder: String, state: { type: String, default: 'queued' }, attempts: { type: Number, default: 0 },
   leaseUntil: Date, runAfter: { type: Date, default: Date.now }, owner: String,
   outputId: String, outputIds: { type: [String], default: [] }, error: String, completedAt: Date, lastDownloadAt: Date,
