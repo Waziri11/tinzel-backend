@@ -6,6 +6,7 @@ import { UploadSession, MediaAsset } from '../models/Media.model.js';
 import { CHUNK_BYTES, createSession, getSession, getEntry, reservePhoto, writeChunk,
   chunkStatus, completePhoto, removePhoto, cancelSelection, finalizeSession, mediaLimits, blobPath, photoDescriptor } from '../services/mediaSessionService.js';
 import { openAssetStream } from '../services/mediaReadService.js';
+import { verifySignedMediaRequest } from '../services/mediaSignService.js';
 import { mediaError, respondMediaError } from '../services/mediaErrors.js';
 
 const router = express.Router();
@@ -77,6 +78,8 @@ router.post('/blob', route(async (req, res) => {
 }));
 
 async function serveAsset(req, res, thumbnail) {
+  const access = verifySignedMediaRequest(req);
+  if (!access.valid) throw mediaError(401, 'Scoped photo access required');
   const asset = await MediaAsset.findById(req.params.assetId).lean();
   if (!asset) throw mediaError(404, 'Photo not found');
   if (thumbnail && !asset.thumbnailId) {
@@ -90,7 +93,9 @@ async function serveAsset(req, res, thumbnail) {
       .openDownloadStream(new mongoose.Types.ObjectId(asset.thumbnailId))
     : await openAssetStream(asset);
   res.setHeader('Content-Type', thumbnail ? 'image/webp' : asset.contentType);
-  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
   if (!thumbnail) res.setHeader('Content-Length', asset.size);
   res.on('close', () => stream.destroy());
   await pipeline(stream, res);

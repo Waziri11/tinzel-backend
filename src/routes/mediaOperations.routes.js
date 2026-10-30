@@ -37,8 +37,11 @@ router.get('/internal/media-jobs', async (req, res) => {
 });
 router.get('/media-download/:token', async (req, res) => {
   try {
-    const ticket = await MediaDownloadTicket.findById(digest(req.params.token)).lean();
-    if (!ticket || ticket.expiresAt < new Date()) return res.sendStatus(404);
+    const ticket = await MediaDownloadTicket.findOneAndDelete({
+      _id: digest(req.params.token),
+      expiresAt: { $gt: new Date() },
+    }).lean();
+    if (!ticket) return res.sendStatus(404);
     const [user, order, job] = await Promise.all([StaffUser.findById(ticket.staffId).lean(), Order.findById(ticket.orderId).lean(), MediaJob.findById(ticket.jobId).lean()]);
     if (!user?.isActive || user.deletedAt || !order || !['admin', 'manager', 'designer'].includes(user.role) || (user.role === 'designer' && String(order.assignedDesigner) !== String(user._id))) return res.sendStatus(403);
     if (job?.state !== 'ready') return res.sendStatus(409);

@@ -8,6 +8,7 @@ import { generateSubmissionId } from '../services/workflowService.js';
 import { validateFormAnswers } from '../services/formResponseService.js';
 import { findCoverImage, openCoverImageStream } from '../services/coverStorageService.js';
 import { storeOrderPhoto, findOrderPhoto, openOrderPhotoStream } from '../services/photoStorageService.js';
+import { verifySignedMediaRequest } from '../services/mediaSignService.js';
 import { notifyOrderSubmitted } from '../services/notificationService.js';
 import sharp from 'sharp';
 
@@ -54,12 +55,18 @@ router.get('/covers/:id', async (req, res) => {
 
 router.get('/photos/:id', async (req, res) => {
   try {
+    const access = verifySignedMediaRequest(req);
+    if (!access.valid) {
+      return res.status(401).json({ success: false, message: 'Scoped photo access required' });
+    }
     const file = await findOrderPhoto(req.params.id);
     if (!file) return res.status(404).json({ success: false, message: 'Photo not found' });
 
     res.setHeader('Content-Type', file.contentType || file.metadata?.contentType || 'image/jpeg');
     res.setHeader('Content-Length', file.length);
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
     const stream = openOrderPhotoStream(req.params.id);
     stream.on('error', (error) => {
       if (!res.headersSent) res.status(500).json({ success: false, message: error.message });

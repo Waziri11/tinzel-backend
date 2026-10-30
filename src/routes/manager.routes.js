@@ -5,6 +5,7 @@ import { AuditLog } from '../models/AuditLog.model.js';
 import { SystemConfig } from '../models/SystemConfig.model.js';
 import { StaffUser } from '../models/StaffUser.model.js';
 import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
+import { signMediaPath } from '../services/mediaSignService.js';
 import { generateTrackingId } from '../services/workflowService.js';
 import { autoAssignOrder, manualAssignOrder, releaseOrderWorkload } from '../services/assignmentService.js';
 import {
@@ -473,8 +474,9 @@ router.post('/orders/:id/authorise-print', async (req, res) => {
       details: { printerPhone, printDocUrl: order.printDocument.url },
     });
 
-    // Dispatch WhatsApp notification to printing partner
-    const fullPrintUrl = `${req.protocol}://${req.get('host')}${order.printDocument.url}`;
+    // Dispatch WhatsApp notification to printing partner with short-lived signed download link
+    const signedPrintPath = signMediaPath(order.printDocument.url, 7 * 24 * 3600);
+    const fullPrintUrl = `${req.protocol}://${req.get('host')}${signedPrintPath}`;
     await notifyPrinterDispatch(order, printerPhone, fullPrintUrl, order.printDocument.specs || {});
 
     return res.status(200).json({

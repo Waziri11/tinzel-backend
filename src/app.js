@@ -19,6 +19,7 @@ import mediaRoutes from './routes/media.routes.js';
 import mediaOperationsRoutes from './routes/mediaOperations.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
 import smsRoutes from './routes/smsRoutes.js';
+import { signMediaPath, verifySignedMediaRequest } from './services/mediaSignService.js';
 
 const app = express();
 
@@ -71,12 +72,22 @@ app.use('/api', async (req, res, next) => {
   });
 });
 
-// Drafts are private and only stream through authenticated routes. Other legacy uploads remain available.
+// Drafts and customer/print uploads are private and require scoped/signed access.
 app.use('/uploads/drafts', (_req, res) => res.status(404).json({ success: false, message: 'Not found' }));
 app.use('/uploads', (req, res, next) => {
   try {
     const normalized = path.posix.normalize(decodeURIComponent(req.path).replaceAll('\\', '/')).toLowerCase();
-    if (normalized === '/drafts' || normalized.startsWith('/drafts/')) return res.status(404).json({ message: 'Not found' });
+    if (normalized === '/drafts' || normalized.startsWith('/drafts/')) {
+      return res.status(404).json({ message: 'Not found' });
+    }
+    if (normalized.startsWith('/print') || normalized.startsWith('/photos')) {
+      const check = verifySignedMediaRequest(req);
+      if (!check.valid) {
+        return res.status(401).json({ success: false, message: 'Scoped access required' });
+      }
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    }
     next();
   } catch { res.status(404).json({ message: 'Not found' }); }
 });
@@ -133,6 +144,20 @@ function sanitizeResponseNode(node) {
     const details = typeof raw.details.toObject === 'function' ? raw.details.toObject() : { ...raw.details };
     delete details.assetId;
     target.details = details;
+  }
+  if (Array.isArray(raw.uploadedPhotos)) {
+    ensureClone().uploadedPhotos = raw.uploadedPhotos.map((photo) => {
+      if (!photo || typeof photo !== 'object') return photo;
+      const p = typeof photo.toObject === 'function' ? photo.toObject() : { ...photo };
+      if (p.url) p.url = signMediaPath(p.url);
+      if (p.thumbnailUrl) p.thumbnailUrl = signMediaPath(p.thumbnailUrl);
+      return p;
+    });
+  }
+  if (raw.printDocument && typeof raw.printDocument === 'object' && raw.printDocument.url) {
+    const pd = typeof raw.printDocument.toObject === 'function' ? raw.printDocument.toObject() : { ...raw.printDocument };
+    pd.url = signMediaPath(pd.url);
+    ensureClone().printDocument = pd;
   }
   if (Array.isArray(raw.draftVersions)) {
     ensureClone().draftVersions = raw.draftVersions.map((draft) => {
