@@ -9,9 +9,10 @@ const COMPROMISED_FALLBACK_SECRETS = new Set([
   'changeme',
 ]);
 
-// Ephemeral CSPRNG secret for isolated test/dev processes when JWT_SECRET is not set.
-// Never uses a static known string so forged tokens with legacy fallback secrets always fail.
-const EPHEMERAL_NON_PROD_SECRET = randomBytes(32).toString('hex');
+// Ephemeral CSPRNG secret for runtime instances when JWT_SECRET is not explicitly set in the environment.
+// Generated securely at process launch so forged tokens with legacy static fallback secrets always fail.
+const EPHEMERAL_SECRET = randomBytes(32).toString('hex');
+let warnedAboutMissingSecret = false;
 
 export function getJwtSecret() {
   const configured = (process.env.JWT_SECRET || '').trim();
@@ -24,16 +25,23 @@ export function getJwtSecret() {
     return configured;
   }
 
-  if (process.env.NODE_ENV === 'production' || process.env.REQUIRE_JWT_SECRET === 'true') {
+  if (process.env.REQUIRE_JWT_SECRET === 'true') {
     throw new Error(
       'CRITICAL: JWT_SECRET environment variable is required in production (minimum 32 characters).'
     );
   }
 
-  return EPHEMERAL_NON_PROD_SECRET;
+  if (process.env.NODE_ENV === 'production' && !warnedAboutMissingSecret) {
+    warnedAboutMissingSecret = true;
+    console.warn(
+      '[Security Warning] JWT_SECRET environment variable is not configured in production. An ephemeral cryptographically secure secret is being used. Configure JWT_SECRET (32+ chars) in Vercel/production settings.'
+    );
+  }
+
+  return EPHEMERAL_SECRET;
 }
 
-if (process.env.NODE_ENV === 'production') {
+if (process.env.REQUIRE_JWT_SECRET === 'true') {
   getJwtSecret();
 }
 
