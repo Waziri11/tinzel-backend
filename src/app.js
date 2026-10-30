@@ -103,24 +103,58 @@ app.get('/', (req, res) => {
   });
 });
 
-// Remove private proof storage and unpublished annotations from all order responses.
+// Remove private proof storage and unpublished annotations from order/audit responses without double JSON serialization.
+const PRIVATE_DRAFT_KEYS = ['assetId', 'fileUrl', 'previewPages', 'uploadSessionId', 'blobPath', 'storageProvider'];
+const ENVELOPE_KEYS = ['order', 'orders', 'logs', 'auditLogs', 'data', 'items', 'result', 'results'];
+
+function sanitizeResponseNode(node) {
+  if (!node || typeof node !== 'object' || Buffer.isBuffer(node) || node instanceof Date) {
+    return node;
+  }
+  if (Array.isArray(node)) {
+    return node.map(sanitizeResponseNode);
+  }
+  const raw = typeof node.toObject === 'function' ? node.toObject() : node;
+  let cloned = null;
+  const ensureClone = () => {
+    if (!cloned) cloned = { ...raw };
+    return cloned;
+  };
+
+  if ('proofAnnotations' in raw) {
+    delete ensureClone().proofAnnotations;
+  }
+  if ('draftEvents' in raw) {
+    delete ensureClone().draftEvents;
+  }
+  if (String(raw.action || '').startsWith('DRAFT_') && raw.details && typeof raw.details === 'object' && 'assetId' in raw.details) {
+    const target = ensureClone();
+    const details = typeof raw.details.toObject === 'function' ? raw.details.toObject() : { ...raw.details };
+    delete details.assetId;
+    target.details = details;
+  }
+  if (Array.isArray(raw.draftVersions)) {
+    ensureClone().draftVersions = raw.draftVersions.map((draft) => {
+      if (!draft || typeof draft !== 'object') return draft;
+      const d = typeof draft.toObject === 'function' ? draft.toObject() : { ...draft };
+      for (const key of PRIVATE_DRAFT_KEYS) delete d[key];
+      return d;
+    });
+  }
+  for (const key of ENVELOPE_KEYS) {
+    if (raw[key] && typeof raw[key] === 'object') {
+      const sanitizedChild = sanitizeResponseNode(raw[key]);
+      if (sanitizedChild !== raw[key]) {
+        ensureClone()[key] = sanitizedChild;
+      }
+    }
+  }
+  return cloned || raw;
+}
+
 app.use((req, res, next) => {
   const json = res.json.bind(res);
-  res.json = (body) => {
-    const clean = (value) => {
-      if (!value || typeof value !== 'object') return;
-      delete value.proofAnnotations;
-      delete value.draftEvents;
-      if (String(value.action || '').startsWith('DRAFT_') && value.details) delete value.details.assetId;
-      if (Array.isArray(value.draftVersions)) value.draftVersions = value.draftVersions.map((draft) => {
-        const d = draft.toObject ? draft.toObject() : { ...draft };
-        for (const key of ['assetId', 'fileUrl', 'previewPages', 'uploadSessionId', 'blobPath', 'storageProvider']) delete d[key];
-        return d;
-      });
-      for (const child of Object.values(value)) if (child && typeof child === 'object') clean(child);
-    };
-    const payload = JSON.parse(JSON.stringify(body)); clean(payload); return json(payload);
-  };
+  res.json = (body) => json(sanitizeResponseNode(body));
   next();
 });
 app.use('/api/proofs', proofReaderRoutes);
