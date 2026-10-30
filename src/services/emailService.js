@@ -104,7 +104,7 @@ export const wrapEmailTemplate = ({ title, contentHtml, callToAction }) => {
 /**
  * High-level HTML & Plaintext Template Builders
  */
-export const emailTemplates = {
+const rawEmailTemplates = {
   payment_verified: ({ clientName, trackingId, trackingUrl, formTitle }) => {
     const title = 'Malipo Yamethibitishwa';
     const contentHtml = `
@@ -407,6 +407,59 @@ export const emailTemplates = {
     };
   },
 };
+
+/**
+ * HTML-escapes text so customer-controlled values cannot inject markup or links into emails.
+ */
+export const escapeHtml = (value) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+/**
+ * Allows only http(s) URLs; anything else (javascript:, data:, etc.) is dropped.
+ */
+export const sanitizeEmailUrl = (value) => {
+  try {
+    const parsed = new URL(String(value || ''));
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.toString() : '';
+  } catch {
+    return '';
+  }
+};
+
+const URL_PARAM_KEYS = new Set(['trackingUrl', 'staffUrl', 'actionUrl', 'url']);
+
+function escapeTemplateParams(value, key = '') {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') {
+    return URL_PARAM_KEYS.has(key) ? escapeHtml(sanitizeEmailUrl(value)) : escapeHtml(value);
+  }
+  if (Array.isArray(value)) return value.map((item) => escapeTemplateParams(item, key));
+  if (value instanceof Date) return value;
+  if (typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, escapeTemplateParams(v, k)]));
+  }
+  return value;
+}
+
+/**
+ * Public template builders: HTML is rendered from escaped parameters, while the
+ * plain-text body (used for SMS/WhatsApp and text/plain email) keeps the original values.
+ */
+export const emailTemplates = Object.fromEntries(
+  Object.entries(rawEmailTemplates).map(([name, build]) => [
+    name,
+    (params = {}) => {
+      const plain = build(params);
+      const safe = build(escapeTemplateParams(params));
+      return { ...plain, html: safe.html };
+    },
+  ])
+);
 
 /**
  * Dispatch an email message via Nodemailer or simulation mode.

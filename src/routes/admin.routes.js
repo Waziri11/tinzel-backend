@@ -422,14 +422,43 @@ router.get('/config', async (req, res) => {
   }
 });
 
+const CONFIG_KEY_VALIDATORS = {
+  printer_whatsapp_phone: (v) => typeof v === 'string' && /^\+?[\d\s-]{9,20}$/.test(v.trim()),
+  printer_name: (v) => typeof v === 'string' && v.trim().length <= 120,
+  printer_email: (v) => typeof v === 'string' && (v === '' || emailPattern.test(v.trim())),
+  payment_instructions: (v) => typeof v === 'string' && v.length <= 2000,
+  support_phone: (v) => typeof v === 'string' && (v === '' || /^\+?[\d\s-]{9,20}$/.test(v.trim())),
+  support_email: (v) => typeof v === 'string' && (v === '' || emailPattern.test(v.trim())),
+  default_max_workload: (v) => Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= 20,
+};
+
 router.put('/config', async (req, res) => {
   try {
-    const { key, value, description } = req.body;
+    const { key, value, description } = req.body || {};
+    if (typeof key !== 'string' || !Object.prototype.hasOwnProperty.call(CONFIG_KEY_VALIDATORS, key)) {
+      return res.status(400).json({ success: false, message: 'Unknown configuration key' });
+    }
+    if (!CONFIG_KEY_VALIDATORS[key](value)) {
+      return res.status(400).json({ success: false, message: `Invalid value for ${key}` });
+    }
+    const cleanValue = typeof value === 'string' ? value.trim() : value;
+    const previous = await SystemConfig.findOne({ key }).lean();
     const config = await SystemConfig.findOneAndUpdate(
       { key },
-      { key, value, description, updatedBy: req.user._id },
+      {
+        key,
+        value: cleanValue,
+        description: typeof description === 'string' ? description.slice(0, 300) : previous?.description,
+        updatedBy: req.user._id,
+      },
       { upsert: true, new: true }
     );
+    await AuditLog.create({
+      actor: { type: req.user.role, id: req.user._id, name: req.user.name },
+      action: 'SYSTEM_CONFIG_UPDATED',
+      details: { key, previousValue: previous?.value ?? null, newValue: cleanValue },
+      ipAddress: req.ip,
+    });
     return res.status(200).json({ success: true, message: 'Config updated', config });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });

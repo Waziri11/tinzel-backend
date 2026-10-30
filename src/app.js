@@ -214,9 +214,23 @@ function sanitizeResponseNode(node) {
   return cloned || raw;
 }
 
+const shouldRedactServerErrors = () =>
+  process.env.NODE_ENV === 'production' || process.env.REDACT_SERVER_ERRORS === 'true';
+const SAFE_SERVER_ERROR = 'An unexpected error occurred. Please try again or contact support with the reference ID.';
+
 app.use((req, res, next) => {
   const json = res.json.bind(res);
-  res.json = (body) => json(sanitizeResponseNode(body));
+  res.json = (body) => {
+    if (res.statusCode >= 500 && shouldRedactServerErrors() && body && typeof body === 'object' && !Array.isArray(body)) {
+      const original = body.message || body.error;
+      if (original) {
+        console.error(JSON.stringify({ event: 'server_error', requestId: req.requestId, path: req.originalUrl, status: res.statusCode, message: String(original) }));
+      }
+      const { message: _m, error: _e, details: _d, stack: _s, ...rest } = body;
+      body = { ...rest, success: false, message: SAFE_SERVER_ERROR, requestId: req.requestId };
+    }
+    return json(sanitizeResponseNode(body));
+  };
   next();
 });
 app.use('/api/proofs', proofReaderRoutes);
@@ -244,10 +258,12 @@ app.use((req, res) => {
 
 // Centralized Error Handler
 app.use((err, req, res, next) => {
-  console.error('[Server Error]', err.stack || err.message);
-  res.status(err.code === 'LIMIT_FILE_SIZE' || err.type === 'entity.too.large' ? 413 : err.name === 'VersionError' ? 409 : err.status || 500).json({
+  console.error('[Server Error]', req.requestId, err.stack || err.message);
+  const status = err.code === 'LIMIT_FILE_SIZE' || err.type === 'entity.too.large' ? 413 : err.name === 'VersionError' ? 409 : err.status || 500;
+  res.status(status).json({
     success: false,
     message: err.code === 'LIMIT_FILE_SIZE' ? 'This endpoint accepts small PDFs only. Refresh the application to use resumable uploads up to 500 MB.' : err.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : err.message || 'Internal Server Error',
+    requestId: req.requestId,
   });
 });
 
