@@ -101,11 +101,30 @@ function routes() {
         const job = await MediaJob.findById(proofJobId(req.proofOrder._id, req.proofVersion, number)).lean();
         return res.status(job?.state === 'failed' ? 422 : 202).json({ message: job?.state === 'failed' ? publicProofDiagnostic(job).message : 'Page is being prepared', ...(job?.state === 'failed' ? { diagnostic: publicProofDiagnostic(job) } : {}) });
       }
+      if (req.query.text === '1') { return res.json(pageGeometry(page)); }
       const identity = req.clientAuth ? `${req.proofOrder.clientName} (${req.proofOrder.trackingId})` : `${req.user.name} (${req.user.email})`;
-      const recordView=()=>AuditLog.create({ actor: { type: req.clientAuth ? 'client' : req.user.role, name: identity }, action: 'PROOF_PAGE_VIEWED', orderId: req.proofOrder._id, details: { version: req.proofVersion, page: number } });
-      if (req.query.text === '1') { await recordView();return res.json(pageGeometry(page)); }
       const started=performance.now();
       const view = /^[a-zA-Z0-9-]{8,80}$/.test(req.query.view||'') ? req.query.view : '';
+      const recordView=()=>AuditLog.updateOne(
+        {
+          orderId: req.proofOrder._id,
+          action: 'PROOF_PAGE_VIEWED',
+          'actor.name': identity,
+          'details.version': req.proofVersion,
+          'details.page': number,
+          ...(view ? { 'details.view': view } : {}),
+        },
+        {
+          $setOnInsert: {
+            actor: { type: req.clientAuth ? 'client' : req.user.role, name: identity },
+            action: 'PROOF_PAGE_VIEWED',
+            orderId: req.proofOrder._id,
+            details: { version: req.proofVersion, page: number, ...(view ? { view } : {}) },
+            createdAt: new Date(),
+          },
+        },
+        { upsert: true }
+      );
       let watermarkMs=0,auditMs=0;
       // Keep audit durability before delivery, but overlap its database round trip with image work.
       const [image] = await Promise.all([

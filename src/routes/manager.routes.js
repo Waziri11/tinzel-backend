@@ -203,7 +203,11 @@ router.get('/orders/:id', async (req, res) => {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
-    const auditLogs = await AuditLog.find({ orderId: order._id }).sort({ createdAt: -1 });
+    const auditQuery = {
+      orderId: order._id,
+      ...(req.query.includePageViews === '1' ? {} : { action: { $ne: 'PROOF_PAGE_VIEWED' } }),
+    };
+    const auditLogs = await AuditLog.find(auditQuery).sort({ createdAt: -1 }).limit(100).lean();
 
     return res.status(200).json({ success: true, order, auditLogs });
   } catch (error) {

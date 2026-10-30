@@ -427,7 +427,8 @@ router.put('/config', async (req, res) => {
 
 router.get('/audit-logs', async (req, res) => {
   try {
-    const logs = await AuditLog.find().sort({ createdAt: -1 }).limit(100);
+    const query = req.query.includePageViews === '1' ? {} : { action: { $ne: 'PROOF_PAGE_VIEWED' } };
+    const logs = await AuditLog.find(query).sort({ createdAt: -1 }).limit(100).lean();
     return res.status(200).json({ success: true, logs });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
