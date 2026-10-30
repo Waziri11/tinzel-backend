@@ -160,8 +160,11 @@ test('Client OTP: dispatches OTP to both WhatsApp and Email', async () => {
   const wa = notifs.find((n) => n.channel === 'whatsapp');
   const mail = notifs.find((n) => n.channel === 'email');
 
-  assert.ok(wa.message.includes('991122'));
-  assert.ok(mail.message.includes('991122'));
+  // OTP is delivered to the provider, but stored history/log entries must never retain the raw code.
+  assert.ok(wa && mail);
+  assert.equal(wa.message.includes('991122'), false);
+  assert.equal(mail.message.includes('991122'), false);
+  assert.ok(wa.message.includes('[REDACTED-OTP]'));
 });
 
 test('Twilio Webhook: updateNotificationDeliveryStatus updates status and error details', async () => {
