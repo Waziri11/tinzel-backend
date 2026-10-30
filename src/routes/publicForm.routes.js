@@ -195,28 +195,36 @@ router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos
       photosMeta = req.body.photosMetadata;
     }
 
-    // Persist any direct multipart photo files into GridFS
-    const directUploadedPhotos = [];
-    for (const [idx, file] of (req.files || []).entries()) {
-        const meta =
-          photosMeta.find((m) => m.originalName === file.originalname) ||
-          photosMeta[idx] ||
-          {};
-        const fieldId = meta.fieldId || '';
-        const folderName = meta.folderName || 'General Photos';
-        const stored = await storeOrderPhoto(file, {
-          fieldId,
-          folderName,
-          formSlug: form.slug,
-        });
-        directUploadedPhotos.push({
-          url: `/api/public/photos/${stored.id}`,
-          originalName: file.originalname,
-          size: file.size,
-          fieldId,
-          folderName,
-          uploadedAt: new Date(),
-        });
+    // Persist any direct multipart photo files into GridFS with bounded concurrency (4)
+    const filesList = req.files || [];
+    const directUploadedPhotos = new Array(filesList.length);
+    const PHOTO_UPLOAD_CONCURRENCY = 4;
+    for (let start = 0; start < filesList.length; start += PHOTO_UPLOAD_CONCURRENCY) {
+      const batch = filesList.slice(start, start + PHOTO_UPLOAD_CONCURRENCY);
+      await Promise.all(
+        batch.map(async (file, offset) => {
+          const idx = start + offset;
+          const meta =
+            photosMeta.find((m) => m.originalName === file.originalname) ||
+            photosMeta[idx] ||
+            {};
+          const fieldId = meta.fieldId || '';
+          const folderName = meta.folderName || 'General Photos';
+          const stored = await storeOrderPhoto(file, {
+            fieldId,
+            folderName,
+            formSlug: form.slug,
+          });
+          directUploadedPhotos[idx] = {
+            url: `/api/public/photos/${stored.id}`,
+            originalName: file.originalname,
+            size: file.size,
+            fieldId,
+            folderName,
+            uploadedAt: new Date(),
+          };
+        })
+      );
     }
 
     const uploadedPhotos = [...sanitizedPreUploaded, ...directUploadedPhotos];

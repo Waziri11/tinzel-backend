@@ -10,6 +10,22 @@ import { draftCommittedEvent } from './draftOutboxService.js';
 export const DRAFT_CHUNK_BYTES = 1024 * 1024;
 export const MAX_DRAFT_BYTES = 500 * 1024 * 1024;
 const collection = (name) => mongoose.connection.db.collection(`draftFiles.${name}`);
+let chunkIndexDb = null;
+let chunkIndexPromise = null;
+
+function ensureDraftChunkIndex() {
+  const currentDb = mongoose.connection.db;
+  if (chunkIndexPromise && chunkIndexDb === currentDb) return chunkIndexPromise;
+  chunkIndexDb = currentDb;
+  chunkIndexPromise = collection('chunks')
+    .createIndex({ files_id: 1, n: 1 }, { unique: true })
+    .catch((err) => {
+      chunkIndexPromise = null;
+      throw err;
+    });
+  return chunkIndexPromise;
+}
+
 export function draftError(status, message) { return Object.assign(new Error(message), { status }); }
 export function validateDraftGate(order, input) {
   if (!['assigned', 'in_design', 'revision_requested'].includes(order.status)) throw draftError(409, `A draft cannot be uploaded while the order is ${order.status.replaceAll('_',' ')}`);
@@ -24,7 +40,7 @@ export async function createDraftUpload(order, user, input) {
   validateDraftGate(order, input);
   if (!Number.isSafeInteger(input.size) || input.size < 5 || input.size > MAX_DRAFT_BYTES) throw draftError(413, 'Magazine PDFs must be at most 500 MB');
   if (!String(input.name || '').toLowerCase().endsWith('.pdf') || input.contentType !== 'application/pdf' || !/^[a-f0-9]{64}$/.test(input.fingerprint || '')) throw draftError(400, 'Choose a valid PDF file');
-  if (process.env.DRAFT_UPLOAD_PROVIDER !== 'blob') await collection('chunks').createIndex({ files_id: 1, n: 1 }, { unique: true });
+  if (process.env.DRAFT_UPLOAD_PROVIDER !== 'blob') await ensureDraftChunkIndex();
   const id = new mongoose.Types.ObjectId();
   const provider = process.env.DRAFT_UPLOAD_PROVIDER === 'blob' ? 'blob' : 'gridfs';
   if (provider === 'blob' && !process.env.DRAFT_BLOB_READ_WRITE_TOKEN) throw draftError(503, 'Private draft storage is not configured');
