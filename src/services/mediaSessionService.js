@@ -140,7 +140,7 @@ export async function completePhoto(sessionId, entry) {
   const asset = existing || await MediaAsset.findOneAndUpdate({ _id: entry._id }, { $setOnInsert: {
     ...entry, sessionId, blobPath: entry.provider === 'blob' ? blobPath(entry._id) : undefined,
   } }, { upsert: true, returnDocument: 'after' }).lean();
-  await MediaJob.updateOne({ _id: `preview:${entry._id}` }, { $setOnInsert: { kind: 'preview', assetId: entry._id } }, { upsert: true });
+  await MediaJob.updateOne({ _id: `preview:${entry._id}` }, { $setOnInsert: { kind: 'preview', assetId: entry._id, priority: 10 } }, { upsert: true });
   return asset;
 }
 
