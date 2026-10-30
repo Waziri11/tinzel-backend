@@ -1,6 +1,16 @@
 import { Router } from 'express';
 import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
 import { verifyTwilioWebhook } from '../middlewares/twilioWebhook.middleware.js';
+import { escapeRegex } from '../utils/regexUtils.js';
+
+export function escapeXml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { SystemConfig } from '../models/SystemConfig.model.js';
@@ -159,7 +169,7 @@ router.post('/webhooks/twilio-inbound', verifyTwilioWebhook, async (req, res) =>
         await notifyPrintingInProgress(targetOrder);
 
         const replyMessage = `Tinzel: Asante! Oda ya ${targetOrder.formTitle || targetOrder.trackingId} imethibitishwa kuwa inachapwa sasa.`;
-        return res.type('text/xml').send(`<Response><Message>${replyMessage}</Message></Response>`);
+        return res.type('text/xml').send(`<Response><Message>${escapeXml(replyMessage)}</Message></Response>`);
       }
 
       // No pending printing order found
@@ -173,16 +183,19 @@ router.post('/webhooks/twilio-inbound', verifyTwilioWebhook, async (req, res) =>
       });
 
       const replyMessage = `Tinzel: Ujumbe wako umepokelewa. Kwa sasa hakuna oda inayosubiri kuchapwa.`;
-      return res.type('text/xml').send(`<Response><Message>${replyMessage}</Message></Response>`);
+      return res.type('text/xml').send(`<Response><Message>${escapeXml(replyMessage)}</Message></Response>`);
     }
 
     // General Inbound Message (Client inquiry or feedback)
     // Attempt to match active client orders by phone
     let linkedOrderId = null;
     if (normalizedSender) {
-      const clientOrder = await Order.findOne({
-        clientWhatsApp: { $regex: new RegExp(cleanFromPhone.slice(-9) + '$') },
-      }).sort({ createdAt: -1 });
+      const safeSuffix = escapeRegex(cleanFromPhone.slice(-9));
+      const clientOrder = safeSuffix
+        ? await Order.findOne({
+            clientWhatsApp: { $regex: new RegExp(safeSuffix + '$') },
+          }).sort({ createdAt: -1 })
+        : null;
       if (clientOrder) {
         linkedOrderId = clientOrder._id;
       }
@@ -248,10 +261,10 @@ router.get('/history', async (req, res) => {
  */
 router.patch('/:id/read', async (req, res) => {
   try {
-    const updated = await markNotificationRead(req.params.id);
+    const updated = await markNotificationRead(req.params.id, req.user);
     res.status(200).json({ success: true, notification: updated });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 

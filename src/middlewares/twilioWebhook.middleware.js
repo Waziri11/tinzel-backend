@@ -6,8 +6,12 @@ import twilio from 'twilio';
  * requests are allowed through with a log.
  */
 export const verifyTwilioWebhook = (req, res, next) => {
-  // Allow bypassing in tests or if explicitly disabled
-  if (
+  if (process.env.NODE_ENV === 'production') {
+    if (!process.env.TWILIO_AUTH_TOKEN) {
+      console.error('[Twilio Webhook] CRITICAL: TWILIO_AUTH_TOKEN is missing in production');
+      return res.status(503).send('Forbidden: Webhook authentication not configured');
+    }
+  } else if (
     process.env.NODE_ENV === 'test' ||
     process.env.TWILIO_VALIDATE_WEBHOOKS === 'false' ||
     !process.env.TWILIO_AUTH_TOKEN

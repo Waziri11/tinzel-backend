@@ -1973,11 +1973,34 @@ export const getNotificationSummary = async (user = null) => {
   return { unreadCount, channelCounts };
 };
 
+function canUserAccessNotification(doc, user) {
+  if (!user || ['admin', 'manager'].includes(user.role)) return true;
+  if (!doc) return false;
+  if (doc.recipientUser && String(doc.recipientUser) === String(user._id)) return true;
+  if (doc.recipient === user.email || (user.phone && doc.recipient === user.phone)) return true;
+  if (['designer', 'all'].includes(doc.recipientRole) && !doc.recipientUser) return true;
+  return false;
+}
+
 /**
  * Marks a single notification (and any siblings sharing its eventGroupId) as read.
  */
-export const markNotificationRead = async (notificationId) => {
+export const markNotificationRead = async (notificationId, user = null) => {
   const now = new Date();
+
+  if (mongoose.connection.readyState === 1 && mongoose.isValidObjectId(notificationId)) {
+    const existing = await Notification.findById(notificationId).lean();
+    if (!existing) {
+      const err = new Error('Notification not found');
+      err.status = 404;
+      throw err;
+    }
+    if (!canUserAccessNotification(existing, user)) {
+      const err = new Error('Forbidden: You can only mark your own notifications as read');
+      err.status = 403;
+      throw err;
+    }
+  }
 
   const allMemoryLists = [inSystemNotifications, simulatedNotifications];
   let matchedGroupId = null;
@@ -1985,6 +2008,11 @@ export const markNotificationRead = async (notificationId) => {
   for (const list of allMemoryLists) {
     const found = list.find((n) => n.id === notificationId || String(n._id) === String(notificationId));
     if (found) {
+      if (!canUserAccessNotification(found, user)) {
+        const err = new Error('Forbidden: You can only mark your own notifications as read');
+        err.status = 403;
+        throw err;
+      }
       found.isRead = true;
       found.readAt = now.toISOString();
       if (found.eventGroupId) {
