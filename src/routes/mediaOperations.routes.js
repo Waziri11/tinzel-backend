@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import mongoose from 'mongoose';
 import { pipeline } from 'node:stream/promises';
 import { StaffUser } from '../models/StaffUser.model.js';
@@ -18,9 +18,17 @@ export async function archiveStatus(job, user, order) {
   await MediaDownloadTicket.create({ _id: digest(token), staffId: user._id, orderId: order._id, jobId: job._id, expiresAt: new Date(Date.now() + 10 * 60000) });
   return { jobId: job._id, state: 'ready', url: `/api/media-download/${token}` };
 }
+function isAuthorizedCronRequest(req) {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  const expected = Buffer.from(`Bearer ${secret}`, 'utf8');
+  const supplied = Buffer.from(String(req.headers.authorization || ''), 'utf8');
+  return expected.length === supplied.length && timingSafeEqual(expected, supplied);
+}
+
 const router = Router();
 router.get('/internal/media-jobs', async (req, res) => {
-  if (!process.env.CRON_SECRET || req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) return res.sendStatus(401);
+  if (!isAuthorizedCronRequest(req)) return res.sendStatus(401);
   try {
     const result = await runMediaJobs();
     if (process.env.MEDIA_CLEANUP_ENABLED === 'true') result.cleanup = await cleanExpiredUploads();

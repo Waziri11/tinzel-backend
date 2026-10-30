@@ -125,6 +125,9 @@ function sanitizeResponseNode(node) {
   if ('draftEvents' in raw) {
     delete ensureClone().draftEvents;
   }
+  if ('otp' in raw) {
+    delete ensureClone().otp;
+  }
   if (String(raw.action || '').startsWith('DRAFT_') && raw.details && typeof raw.details === 'object' && 'assetId' in raw.details) {
     const target = ensureClone();
     const details = typeof raw.details.toObject === 'function' ? raw.details.toObject() : { ...raw.details };

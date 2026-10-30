@@ -1,8 +1,9 @@
 import { assertNoPendingAnnotations, submitAnnotations } from '../services/proofReaderService.js';
 import { Router } from 'express';
+import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
-import { verifyClientToken, generateClientToken } from '../middlewares/auth.middleware.js';
+import { verifyClientToken, generateClientToken, getJwtSecret } from '../middlewares/auth.middleware.js';
 import { createRateLimiter } from '../middlewares/rateLimiter.js';
 import { sendNotification, notifyClientOtp, notifyClientApproved, notifyDraftReturned } from '../services/notificationService.js';
 import { sanitizeOrderForClient } from '../services/workflowService.js';
@@ -12,6 +13,28 @@ import { assertExpectedVersion, createRevisionRequest, normalizeCorrectionItems 
 const router = Router();
 
 const MAX_OTP_ATTEMPTS = 5;
+
+export function hashOtpCode(orderId, otpCode) {
+  return createHmac('sha256', getJwtSecret())
+    .update(`${String(orderId)}:${String(otpCode).trim()}`)
+    .digest('hex');
+}
+
+export function verifyOtpCode(orderId, storedCode, candidateOtp) {
+  const cleanCandidate = String(candidateOtp || '').trim();
+  const stored = String(storedCode || '').trim();
+  if (!cleanCandidate || !stored) return false;
+
+  // Support both HMAC-SHA256 stored hashes (64 hex chars) and legacy/test 6-digit codes via timingSafeEqual
+  const expected = /^[a-f0-9]{64}$/i.test(stored)
+    ? stored
+    : hashOtpCode(orderId, stored);
+  const actual = hashOtpCode(orderId, cleanCandidate);
+
+  const a = Buffer.from(expected, 'utf8');
+  const b = Buffer.from(actual, 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 const requestOtpLimiter = createRateLimiter({
   scope: 'client-request-otp',
@@ -78,12 +101,12 @@ router.post('/request-otp', requestOtpLimiter, async (req, res) => {
       });
     }
 
-    // Generate 6-digit OTP
-    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    // Generate cryptographically random 6-digit OTP and store only its keyed HMAC-SHA256 hash
+    const otpCode = randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
     order.otp = {
-      code: otpCode,
+      code: hashOtpCode(order._id, otpCode),
       expiresAt,
       attempts: 0,
     };
@@ -131,7 +154,7 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res) => {
       return res.status(400).json({ success: false, message: 'OTP has expired. Please request a new one' });
     }
 
-    if (order.otp.code !== otp.trim()) {
+    if (!verifyOtpCode(order._id, order.otp.code, otp)) {
       const nextAttempts = (order.otp.attempts || 0) + 1;
       if (nextAttempts >= MAX_OTP_ATTEMPTS) {
         order.otp = undefined;

@@ -549,6 +549,13 @@ export const sendNotification = async ({
     logEntry.status = 'failed';
   }
 
+  // Redact sensitive OTP codes before storing in logs or database history
+  const storedMessage =
+    template === 'client_otp'
+      ? String(message || '').replace(/\b\d{6}\b/g, '[REDACTED-OTP]')
+      : message;
+  logEntry.message = storedMessage;
+
   // Keep in-memory rolling log for developer visibility & admin dashboard
   if (channel === 'in_system') {
     inSystemNotifications.unshift(logEntry);
@@ -575,7 +582,7 @@ export const sendNotification = async ({
         orderId,
         template,
         subject,
-        message,
+        message: storedMessage,
         mediaUrl,
         twilioSid: logEntry.sid || null,
         mode: logEntry.mode,
@@ -1592,6 +1599,7 @@ export const notifyClientOtp = async (order, otpCode) => {
   };
 
   const message = `Namba yako ya siri (OTP) ya kuingia kwenye mfumo wa Tinzel ni: ${otpCode}. Itatumika kwa dakika 10.`;
+  const redactedSystemMessage = `Namba ya siri (OTP) ya kuingia kwenye mfumo wa Tinzel imetumwa kwa mteja (${order.clientName || order.trackingId}). [REDACTED-OTP]`;
 
   const inSystemPromise = recordInSystemNotification({
     recipient: order.clientName || order.clientWhatsApp,
@@ -1600,7 +1608,7 @@ export const notifyClientOtp = async (order, otpCode) => {
     eventGroupId,
     title: `OTP ya Mteja Imetumwa: ${order.trackingId || order.clientName}`,
     template: 'client_otp',
-    message,
+    message: redactedSystemMessage,
     orderId: order._id,
     emailTo: order.clientEmail,
     phoneTo: order.clientWhatsApp,
