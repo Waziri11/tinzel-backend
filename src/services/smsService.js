@@ -6,6 +6,7 @@ const NEXTSMS_V2_SINGLE_TEXT_ENDPOINT = 'https://messaging-service.co.tz/api/sms
 const NEXTSMS_V1_SINGLE_TEXT_ENDPOINT = 'https://messaging-service.co.tz/api/sms/v1/text/single';
 const NEXTSMS_V2_BALANCE_ENDPOINT = 'https://messaging-service.co.tz/api/v2/balance';
 const DEFAULT_SENDER_ID = 'ORDER';
+export const NEXTSMS_TIMEOUT_MS = Number(process.env.NEXTSMS_TIMEOUT_MS) || 10000;
 
 /**
  * Formats a phone number to NextSMS Tanzanian format (starts with '255', no '+' sign).
@@ -123,10 +124,16 @@ export const sendNextSMS = async (to, message, senderId) => {
         Accept: 'application/json',
       },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(NEXTSMS_TIMEOUT_MS),
     });
   } catch (networkError) {
-    const error = new Error(`Failed to reach NextSMS API: ${networkError.message}`);
-    error.status = 502;
+    const isTimeout = networkError?.name === 'TimeoutError' || networkError?.name === 'AbortError';
+    const error = new Error(
+      isTimeout
+        ? `NextSMS API timed out after ${NEXTSMS_TIMEOUT_MS}ms`
+        : `Failed to reach NextSMS API: ${networkError.message}`
+    );
+    error.status = isTimeout ? 504 : 502;
     error.cause = networkError;
     throw error;
   }
@@ -185,6 +192,7 @@ export const getNextSMSHealth = async () => {
         Authorization: authHeader,
         Accept: 'application/json',
       },
+      signal: AbortSignal.timeout(NEXTSMS_TIMEOUT_MS),
     });
 
     const data = await response.json().catch(() => null);
