@@ -73,15 +73,16 @@ export const uploadDraft = multer({
 });
 
 export const uploadPrint = multer({
-  storage: createStorage('print'),
+  // Memory storage + GridFS persistence avoids writing to Vercel's read-only /var/task filesystem.
+  storage: multer.memoryStorage(),
   fileFilter: documentFileFilter,
-  limits: { fileSize: 200 * 1024 * 1024 }, // 200MB for print files
+  limits: { fileSize: 4 * 1024 * 1024 }, // 4MB cap for single-request uploads; larger print PDFs use resumable sessions
 });
 
 export const uploadCover = multer({
   // Covers are persisted to MongoDB GridFS by the route. Memory storage avoids
-  // writing to Vercel's read-only /var/task filesystem.
+  // writing to Vercel's read-only /var/task filesystem, and 4MB fits Vercel's 4.5MB gateway limit.
   storage: multer.memoryStorage(),
   fileFilter: photoFileFilter,
-  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB for cover images
+  limits: { fileSize: 4 * 1024 * 1024 }, // 4MB for cover images (client + server WebP optimization)
 });

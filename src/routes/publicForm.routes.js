@@ -9,6 +9,7 @@ import { validateFormAnswers } from '../services/formResponseService.js';
 import { findCoverImage, openCoverImageStream } from '../services/coverStorageService.js';
 import { storeOrderPhoto, findOrderPhoto, openOrderPhotoStream } from '../services/photoStorageService.js';
 import { notifyOrderSubmitted } from '../services/notificationService.js';
+import sharp from 'sharp';
 
 const router = Router();
 
@@ -17,10 +18,30 @@ router.get('/covers/:id', async (req, res) => {
     const file = await findCoverImage(req.params.id);
     if (!file) return res.status(404).json({ success: false, message: 'Cover image not found' });
 
+    const requestedWidth = Number.parseInt(req.query.w, 10);
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+
+    const stream = openCoverImageStream(req.params.id);
+    if (Number.isInteger(requestedWidth) && requestedWidth >= 120 && requestedWidth <= 1200) {
+      res.setHeader('Content-Type', 'image/webp');
+      const transformer = sharp({ limitInputPixels: 60000000 })
+        .rotate()
+        .resize(requestedWidth, Math.round(requestedWidth * 1.35), { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 80 });
+      stream.on('error', (error) => {
+        if (!res.headersSent) res.status(500).json({ success: false, message: error.message });
+        else res.destroy(error);
+      });
+      transformer.on('error', (error) => {
+        if (!res.headersSent) res.status(500).json({ success: false, message: error.message });
+        else res.destroy(error);
+      });
+      return stream.pipe(transformer).pipe(res);
+    }
+
     res.setHeader('Content-Type', file.contentType || file.metadata?.contentType || 'application/octet-stream');
     res.setHeader('Content-Length', file.length);
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    const stream = openCoverImageStream(req.params.id);
     stream.on('error', (error) => {
       if (!res.headersSent) res.status(500).json({ success: false, message: error.message });
       else res.destroy(error);

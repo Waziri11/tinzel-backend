@@ -456,7 +456,7 @@ router.post(
   }
 );
 
-// Upload Final Print Document
+// Upload Final Print Document (supports durable GridFS storage, resumable uploadSessionId, or approved draft promotion)
 router.post('/orders/:id/upload-print-document', requireRoles('designer', 'admin'), uploadPrint.single('printFile'), async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
@@ -471,11 +471,25 @@ router.post('/orders/:id/upload-print-document', requireRoles('designer', 'admin
       });
     }
 
-    if (!req.file) {
+    let printUrl = '';
+    if (req.file) {
+      const assetId = await saveDraftPdf(req.file, order._id, `print-${(order.currentDraftVersion || 1)}`);
+      printUrl = `/api/public/drafts/${assetId}`;
+    } else if (req.body.uploadSessionId && mongoose.isValidObjectId(req.body.uploadSessionId)) {
+      const session = await DraftUpload.findOne({ _id: req.body.uploadSessionId, orderId: order._id });
+      if (!session) {
+        return res.status(404).json({ success: false, message: 'Print upload session not found' });
+      }
+      printUrl = session.provider === 'blob' ? session.blobPath : `/api/public/drafts/${session.assetId}`;
+    } else if (req.body.useApprovedDraft === true || req.body.useApprovedDraft === 'true') {
+      const latestDraft = (order.draftVersions || []).at(-1);
+      if (!latestDraft) {
+        return res.status(400).json({ success: false, message: 'No approved draft available to promote' });
+      }
+      printUrl = latestDraft.blobPath || `/api/public/drafts/${latestDraft.assetId}`;
+    } else {
       return res.status(400).json({ success: false, message: 'Print file is required' });
     }
-
-    const printUrl = `/uploads/print/${req.file.filename}`;
 
     const specs = {
       quantity: Number(req.body.quantity) || 1,
