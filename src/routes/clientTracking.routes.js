@@ -29,6 +29,33 @@ const verifyOtpLimiter = createRateLimiter({
   message: 'Too many OTP verification attempts. Please wait before trying again.',
 });
 
+const UNIFORM_LOOKUP_ERROR =
+  'Unable to verify tracking details. Please check your Tracking/Submission ID and registered WhatsApp number.';
+
+export function normalizeClientPhone(rawPhone) {
+  const digits = String(rawPhone || '')
+    .trim()
+    .replace(/[\s\-().+]/g, '');
+  if (!/^\d{9,15}$/.test(digits)) {
+    return null;
+  }
+  if (digits.length === 10 && digits.startsWith('0')) {
+    return `255${digits.slice(1)}`;
+  }
+  if (digits.length === 9 && /^[67]/.test(digits)) {
+    return `255${digits}`;
+  }
+  return digits;
+}
+
+async function findOrderByTrackingOrSubmissionId(rawId) {
+  const cleanId = String(rawId || '').trim().toUpperCase();
+  if (!cleanId) return null;
+  return Order.findOne({
+    $or: [{ trackingId: cleanId }, { submissionId: cleanId }],
+  });
+}
+
 // Request 6-Digit OTP for Client Tracking
 router.post('/request-otp', requestOtpLimiter, async (req, res) => {
   try {
@@ -40,28 +67,14 @@ router.post('/request-otp', requestOtpLimiter, async (req, res) => {
       });
     }
 
-    const cleanPhone = clientWhatsApp.trim().replace(/\s+/g, '');
-    const cleanTrackingId = trackingId.trim().toUpperCase();
+    const inputPhone = normalizeClientPhone(clientWhatsApp);
+    const order = await findOrderByTrackingOrSubmissionId(trackingId);
+    const storedPhone = order ? normalizeClientPhone(order.clientWhatsApp) : null;
 
-    const order = await Order.findOne({
-      trackingId: cleanTrackingId,
-    });
-
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'No order found with the provided Tracking ID',
-      });
-    }
-
-    // Verify phone match (allow with or without country code prefix match)
-    const storedPhone = order.clientWhatsApp.replace(/\s+/g, '').replace('+', '');
-    const inputPhone = cleanPhone.replace('+', '');
-
-    if (!storedPhone.endsWith(inputPhone) && !inputPhone.endsWith(storedPhone)) {
+    if (!order || !inputPhone || !storedPhone || inputPhone !== storedPhone) {
       return res.status(401).json({
         success: false,
-        message: 'The WhatsApp number does not match this Tracking ID record',
+        message: UNIFORM_LOOKUP_ERROR,
       });
     }
 
@@ -98,7 +111,7 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Tracking ID and OTP code are required' });
     }
 
-    const order = await Order.findOne({ trackingId: trackingId.trim().toUpperCase() });
+    const order = await findOrderByTrackingOrSubmissionId(trackingId);
     if (!order || !order.otp || !order.otp.code) {
       return res.status(400).json({ success: false, message: 'No active OTP request found' });
     }
