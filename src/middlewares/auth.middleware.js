@@ -85,7 +85,12 @@ export const verifyStaffToken = async (req, res, next) => {
     }
 
     const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, getJwtSecret());
+    let decoded;
+    try {
+      decoded = jwt.verify(token, getJwtSecret());
+    } catch {
+      return res.status(401).json({ success: false, message: 'Invalid or expired token' });
+    }
 
     const user = await StaffUser.findById(decoded.id).select('-passwordHash');
     if (!user || !user.isActive || user.deletedAt) {
@@ -99,7 +104,7 @@ export const verifyStaffToken = async (req, res, next) => {
     req.user = user;
     next();
   } catch (error) {
-    return res.status(401).json({ success: false, message: 'Invalid or expired token' });
+    return res.status(500).json({ success: false, message: error.message || 'Authentication error' });
   }
 };
 
