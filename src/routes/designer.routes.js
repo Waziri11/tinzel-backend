@@ -15,6 +15,7 @@ import { archiveStatus } from './mediaOperations.routes.js';
 import { deleteDraftPdf, isPdf, saveDraftPdf, streamDraftPdf } from '../services/draftFileService.js';
 import { activeRevisionRequest, assertExpectedVersion } from '../services/revisionRequestService.js';
 import { notifyDraftUploaded, notifyPrintDocumentUploaded } from '../services/notificationService.js';
+import { buildOrderSearchClauses, escapeRegex } from '../utils/regexUtils.js';
 
 const router = Router();
 
@@ -40,23 +41,54 @@ router.param('id', async (req, res, next, id) => {
   }
 });
 
-// Get all orders assigned to current designer
+// Get orders assigned to current designer with server-backed pagination & filters
 router.get('/orders', async (req, res) => {
   try {
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
     const filter = { assignedDesigner: req.user._id };
+
     if (req.user.role === 'admin' || req.user.role === 'manager') {
-      if (req.query.designerId) {
-        filter.assignedDesigner = req.query.designerId;
+      if (req.query.designerId && mongoose.isValidObjectId(req.query.designerId)) {
+        filter.assignedDesigner = new mongoose.Types.ObjectId(req.query.designerId);
       } else {
         delete filter.assignedDesigner;
       }
     }
 
-    const orders = await Order.find(filter)
-      .select('submissionId trackingId clientName formTitle status updatedAt assignedDesigner')
-      .sort({ updatedAt: -1 });
+    if (req.query.status && req.query.status !== 'all') {
+      if (req.query.status === 'active') {
+        filter.status = { $nin: ['delivered', 'closed'] };
+      } else {
+        filter.status = req.query.status;
+      }
+    }
 
-    return res.status(200).json({ success: true, count: orders.length, orders });
+    if (req.query.search) {
+      const searchClauses = buildOrderSearchClauses(req.query.search);
+      if (searchClauses) {
+        filter.$or = searchClauses;
+      }
+    }
+
+    const [orders, total] = await Promise.all([
+      Order.find(filter)
+        .select('submissionId trackingId clientName formTitle status currentDraftVersion updatedAt assignedDesigner')
+        .sort({ updatedAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Order.countDocuments(filter),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      count: orders.length,
+      total,
+      page,
+      pageCount: Math.max(1, Math.ceil(total / limit)),
+      orders,
+    });
   } catch (error) {
     return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });
   }
@@ -68,66 +100,144 @@ router.get('/returns', async (req, res) => {
     const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
     const status = req.query.status || 'active';
     const sourceFilter = req.query.source || 'all';
-    const search = (req.query.search || '').trim().toLowerCase();
+    const versionFilter = req.query.version ? Number.parseInt(req.query.version, 10) : null;
+    const safeSearch = escapeRegex(req.query.search || '');
 
-    const query = { 'revisionRequests.0': { $exists: true } };
-    if (req.user.role === 'designer') query.assignedDesigner = req.user._id;
+    const baseMatch = { 'revisionRequests.0': { $exists: true } };
+    if (req.user.role === 'designer') {
+      baseMatch.assignedDesigner = new mongoose.Types.ObjectId(req.user._id);
+    }
 
-    const orders = await Order.find(query)
-      .select('submissionId trackingId clientName clientWhatsApp formTitle status currentDraftVersion revisionRequests assignedDesigner updatedAt')
-      .populate('assignedDesigner', 'name email phone')
-      .sort({ updatedAt: -1 })
-      .lean();
+    const itemMatch = {};
+    if (status === 'resolved') itemMatch['revisionRequests.status'] = 'resolved';
+    else if (status === 'active') itemMatch['revisionRequests.status'] = { $ne: 'resolved' };
+    else if (status === 'open') itemMatch['revisionRequests.status'] = 'open';
+    else if (status === 'submitted_for_review') itemMatch['revisionRequests.status'] = 'submitted_for_review';
 
-    const allRows = orders.flatMap((order) =>
-      (order.revisionRequests || []).map((request) => ({
-        orderId: order._id,
-        trackingId: order.trackingId || order.submissionId,
-        submissionId: order.submissionId,
-        clientName: order.clientName,
-        clientWhatsApp: order.clientWhatsApp,
-        formTitle: order.formTitle,
-        orderStatus: order.status,
-        currentDraftVersion: order.currentDraftVersion,
-        assignedDesigner: order.assignedDesigner,
-        ...request,
-      }))
-    );
+    if (sourceFilter !== 'all') {
+      itemMatch['revisionRequests.source'] = sourceFilter;
+    }
+    if (Number.isInteger(versionFilter) && versionFilter > 0) {
+      itemMatch['revisionRequests.draftVersionNumber'] = versionFilter;
+    }
+    if (safeSearch) {
+      const rx = new RegExp(safeSearch, 'i');
+      itemMatch.$or = [
+        { trackingId: rx },
+        { submissionId: rx },
+        { clientName: rx },
+        { formTitle: rx },
+        { 'assignedDesignerDoc.name': rx },
+        { 'revisionRequests.items.text': rx },
+      ];
+    }
 
+    const [aggResult] = await Order.aggregate([
+      { $match: baseMatch },
+      { $sort: { updatedAt: -1 } },
+      {
+        $lookup: {
+          from: 'staffusers',
+          localField: 'assignedDesigner',
+          foreignField: '_id',
+          pipeline: [{ $project: { name: 1, email: 1, phone: 1 } }],
+          as: 'assignedDesignerDoc',
+        },
+      },
+      {
+        $set: {
+          assignedDesignerDoc: { $first: '$assignedDesignerDoc' },
+        },
+      },
+      { $unwind: '$revisionRequests' },
+      {
+        $facet: {
+          summary: [
+            {
+              $group: {
+                _id: null,
+                open: { $sum: { $cond: [{ $eq: ['$revisionRequests.status', 'open'] }, 1, 0] } },
+                submitted_for_review: {
+                  $sum: { $cond: [{ $eq: ['$revisionRequests.status', 'submitted_for_review'] }, 1, 0] },
+                },
+                active: { $sum: { $cond: [{ $ne: ['$revisionRequests.status', 'resolved'] }, 1, 0] } },
+                resolved: { $sum: { $cond: [{ $eq: ['$revisionRequests.status', 'resolved'] }, 1, 0] } },
+                manager: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $eq: ['$revisionRequests.source', 'manager'] },
+                          { $ne: ['$revisionRequests.status', 'resolved'] },
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                client: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $eq: ['$revisionRequests.source', 'client'] },
+                          { $ne: ['$revisionRequests.status', 'resolved'] },
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+              },
+            },
+          ],
+          filteredTotal: [...(Object.keys(itemMatch).length ? [{ $match: itemMatch }] : []), { $count: 'count' }],
+          rows: [
+            ...(Object.keys(itemMatch).length ? [{ $match: itemMatch }] : []),
+            { $skip: (page - 1) * limit },
+            { $limit: limit },
+            {
+              $project: {
+                _id: '$revisionRequests._id',
+                orderId: '$_id',
+                trackingId: { $ifNull: ['$trackingId', '$submissionId'] },
+                submissionId: '$submissionId',
+                clientName: '$clientName',
+                clientWhatsApp: '$clientWhatsApp',
+                formTitle: '$formTitle',
+                orderStatus: '$status',
+                currentDraftVersion: '$currentDraftVersion',
+                assignedDesigner: '$assignedDesignerDoc',
+                roundNumber: '$revisionRequests.roundNumber',
+                draftVersionNumber: '$revisionRequests.draftVersionNumber',
+                source: '$revisionRequests.source',
+                requestedBy: '$revisionRequests.requestedBy',
+                requestedAt: '$revisionRequests.requestedAt',
+                status: '$revisionRequests.status',
+                items: '$revisionRequests.items',
+                designerSubmittedAt: '$revisionRequests.designerSubmittedAt',
+                resolvedAt: '$revisionRequests.resolvedAt',
+                resolutionNote: '$revisionRequests.resolutionNote',
+              },
+            },
+          ],
+        },
+      },
+    ]);
+
+    const summaryDoc = aggResult?.summary?.[0] || {};
     const summary = {
-      open: allRows.filter((r) => r.status === 'open').length,
-      submitted_for_review: allRows.filter((r) => r.status === 'submitted_for_review').length,
-      active: allRows.filter((r) => r.status !== 'resolved').length,
-      resolved: allRows.filter((r) => r.status === 'resolved').length,
-      manager: allRows.filter((r) => r.source === 'manager' && r.status !== 'resolved').length,
-      client: allRows.filter((r) => r.source === 'client' && r.status !== 'resolved').length,
+      open: summaryDoc.open || 0,
+      submitted_for_review: summaryDoc.submitted_for_review || 0,
+      active: summaryDoc.active || 0,
+      resolved: summaryDoc.resolved || 0,
+      manager: summaryDoc.manager || 0,
+      client: summaryDoc.client || 0,
     };
-
-    const filteredRows = allRows.filter((request) => {
-      if (status === 'resolved' && request.status !== 'resolved') return false;
-      if (status === 'active' && request.status === 'resolved') return false;
-      if (status === 'open' && request.status !== 'open') return false;
-      if (status === 'submitted_for_review' && request.status !== 'submitted_for_review') return false;
-      if (sourceFilter !== 'all' && request.source !== sourceFilter) return false;
-      if (search) {
-        const hay = [
-          request.trackingId,
-          request.submissionId,
-          request.clientName,
-          request.formTitle,
-          request.assignedDesigner?.name,
-          ...(request.items || []).map((i) => i.text),
-        ]
-          .filter(Boolean)
-          .join(' ')
-          .toLowerCase();
-        if (!hay.includes(search)) return false;
-      }
-      return true;
-    });
-
-    const total = filteredRows.length;
-    const pagedRows = filteredRows.slice((page - 1) * limit, page * limit);
+    const total = aggResult?.filteredTotal?.[0]?.count || 0;
+    const pagedRows = aggResult?.rows || [];
 
     return res.json({
       success: true,
