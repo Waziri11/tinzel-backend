@@ -433,15 +433,21 @@ export const sanitizeEmailUrl = (value) => {
 
 const URL_PARAM_KEYS = new Set(['trackingUrl', 'staffUrl', 'actionUrl', 'url']);
 
-function escapeTemplateParams(value, key = '') {
-  if (value === null || value === undefined) return value;
+function escapeTemplateParams(value, key = '', depth = 0) {
+  if (depth > 4 || value === null || value === undefined) return value;
   if (typeof value === 'string') {
     return URL_PARAM_KEYS.has(key) ? escapeHtml(sanitizeEmailUrl(value)) : escapeHtml(value);
   }
-  if (Array.isArray(value)) return value.map((item) => escapeTemplateParams(item, key));
-  if (value instanceof Date) return value;
+  if (Array.isArray(value)) return value.map((item) => escapeTemplateParams(item, key, depth + 1));
+  if (value instanceof Date || Buffer.isBuffer(value) || value._bsontype) return value;
   if (typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, escapeTemplateParams(v, k)]));
+    if (typeof value.toObject === 'function') {
+      return escapeTemplateParams(value.toObject(), key, depth + 1);
+    }
+    if (value.constructor === Object || !value.constructor) {
+      return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, escapeTemplateParams(v, k, depth + 1)]));
+    }
+    return value;
   }
   return value;
 }
