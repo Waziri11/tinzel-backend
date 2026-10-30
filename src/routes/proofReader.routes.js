@@ -7,10 +7,10 @@ import { Order } from '../models/Order.model.js';
 import { MediaJob, ProofPage } from '../models/Media.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyStaffToken, verifyClientToken, requireRoles } from '../middlewares/auth.middleware.js';
+import { consumeRateLimit } from '../middlewares/rateLimiter.js';
 import { enqueueProof, proofJobId, watermarkedPage, requestProofBatch,requestProofGeometry,geometryJobId } from '../services/proofReaderService.js';
 
 const router = Router();
-const windows = new Map();
 router.use((_req, res, next) => { res.set('Cache-Control', 'private, no-store, max-age=0'); res.set('X-Content-Type-Options', 'nosniff'); next(); });
 async function access(req, res, next) {
   try {
@@ -29,12 +29,10 @@ async function access(req, res, next) {
     req.proofOrder = order; req.proofVersion = version;
     req.proofSource = req.clientAuth ? 'client' : 'manager';
     req.proofCanComment = version === order.currentDraftVersion && (req.clientAuth ? order.status === 'client_review' : ['manager', 'admin'].includes(req.user.role) && order.status === 'draft_manager_review');
-    const key = `${req.clientAuth ? 'client:' + orderId : 'staff:' + req.user._id}`;
-    const now = Date.now();
-    for (const [id, entry] of windows) if (entry.until < now) windows.delete(id);
-    const entry = windows.get(key) || { count: 0, until: now + 60000 };
-    if (++entry.count > 240) { res.set('Retry-After', '60'); return res.status(429).json({ message: 'Please wait before loading more pages' }); }
-    windows.set(key, entry); next();
+    const key = `${req.ip || 'ip'}:${req.clientAuth ? 'client:' + orderId : 'staff:' + req.user._id}`;
+    const rate = await consumeRateLimit({ scope: 'proof-reader', key, maxAttempts: 240, windowMs: 60000 });
+    if (!rate.allowed) { res.set('Retry-After', String(rate.retryAfterSeconds)); return res.status(429).json({ message: 'Please wait before loading more pages' }); }
+    next();
   } catch (e) { next(e); }
 }
 function visibleAnnotations(req) {

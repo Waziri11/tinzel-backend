@@ -1,11 +1,20 @@
 import { Router } from 'express';
 import { StaffUser } from '../models/StaffUser.model.js';
 import { generateToken, verifyStaffToken } from '../middlewares/auth.middleware.js';
+import { createRateLimiter } from '../middlewares/rateLimiter.js';
 
 const router = Router();
 
+const loginRateLimiter = createRateLimiter({
+  scope: 'staff-login',
+  maxAttempts: 10,
+  windowMs: 15 * 60 * 1000,
+  keyGenerator: (req) => `${req.ip || 'ip'}:${String(req.body?.email || '').trim().toLowerCase()}`,
+  message: 'Too many login attempts. Please wait 15 minutes before trying again.',
+});
+
 // Staff Login
-router.post('/login', async (req, res) => {
+router.post('/login', loginRateLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {

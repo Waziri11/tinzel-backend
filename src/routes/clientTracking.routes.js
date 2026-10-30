@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyClientToken, generateClientToken } from '../middlewares/auth.middleware.js';
+import { createRateLimiter } from '../middlewares/rateLimiter.js';
 import { sendNotification, notifyClientOtp, notifyClientApproved, notifyDraftReturned } from '../services/notificationService.js';
 import { sanitizeOrderForClient } from '../services/workflowService.js';
 import { streamDraftPdf } from '../services/draftFileService.js';
@@ -10,8 +11,26 @@ import { assertExpectedVersion, createRevisionRequest, normalizeCorrectionItems 
 
 const router = Router();
 
+const MAX_OTP_ATTEMPTS = 5;
+
+const requestOtpLimiter = createRateLimiter({
+  scope: 'client-request-otp',
+  maxAttempts: 5,
+  windowMs: 10 * 60 * 1000,
+  keyGenerator: (req) => `${req.ip || 'ip'}:${String(req.body?.trackingId || '').trim().toUpperCase()}`,
+  message: 'Too many OTP requests. Please wait a few minutes before requesting another code.',
+});
+
+const verifyOtpLimiter = createRateLimiter({
+  scope: 'client-verify-otp',
+  maxAttempts: 10,
+  windowMs: 10 * 60 * 1000,
+  keyGenerator: (req) => `${req.ip || 'ip'}:${String(req.body?.trackingId || '').trim().toUpperCase()}`,
+  message: 'Too many OTP verification attempts. Please wait before trying again.',
+});
+
 // Request 6-Digit OTP for Client Tracking
-router.post('/request-otp', async (req, res) => {
+router.post('/request-otp', requestOtpLimiter, async (req, res) => {
   try {
     const { trackingId, clientWhatsApp } = req.body;
     if (!trackingId || !clientWhatsApp) {
@@ -72,7 +91,7 @@ router.post('/request-otp', async (req, res) => {
 });
 
 // Verify OTP & generate client session token
-router.post('/verify-otp', async (req, res) => {
+router.post('/verify-otp', verifyOtpLimiter, async (req, res) => {
   try {
     const { trackingId, otp } = req.body;
     if (!trackingId || !otp) {
@@ -84,12 +103,32 @@ router.post('/verify-otp', async (req, res) => {
       return res.status(400).json({ success: false, message: 'No active OTP request found' });
     }
 
+    if ((order.otp.attempts || 0) >= MAX_OTP_ATTEMPTS) {
+      order.otp = undefined;
+      await order.save();
+      return res.status(429).json({
+        success: false,
+        message: 'Maximum OTP attempts exceeded. Please request a new code.',
+      });
+    }
+
     if (new Date() > new Date(order.otp.expiresAt)) {
+      order.otp = undefined;
+      await order.save();
       return res.status(400).json({ success: false, message: 'OTP has expired. Please request a new one' });
     }
 
     if (order.otp.code !== otp.trim()) {
-      order.otp.attempts = (order.otp.attempts || 0) + 1;
+      const nextAttempts = (order.otp.attempts || 0) + 1;
+      if (nextAttempts >= MAX_OTP_ATTEMPTS) {
+        order.otp = undefined;
+        await order.save();
+        return res.status(429).json({
+          success: false,
+          message: 'Maximum OTP attempts exceeded. Please request a new code.',
+        });
+      }
+      order.otp.attempts = nextAttempts;
       await order.save();
       return res.status(400).json({ success: false, message: 'Invalid OTP code' });
     }
