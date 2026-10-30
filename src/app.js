@@ -61,9 +61,7 @@ app.use('/api', async (req, res, next) => {
   req.dbWaitMs = Math.round(performance.now() - started);
   if (
     connected ||
-    req.path.startsWith('/health') ||
-    req.path.startsWith('/items') ||
-    req.path.startsWith('/v1/sms')
+    req.path.startsWith('/health')
   ) {
     return next();
   }

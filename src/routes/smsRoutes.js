@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import { sendSmsNotification, checkSmsHealth } from '../controllers/smsController.js';
+import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
 
 const router = Router();
+
+router.use(verifyStaffToken, requireRoles('admin', 'manager'));
 
 /**
  * @swagger
