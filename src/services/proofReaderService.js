@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import {GEOMETRY_VERSION,imageRegions} from './proofGeometry.js';
 import { Readable } from 'node:stream';
 import sharp from 'sharp';
 import { MediaJob, ProofPage } from '../models/Media.model.js';
@@ -33,6 +34,17 @@ export async function requestProofBatch(orderId, version, pages) {
   }
   const ready=new Set((await ProofPage.find({orderId,version,page:{$in:[...wanted]}}).select('page -_id').lean()).map(p=>p.page));
   await Promise.all([...wanted].filter(page=>!ready.has(page)).map(page=>enqueueProof(orderId,version,page,pages.includes(page)?400:100)));
+}
+export const geometryJobId=(orderId,version,page)=>`proof-geometry:${orderId}:${version}:${page}:${GEOMETRY_VERSION}`;
+export async function requestProofGeometry(orderId,version,pages,retry=false){
+  for(const page of pages){
+    const ready=await ProofPage.findOne({orderId,version,page}).select('geometryVersion').lean();
+    if(!ready){await requestProofBatch(orderId,version,[page]);continue;}
+    if(ready.geometryVersion>=GEOMETRY_VERSION)continue;
+    const id=geometryJobId(orderId,version,page);
+    try{await MediaJob.updateOne({_id:id},{$setOnInsert:{kind:'proof',geometryOnly:true,orderId,version,page,priority:50},$set:{requested:true}},{upsert:true});}catch(e){if(e.code!==11000)throw e;}
+    if(retry)await MediaJob.updateOne({_id:id,state:'failed'},{$set:{state:'queued',attempts:0,runAfter:new Date(),error:'',errorCode:null,errorReference:null}});
+  }
 }
 export async function readBuffer(stream, maxBytes = 100 * 1024 * 1024, signal) {
   const abort=()=>stream.destroy(signal.reason);signal?.addEventListener('abort',abort,{once:true});
@@ -79,13 +91,13 @@ export async function openPrivatePdf(draft, signal) {
     return pdf;
   } catch (error) { signal?.removeEventListener('abort', abort); await task.destroy().catch(() => {}); throw error; }
 }
-export async function renderProofPage(pdf, number, signal) {
+export async function renderProofPage(pdf, number, signal, {geometryOnly=false}={}) {
   const { createCanvas } = await import('@napi-rs/canvas');
   const page = await pdf.getPage(number);
   const base = page.getViewport({ scale: 1 });
   const viewport = page.getViewport({ scale: Math.min(2, 1800 / Math.max(base.width, base.height)) });
   const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
-  const task = page.render({ canvasContext: canvas.getContext('2d'), viewport });
+  const task = page.render({ canvasContext: canvas.getContext('2d'), canvas, viewport, recordImages:true });
   const cancel = () => task.cancel(); signal?.addEventListener('abort', cancel, { once: true });
   try {
     signal?.throwIfAborted(); await task.promise;
@@ -98,9 +110,10 @@ export async function renderProofPage(pdf, number, signal) {
       const ascent = (content.styles[t.fontName]?.ascent || .8) * height;
       return { str: t.str, x: (tx[4] + ascent * Math.sin(angle)) / viewport.width, y: (tx[5] - ascent * Math.cos(angle)) / viewport.height,
         width: t.width * viewport.scale / viewport.width, height: height / viewport.height,
-        angle: Math.atan2(tx[1], tx[0]) * 180 / Math.PI };
+        angle: Math.atan2(tx[1], tx[0]) * 180 / Math.PI, ascent:(content.styles[t.fontName]?.ascent||.8),
+        fontFamily:content.styles[t.fontName]?.fontFamily||'sans-serif',dir:t.dir||'ltr',hasEOL:!!t.hasEOL };
     });
-    return { image: await canvas.encode('webp',85), width: canvas.width, height: canvas.height, text };
+    return { image: geometryOnly?null:await canvas.encode('webp',85), width: canvas.width, height: canvas.height, text, geometryVersion:GEOMETRY_VERSION,imageRegions:imageRegions(page.imageCoordinates) };
   } finally { signal?.removeEventListener('abort', cancel); page.cleanup(); }
 }
 export async function buildProof(job, signal, context = new Map()) {
@@ -123,13 +136,18 @@ export async function buildProof(job, signal, context = new Map()) {
       await ProofPage.updateOne({ orderId: job.orderId, version: job.version, page: 0 }, { $set: { text: { pageCount: pdf.numPages } } }, { upsert: true });
       for (let page = 1; page <= Math.min(5, pdf.numPages); page++) { signal?.throwIfAborted(); await enqueueProof(job.orderId, job.version, page, page === 1 ? 400 : 100); }
     } else {
-      const rendered = await Promise.race([renderProofPage(pdf, job.page, signal), pdf.proofFailure]);
+      const rendered = await Promise.race([renderProofPage(pdf, job.page, signal,{geometryOnly:job.geometryOnly}), pdf.proofFailure]);
       const renderedAt=performance.now();
+      if(job.geometryOnly){
+        if(job.owner&&!await MediaJob.exists({_id:job._id,owner:job.owner,state:'running',leaseUntil:{$gt:new Date()}}))throw Object.assign(new Error('Worker lease lost'),{code:'PROOF_LEASE_LOST'});
+        await ProofPage.updateOne({orderId:job.orderId,version:job.version,page:job.page},{$set:{geometryVersion:rendered.geometryVersion,imageRegions:rendered.imageRegions,text:rendered.text}});
+        return;
+      }
       const output = bucket().openUploadStreamWithId(new mongoose.Types.ObjectId(job.outputId), 'page.webp', { contentType: 'image/webp' });
       await new Promise((resolve, reject) => { output.on('finish', resolve); output.on('error', reject); Readable.from(rendered.image).pipe(output); });
       if (job.owner && !await MediaJob.exists({_id:job._id,owner:job.owner,state:'running',leaseUntil:{$gt:new Date()}})) throw Object.assign(new Error('Worker lease lost before page publication'),{code:'PROOF_LEASE_LOST'});
       const old = await ProofPage.findOneAndUpdate({ orderId: job.orderId, version: job.version, page: job.page }, {
-        $set: { format: 'webp', renderVersion: 2, width: rendered.width, height: rendered.height, imageId: output.id, text: rendered.text },
+        $set: { format: 'webp', renderVersion: 2, width: rendered.width, height: rendered.height, imageId: output.id, text: rendered.text, geometryVersion:rendered.geometryVersion,imageRegions:rendered.imageRegions },
       }, { upsert: true });
       if (old?.imageId) await bucket().delete(old.imageId).catch(() => {});
       console.info(JSON.stringify({event:'proof_page_phases',job:job._id,sourceOpenMs:Math.round(openedAt-phaseStarted),renderMs:Math.round(renderedAt-openedAt),persistMs:Math.round(performance.now()-renderedAt),parserBytesRead:pdf.proofBytesRead(),rangeRequests:pdf.proofRangeRequests(),outputBytes:rendered.image.length}));

@@ -79,8 +79,9 @@ const draftVersionSchema = new mongoose.Schema(
 
 const proofAnnotationSchema = new mongoose.Schema({
   clientMutationId: String,
-  version: Number, page: Number, kind: { type: String, enum: ['text', 'area'] },
+  version: Number, page: Number, kind: { type: String, enum: ['text', 'area', 'image'] },
   rects: [{ x: Number, y: Number, width: Number, height: Number, _id: false }],
+  imageRegionId: String, imageQuad: [{x:Number,y:Number,_id:false}],
   selectedText: String, text: String, source: { type: String, enum: ['manager', 'client'] },
   authorId: String, authorName: String, createdAt: { type: Date, default: Date.now }, submittedAt: Date,
 });
