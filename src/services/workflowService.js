@@ -47,33 +47,81 @@ export const validateTransition = (currentStatus, targetStatus) => {
 };
 
 /**
- * Sanitizes order payload for client view, ensuring unreleased drafts are stripped.
+ * Sanitizes order payload for client view using an explicit allowlist of client-safe fields,
+ * ensuring unreleased drafts, assignmentHistory, printDocument URLs, and internal staff metadata are never exposed.
  */
 export const sanitizeOrderForClient = (order) => {
   const obj = order.toObject ? order.toObject() : { ...order };
 
-  // Previously released versions remain readable while replacement drafts stay private.
-  obj.draftVersions = (obj.draftVersions || []).filter(
-    (v) => v.managerReview?.status === 'approved'
-  ).map((v) => ({
-    _id: v._id, versionNumber: v.versionNumber, uploadedAt: v.uploadedAt,
-    managerReview: { status: v.managerReview.status, reviewedAt: v.managerReview.reviewedAt },
-    clientReview: v.clientReview,
-  }));
-
-  obj.revisionRequests = (obj.revisionRequests || [])
-    .filter((request) => request.source === 'client')
-    .map((request) => ({
-      _id: request._id, roundNumber: request.roundNumber, draftVersionNumber: request.draftVersionNumber,
-      status: request.status, requestedAt: request.requestedAt, resolvedAt: request.resolvedAt,
-      items: (request.items || []).map((item) => ({ _id: item._id, annotationId: item.annotationId, text: item.text, pageReference: item.pageReference, status: item.status })),
+  const draftVersions = (obj.draftVersions || [])
+    .filter((v) => v.managerReview?.status === 'approved')
+    .map((v) => ({
+      _id: v._id,
+      versionNumber: v.versionNumber,
+      uploadedAt: v.uploadedAt,
+      designerNotes: v.designerNotes || '',
+      managerReview: {
+        status: v.managerReview.status,
+        reviewedAt: v.managerReview.reviewedAt,
+      },
+      clientReview: v.clientReview,
     }));
 
-  // Remove internal OTP details and internal staff identifiers
-  delete obj.proofAnnotations;
-  delete obj.otp;
-  delete obj.__v;
-  delete obj.assignedDesigner;
+  const revisionRequests = (obj.revisionRequests || [])
+    .filter((request) => request.source === 'client')
+    .map((request) => ({
+      _id: request._id,
+      roundNumber: request.roundNumber,
+      draftVersionNumber: request.draftVersionNumber,
+      status: request.status,
+      requestedAt: request.requestedAt,
+      resolvedAt: request.resolvedAt,
+      items: (request.items || []).map((item) => ({
+        _id: item._id,
+        annotationId: item.annotationId,
+        text: item.text,
+        pageReference: item.pageReference,
+        status: item.status,
+      })),
+    }));
 
-  return obj;
+  const dispatchDetails = obj.dispatchDetails
+    ? {
+        carrier: obj.dispatchDetails.carrier || '',
+        trackingReference: obj.dispatchDetails.trackingReference || '',
+        dispatchedAt: obj.dispatchDetails.dispatchedAt || null,
+      }
+    : undefined;
+
+  const deliveryDetails = obj.deliveryDetails
+    ? {
+        deliveredAt: obj.deliveryDetails.deliveredAt || null,
+        recipientName: obj.deliveryDetails.recipientName || '',
+      }
+    : undefined;
+
+  return {
+    _id: obj._id,
+    submissionId: obj.submissionId,
+    trackingId: obj.trackingId,
+    formId: obj.formId,
+    formTitle: obj.formTitle,
+    clientName: obj.clientName,
+    clientWhatsApp: obj.clientWhatsApp,
+    clientEmail: obj.clientEmail,
+    status: obj.status,
+    previousStatusBeforeHold: obj.previousStatusBeforeHold,
+    holdReason: obj.holdReason,
+    submittedData: obj.submittedData,
+    submittedFields: obj.submittedFields,
+    uploadedPhotos: obj.uploadedPhotos,
+    currentDraftVersion: obj.currentDraftVersion,
+    approvedVersionNumber: obj.approvedVersionNumber,
+    draftVersions,
+    revisionRequests,
+    ...(dispatchDetails ? { dispatchDetails } : {}),
+    ...(deliveryDetails ? { deliveryDetails } : {}),
+    createdAt: obj.createdAt,
+    updatedAt: obj.updatedAt,
+  };
 };
