@@ -1848,6 +1848,101 @@ export const getNotificationHistory = async ({
 };
 
 /**
+ * Computes unreadCount and channelCounts in a single MongoDB $facet aggregation
+ * (or O(N) Set-based pass in simulation fallback), avoiding a second 250-doc fetch and O(N^2) scan.
+ */
+export const getNotificationSummary = async (user = null) => {
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const roleMatch = {};
+      if (user?.role === 'designer') {
+        roleMatch.$or = [
+          { recipientUser: new mongoose.Types.ObjectId(user._id) },
+          { recipientRole: { $in: ['designer', 'all'] } },
+          { recipient: user.email },
+          ...(user.phone ? [{ recipient: user.phone }] : []),
+        ];
+      }
+
+      const [facet] = await Notification.aggregate([
+        ...(Object.keys(roleMatch).length ? [{ $match: roleMatch }] : []),
+        { $sort: { createdAt: -1 } },
+        { $limit: 300 },
+        {
+          $facet: {
+            byChannel: [{ $group: { _id: '$channel', count: { $sum: 1 } } }],
+            failed: [
+              { $match: { status: { $in: ['failed', 'undelivered'] } } },
+              { $count: 'count' },
+            ],
+            unreadGroups: [
+              { $match: { isRead: false } },
+              {
+                $group: {
+                  _id: { $ifNull: ['$eventGroupId', { $toString: '$_id' }] },
+                },
+              },
+              { $count: 'count' },
+            ],
+          },
+        },
+      ]);
+
+      const byChannelMap = Object.fromEntries((facet?.byChannel || []).map((c) => [c._id, c.count]));
+      const totalDb = Object.values(byChannelMap).reduce((sum, n) => sum + n, 0);
+
+      if (totalDb > 0) {
+        return {
+          unreadCount: facet?.unreadGroups?.[0]?.count || 0,
+          channelCounts: {
+            all: totalDb,
+            in_system: byChannelMap.in_system || 0,
+            email: byChannelMap.email || 0,
+            whatsapp: byChannelMap.whatsapp || 0,
+            sms: byChannelMap.sms || 0,
+            failed: facet?.failed?.[0]?.count || 0,
+          },
+        };
+      }
+    } catch (err) {
+      console.warn(`[Notification Summary DB Error] ${err.message}`);
+    }
+  }
+
+  const allForSummary = [...simulatedNotifications, ...inSystemNotifications].slice(0, 250);
+  const inSystemGroups = new Set();
+  const channelCounts = {
+    all: allForSummary.length,
+    in_system: 0,
+    email: 0,
+    whatsapp: 0,
+    sms: 0,
+    failed: 0,
+  };
+
+  for (const n of allForSummary) {
+    if (n.channel && channelCounts[n.channel] !== undefined) {
+      channelCounts[n.channel] += 1;
+    }
+    if (n.status === 'failed' || n.status === 'undelivered') {
+      channelCounts.failed += 1;
+    }
+    if (n.channel === 'in_system' && n.eventGroupId) {
+      inSystemGroups.add(n.eventGroupId);
+    }
+  }
+
+  let unreadCount = 0;
+  for (const n of allForSummary) {
+    if (!n.isRead && (n.channel === 'in_system' || !n.eventGroupId || !inSystemGroups.has(n.eventGroupId))) {
+      unreadCount += 1;
+    }
+  }
+
+  return { unreadCount, channelCounts };
+};
+
+/**
  * Marks a single notification (and any siblings sharing its eventGroupId) as read.
  */
 export const markNotificationRead = async (notificationId) => {

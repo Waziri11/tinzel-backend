@@ -9,6 +9,7 @@ import {
   updateNotificationDeliveryStatus,
   recordInboundNotification,
   getNotificationHistory,
+  getNotificationSummary,
   markNotificationRead,
   markAllNotificationsRead,
   resendNotification,
@@ -217,32 +218,18 @@ router.use(verifyStaffToken, requireRoles('manager', 'admin', 'designer'));
 router.get('/history', async (req, res) => {
   try {
     const { limit = 100, orderId, channel, status, unreadOnly, search } = req.query;
-    const notifications = await getNotificationHistory({
-      limit: parseInt(limit, 10) || 100,
-      orderId: orderId || null,
-      channel: channel || null,
-      status: status || null,
-      unreadOnly: unreadOnly === 'true',
-      search: search || '',
-      user: req.user,
-    });
-
-    const allForSummary = (channel || status || unreadOnly === 'true' || search)
-      ? await getNotificationHistory({ limit: 250, user: req.user })
-      : notifications;
-
-    const unreadCount = allForSummary.filter(
-      (n) => !n.isRead && (n.channel === 'in_system' || !allForSummary.some((other) => other.channel === 'in_system' && other.eventGroupId && other.eventGroupId === n.eventGroupId))
-    ).length;
-
-    const channelCounts = {
-      all: allForSummary.length,
-      in_system: allForSummary.filter((n) => n.channel === 'in_system').length,
-      email: allForSummary.filter((n) => n.channel === 'email').length,
-      whatsapp: allForSummary.filter((n) => n.channel === 'whatsapp').length,
-      sms: allForSummary.filter((n) => n.channel === 'sms').length,
-      failed: allForSummary.filter((n) => n.status === 'failed' || n.status === 'undelivered').length,
-    };
+    const [notifications, { unreadCount, channelCounts }] = await Promise.all([
+      getNotificationHistory({
+        limit: parseInt(limit, 10) || 100,
+        orderId: orderId || null,
+        channel: channel || null,
+        status: status || null,
+        unreadOnly: unreadOnly === 'true',
+        search: search || '',
+        user: req.user,
+      }),
+      getNotificationSummary(req.user),
+    ]);
 
     res.status(200).json({
       success: true,
