@@ -291,4 +291,12 @@ const orderSchema = new mongoose.Schema(
   }
 );
 
+orderSchema.index({ status: 1, updatedAt: -1 });
+orderSchema.index({ assignedDesigner: 1, status: 1, updatedAt: -1 });
+orderSchema.index({ assignedDesigner: 1, updatedAt: -1 });
+orderSchema.index({ updatedAt: -1 });
+orderSchema.index({ createdAt: -1 });
+orderSchema.index({ 'draftEvents.state': 1, 'draftEvents.nextAttemptAt': 1 });
+orderSchema.index({ clientName: 1 });
+
 export const Order = mongoose.model('Order', orderSchema);
