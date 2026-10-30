@@ -11,6 +11,7 @@ import {
   isNextSMSConfigured,
   formatTanzanianPhone,
 } from './smsService.js';
+import { escapeRegex } from '../utils/regexUtils.js';
 
 // In-memory simulation log for development & inspection
 const simulatedNotifications = [];
@@ -1784,7 +1785,8 @@ export const getNotificationHistory = async ({
       }
 
       if (search && search.trim()) {
-        const rx = new RegExp(search.trim(), 'i');
+        const safeSearch = escapeRegex(search);
+        const rx = new RegExp(safeSearch, 'i');
         const searchOr = [
           { recipient: rx },
           { recipientName: rx },

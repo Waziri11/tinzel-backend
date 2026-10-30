@@ -28,6 +28,7 @@ import {
   validatePrinterStage,
 } from '../services/managerWorkflowService.js';
 import { assertExpectedVersion, closeActiveRevision, createRevisionRequest, normalizeCorrectionItems } from '../services/revisionRequestService.js';
+import { buildOrderSearchClauses } from '../utils/regexUtils.js';
 
 const router = Router();
 
@@ -128,15 +129,10 @@ router.get('/orders', async (req, res) => {
     }
 
     if (search) {
-      conditions.push({
-        $or: [
-          { clientName: { $regex: search, $options: 'i' } },
-          { clientWhatsApp: { $regex: search, $options: 'i' } },
-          { trackingId: { $regex: search, $options: 'i' } },
-          { submissionId: { $regex: search, $options: 'i' } },
-          { formTitle: { $regex: search, $options: 'i' } },
-        ],
-      });
+      const searchClauses = buildOrderSearchClauses(search);
+      if (searchClauses) {
+        conditions.push({ $or: searchClauses });
+      }
     }
 
     const query = conditions.length === 0 ? {} : conditions.length === 1 ? conditions[0] : { $and: conditions };
