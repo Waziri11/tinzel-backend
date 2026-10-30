@@ -1,5 +1,6 @@
 import twilio from 'twilio';
 import mongoose from 'mongoose';
+import { waitUntil } from '@vercel/functions';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { Notification } from '../models/Notification.model.js';
 import { StaffUser } from '../models/StaffUser.model.js';
@@ -559,10 +560,10 @@ export const sendNotification = async ({
 
   console.log(`[Notification Engine - ${channel.toUpperCase()}] To: ${to} | Template: ${template} | Mode: ${logEntry.mode}`);
 
-  // Safely persist to Notification collection if DB is connected
+  // Safely persist Notification and AuditLog concurrently if DB is connected
   if (mongoose.connection.readyState === 1) {
-    try {
-      const notifDoc = await Notification.create({
+    const dbWrites = [
+      Notification.create({
         recipient: to,
         recipientName,
         recipientRole,
@@ -584,32 +585,32 @@ export const sendNotification = async ({
         errorMessage: logEntry.error || null,
         fallbackFromChannel: logEntry.fallbackFromChannel || null,
         metadata,
-      });
-      logEntry._id = notifDoc._id;
-    } catch {
-      // Prevent isolated test environments without collections from throwing
-    }
-  }
+      })
+        .then((notifDoc) => {
+          logEntry._id = notifDoc._id;
+        })
+        .catch(() => {}),
+    ];
 
-  // Safely persist audit log if an associated order exists and DB is connected
-  if (orderId && mongoose.connection.readyState === 1 && channel !== 'in_system') {
-    try {
-      await AuditLog.create({
-        actor: { type: 'system', name: 'Notification Service' },
-        action: `NOTIFICATION_${template.toUpperCase()}`,
-        orderId,
-        details: {
-          to,
-          channel: logEntry.channel || channel,
-          template,
-          mode: logEntry.mode,
-          status: logEntry.status,
-          fallbackFromChannel: logEntry.fallbackFromChannel || null,
-        },
-      });
-    } catch {
-      // Prevent MongoDB connection issues in testing/isolated environments from throwing
+    if (orderId && channel !== 'in_system') {
+      dbWrites.push(
+        AuditLog.create({
+          actor: { type: 'system', name: 'Notification Service' },
+          action: `NOTIFICATION_${template.toUpperCase()}`,
+          orderId,
+          details: {
+            to,
+            channel: logEntry.channel || channel,
+            template,
+            mode: logEntry.mode,
+            status: logEntry.status,
+            fallbackFromChannel: logEntry.fallbackFromChannel || null,
+          },
+        }).catch(() => {})
+      );
     }
+
+    await Promise.all(dbWrites);
   }
 
   return logEntry;
@@ -877,7 +878,7 @@ export const notifyPaymentVerified = async (order, trackingUrl) => {
     `Namba yako ya Kufuatilia (Tracking ID) ni: ${order.trackingId}\n` +
     `Unaweza kufuatilia maendeleo ya jarida lako hapa: ${trackingUrl}`;
 
-  await recordInSystemNotification({
+  const inSystemPromise = recordInSystemNotification({
     recipient: order.clientName || order.trackingId,
     recipientName: order.clientName,
     recipientRole: 'manager',
@@ -936,7 +937,7 @@ export const notifyPaymentVerified = async (order, trackingUrl) => {
     );
   }
 
-  const results = await Promise.allSettled(notifications);
+  const [, results] = await Promise.all([inSystemPromise, Promise.allSettled(notifications)]);
   return results.map((r) => (r.status === 'fulfilled' ? r.value : { status: 'failed', error: r.reason }));
 };
 
@@ -1049,7 +1050,7 @@ export const notifyDraftReleased = async (order, trackingUrl) => {
     `Habari ${order.clientName}! Rasimu ya Jarida lako (Toleo la ${order.currentDraftVersion || 1}) ipo tayari kuangaliwa!\n` +
     `Tafadhali ingia hapa kuona kurasa zote za jarida na kutoa idhini au maoni: ${trackingUrl}`;
 
-  await recordInSystemNotification({
+  const inSystemPromise = recordInSystemNotification({
     recipient: order.clientName || order.trackingId,
     recipientName: order.clientName,
     recipientRole: 'manager',
@@ -1109,7 +1110,7 @@ export const notifyDraftReleased = async (order, trackingUrl) => {
     );
   }
 
-  const results = await Promise.allSettled(notifications);
+  const [, results] = await Promise.all([inSystemPromise, Promise.allSettled(notifications)]);
   return results.map((r) => (r.status === 'fulfilled' ? r.value : { status: 'failed', error: r.reason }));
 };
 
@@ -1124,15 +1125,15 @@ export const notifyDraftReturned = async (order, revisionRequest, source = 'mana
   const items = revisionRequest?.items || [];
   const roundNumber = revisionRequest?.roundNumber || 1;
 
-  let designer = null;
-  if (order.assignedDesigner && mongoose.connection.readyState === 1) {
-    try {
-      const designerId = order.assignedDesigner._id || order.assignedDesigner;
-      designer = await StaffUser.findById(designerId).select('_id name email phone role').lean();
-    } catch {
-      designer = null;
-    }
-  }
+  const [designer, managers] = await Promise.all([
+    order.assignedDesigner && mongoose.connection.readyState === 1
+      ? StaffUser.findById(order.assignedDesigner._id || order.assignedDesigner)
+          .select('_id name email phone role')
+          .lean()
+          .catch(() => null)
+      : Promise.resolve(null),
+    source === 'client' ? getActiveStaffByRole(['manager', 'admin']) : Promise.resolve([]),
+  ]);
 
   const dispatches = [];
   if (designer) {
@@ -1164,7 +1165,6 @@ export const notifyDraftReturned = async (order, revisionRequest, source = 'mana
   }
 
   if (source === 'client') {
-    const managers = await getActiveStaffByRole(['manager', 'admin']);
     for (const mgr of managers) {
       const tpl = emailTemplates.draft_returned({
         recipientName: mgr.name,
@@ -1221,16 +1221,16 @@ export const notifyClientApproved = async (order) => {
   const staffUrl = `${frontendUrl}/staff/post-design`;
   const trackingLabel = order.trackingId || order.submissionId;
 
-  const recipients = await getActiveStaffByRole(['manager', 'admin']);
-  if (order.assignedDesigner && mongoose.connection.readyState === 1) {
-    try {
-      const designerId = order.assignedDesigner._id || order.assignedDesigner;
-      const designer = await StaffUser.findById(designerId).select('_id name email phone role').lean();
-      if (designer) recipients.push(designer);
-    } catch {
-      // ignore
-    }
-  }
+  const [managers, designer] = await Promise.all([
+    getActiveStaffByRole(['manager', 'admin']),
+    order.assignedDesigner && mongoose.connection.readyState === 1
+      ? StaffUser.findById(order.assignedDesigner._id || order.assignedDesigner)
+          .select('_id name email phone role')
+          .lean()
+          .catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  const recipients = [...managers, ...(designer ? [designer] : [])];
 
   if (recipients.length === 0) {
     return [
@@ -1343,31 +1343,34 @@ export const notifyPrinterDispatch = async (order, printerPhone, printUrl, specs
     `Kiungo cha Faili la Print: ${printUrl}\n` +
     `Tafadhali jibu 'POKEA' kuthibitisha kuanza kazi.`;
 
-  await recordInSystemNotification({
-    recipient: printerPhone,
-    recipientName: 'Printing Partner',
-    recipientRole: 'manager',
-    eventGroupId,
-    title: `Imepelekwa kwa Mchapaji: ${order.trackingId}`,
-    template: 'print_dispatched',
-    message,
-    orderId: order._id,
-    phoneTo: printerPhone,
-    metadata: { trackingId: order.trackingId, phase: 'post_design' },
-  });
+  const [, outbound] = await Promise.all([
+    recordInSystemNotification({
+      recipient: printerPhone,
+      recipientName: 'Printing Partner',
+      recipientRole: 'manager',
+      eventGroupId,
+      title: `Imepelekwa kwa Mchapaji: ${order.trackingId}`,
+      template: 'print_dispatched',
+      message,
+      orderId: order._id,
+      phoneTo: printerPhone,
+      metadata: { trackingId: order.trackingId, phase: 'post_design' },
+    }),
+    sendNotification({
+      to: printerPhone,
+      recipientName: 'Printing Partner',
+      recipientRole: 'printer',
+      eventGroupId,
+      title: `Imepelekwa kwa Mchapaji: ${order.trackingId}`,
+      channel: 'whatsapp',
+      template: 'print_dispatched',
+      message,
+      mediaUrl: printUrl,
+      orderId: order._id,
+    }),
+  ]);
 
-  return sendNotification({
-    to: printerPhone,
-    recipientName: 'Printing Partner',
-    recipientRole: 'printer',
-    eventGroupId,
-    title: `Imepelekwa kwa Mchapaji: ${order.trackingId}`,
-    channel: 'whatsapp',
-    template: 'print_dispatched',
-    message,
-    mediaUrl: printUrl,
-    orderId: order._id,
-  });
+  return outbound;
 };
 
 /**
@@ -1393,7 +1396,7 @@ export const notifyPrintingInProgress = async (order) => {
     `Habari ${order.clientName}! Jarida lako limeanza kuchapwa rasmi kwenye mashine za uchapaji.\n` +
     `Tutakutaarifu pindi litakapokuwa tayari kusafirishwa.`;
 
-  await recordInSystemNotification({
+  const inSystemPromise = recordInSystemNotification({
     recipient: order.clientName || order.trackingId,
     recipientName: order.clientName,
     recipientRole: 'manager',
@@ -1449,7 +1452,7 @@ export const notifyPrintingInProgress = async (order) => {
     );
   }
 
-  const results = await Promise.allSettled(notifications);
+  const [, results] = await Promise.all([inSystemPromise, Promise.allSettled(notifications)]);
   return results.map((r) => (r.status === 'fulfilled' ? r.value : { status: 'failed', error: r.reason }));
 };
 
@@ -1481,7 +1484,7 @@ export const notifyDispatchRecorded = async (order, trackingRef, carrier, tracki
     `Kumbukumbu ya Mzigo: ${trackingRef || 'Inakuja'}\n` +
     `Asante kwa kuchagua Tinzel!`;
 
-  await recordInSystemNotification({
+  const inSystemPromise = recordInSystemNotification({
     recipient: order.clientName || order.trackingId,
     recipientName: order.clientName,
     recipientRole: 'manager',
@@ -1539,7 +1542,7 @@ export const notifyDispatchRecorded = async (order, trackingRef, carrier, tracki
     );
   }
 
-  const results = await Promise.allSettled(notifications);
+  const [, results] = await Promise.all([inSystemPromise, Promise.allSettled(notifications)]);
   return results.map((r) => (r.status === 'fulfilled' ? r.value : { status: 'failed', error: r.reason }));
 };
 
@@ -1590,7 +1593,7 @@ export const notifyClientOtp = async (order, otpCode) => {
 
   const message = `Namba yako ya siri (OTP) ya kuingia kwenye mfumo wa Tinzel ni: ${otpCode}. Itatumika kwa dakika 10.`;
 
-  await recordInSystemNotification({
+  const inSystemPromise = recordInSystemNotification({
     recipient: order.clientName || order.clientWhatsApp,
     recipientName: order.clientName,
     recipientRole: 'manager',
@@ -1646,8 +1649,28 @@ export const notifyClientOtp = async (order, otpCode) => {
     );
   }
 
-  const results = await Promise.allSettled(notifications);
+  const [, results] = await Promise.all([inSystemPromise, Promise.allSettled(notifications)]);
   return results.map((r) => (r.status === 'fulfilled' ? r.value : { status: 'failed', error: r.reason }));
+};
+
+/**
+ * Schedules a notification task in the background on Vercel/HTTP routes without
+ * blocking the HTTP response, while awaiting completion in test runner contexts.
+ */
+export const dispatchNotificationInBackground = async (taskFn) => {
+  const promise = Promise.resolve()
+    .then(taskFn)
+    .catch((err) => console.warn(`[Background Notification Error] ${err?.message || err}`));
+
+  if (process.env.NODE_TEST_CONTEXT) {
+    return promise;
+  }
+  try {
+    waitUntil(promise);
+  } catch {
+    // waitUntil is a no-op outside Vercel request context; promise continues on the event loop
+  }
+  return promise;
 };
 
 /**
