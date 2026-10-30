@@ -327,6 +327,10 @@ router.put('/staff/:id', async (req, res) => {
     const user = await StaffUser.findOne({ _id: req.params.id, deletedAt: null });
     if (!user) return res.status(404).json({ success: false, message: 'Staff user not found' });
     const wasActiveAdmin = user.role === 'admin' && user.isActive;
+    const previousRole = user.role;
+    const previousActive = user.isActive;
+    let shouldRevokeSessions = false;
+
     const { name, email, role, phone, isActive, maxActiveWorkload, isEligibleForAssignment, password } = req.body;
     if (name !== undefined) {
       if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ success: false, message: 'Name is required' });
@@ -338,6 +342,7 @@ router.put('/staff/:id', async (req, res) => {
     }
     if (role !== undefined) {
       if (!staffRoles.includes(role)) return res.status(400).json({ success: false, message: 'Choose a valid internal role' });
+      if (role !== previousRole) shouldRevokeSessions = true;
       user.role = role;
     }
     if (phone !== undefined) {
@@ -346,6 +351,7 @@ router.put('/staff/:id', async (req, res) => {
     }
     if (isActive !== undefined) {
       if (typeof isActive !== 'boolean') return res.status(400).json({ success: false, message: 'Status must be active or inactive' });
+      if (isActive !== previousActive && !isActive) shouldRevokeSessions = true;
       user.isActive = isActive;
     }
     if (isEligibleForAssignment !== undefined) {
@@ -359,6 +365,10 @@ router.put('/staff/:id', async (req, res) => {
     if (password !== undefined && password !== '') {
       if (typeof password !== 'string' || password.length < 8) return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
       user.passwordHash = await bcrypt.hash(password, 10);
+      shouldRevokeSessions = true;
+    }
+    if (shouldRevokeSessions) {
+      user.tokenVersion = (user.tokenVersion || 0) + 1;
     }
     if (String(user._id) === String(req.user._id) && (user.role !== 'admin' || !user.isActive)) return res.status(409).json({ success: false, message: 'You cannot remove your own administrator access' });
     if (wasActiveAdmin && (user.role !== 'admin' || !user.isActive)) {
@@ -391,6 +401,7 @@ router.delete('/staff/:id', async (req, res) => {
     if (await activeDesignerOrder(user._id)) return res.status(409).json({ success: false, message: 'Reassign this designer’s open orders before deleting their account' });
     user.isActive = false;
     user.deletedAt = new Date();
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
     await user.save();
     await logStaffChange(req, 'STAFF_DELETED', user);
     return res.status(200).json({ success: true, message: 'Staff account deleted' });

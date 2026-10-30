@@ -39,9 +39,15 @@ if (process.env.NODE_ENV === 'production') {
 
 export const generateToken = (user) => {
   return jwt.sign(
-    { id: user._id, email: user.email, role: user.role, name: user.name },
+    {
+      id: user._id,
+      email: user.email,
+      role: user.role,
+      name: user.name,
+      tv: Number(user.tokenVersion || 0),
+    },
     getJwtSecret(),
-    { expiresIn: '7d' }
+    { expiresIn: process.env.STAFF_JWT_EXPIRES_IN || '12h' }
   );
 };
 
@@ -66,6 +72,10 @@ export const verifyStaffToken = async (req, res, next) => {
     const user = await StaffUser.findById(decoded.id).select('-passwordHash');
     if (!user || !user.isActive || user.deletedAt) {
       return res.status(401).json({ success: false, message: 'Invalid or inactive user account' });
+    }
+
+    if (Number(decoded.tv ?? 0) !== Number(user.tokenVersion ?? 0)) {
+      return res.status(401).json({ success: false, message: 'Session has been revoked. Please sign in again.' });
     }
 
     req.user = user;

@@ -71,4 +71,17 @@ router.get('/me', verifyStaffToken, async (req, res) => {
   });
 });
 
+// Revoke Active Staff Session Tokens on Logout
+router.post('/logout', verifyStaffToken, async (req, res) => {
+  try {
+    await StaffUser.findByIdAndUpdate(req.user._id, { $inc: { tokenVersion: 1 } });
+    return res.status(200).json({
+      success: true,
+      message: 'Logged out and active session tokens revoked',
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Failed to revoke session' });
+  }
+});
+
 export default router;
