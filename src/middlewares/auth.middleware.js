@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken';
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { StaffUser } from '../models/StaffUser.model.js';
 
 const COMPROMISED_FALLBACK_SECRETS = new Set([
@@ -31,10 +31,20 @@ export function getJwtSecret() {
     );
   }
 
+  // In multi-instance or serverless environments (like Vercel) where JWT_SECRET has not yet
+  // been explicitly configured in project env vars, derive a consistent 256-bit secret
+  // from the private MONGODB_URI so all serverless cold starts share the exact same verification key.
+  const mongoUri = (process.env.MONGODB_URI || '').trim();
+  if (mongoUri) {
+    return createHmac('sha256', 'tinzel-jwt-stable-cluster-salt-2026')
+      .update(mongoUri)
+      .digest('hex');
+  }
+
   if (process.env.NODE_ENV === 'production' && !warnedAboutMissingSecret) {
     warnedAboutMissingSecret = true;
     console.warn(
-      '[Security Warning] JWT_SECRET environment variable is not configured in production. An ephemeral cryptographically secure secret is being used. Configure JWT_SECRET (32+ chars) in Vercel/production settings.'
+      '[Security Warning] Neither JWT_SECRET nor MONGODB_URI is available. Using ephemeral secret.'
     );
   }
 
