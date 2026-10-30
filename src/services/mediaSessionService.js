@@ -6,6 +6,7 @@ import { MagazineForm } from '../models/MagazineForm.model.js';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { validateFormAnswers } from './formResponseService.js';
+import { assertNoActiveImageContent } from './uploadService.js';
 import { mediaError } from './mediaErrors.js';
 
 export const CHUNK_BYTES = 1024 * 1024;
@@ -111,6 +112,13 @@ export async function writeChunk(entry, n, buffer) {
   if (entry.provider !== 'gridfs' || !Number.isInteger(n) || n < 0 || n >= Math.ceil(entry.size / CHUNK_BYTES)) throw mediaError(400, 'Invalid upload part');
   const expected = Math.min(CHUNK_BYTES, entry.size - n * CHUNK_BYTES);
   if (!Buffer.isBuffer(buffer) || buffer.length !== expected) throw mediaError(400, 'Incomplete upload part. Retry this photo.');
+  if (n === 0) {
+    try {
+      assertNoActiveImageContent(buffer);
+    } catch (err) {
+      throw mediaError(400, err.message);
+    }
+  }
   await ensureMediaIndexes();
   const filter = { files_id: new mongoose.Types.ObjectId(entry._id), n };
   const sha256 = digest(buffer);

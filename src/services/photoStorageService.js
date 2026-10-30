@@ -1,4 +1,6 @@
 import mongoose from 'mongoose';
+import sharp from 'sharp';
+import { assertNoActiveImageContent } from './uploadService.js';
 
 let cachedDb = null;
 let cachedBucket = null;
@@ -14,16 +16,42 @@ const bucket = () => {
   return cachedBucket;
 };
 
-export const storeOrderPhoto = (file, meta = {}) =>
-  new Promise((resolve, reject) => {
-    const buffer = Buffer.isBuffer(file.buffer) ? file.buffer : Buffer.from(file.buffer || []);
+export const storeOrderPhoto = async (file, meta = {}) => {
+  const rawBuffer = Buffer.isBuffer(file.buffer) ? file.buffer : Buffer.from(file.buffer || []);
+  assertNoActiveImageContent(rawBuffer);
+
+  let buffer = rawBuffer;
+  let contentType = file.mimetype || 'image/jpeg';
+
+  try {
+    const metadata = await sharp(rawBuffer, { limitInputPixels: 60000000 }).metadata();
+    if (metadata.format === 'svg') {
+      const err = new Error('SVG images are not permitted');
+      err.status = 400;
+      throw err;
+    }
+    if (metadata.format === 'png') {
+      buffer = await sharp(rawBuffer, { limitInputPixels: 60000000 }).rotate().png().toBuffer();
+      contentType = 'image/png';
+    } else if (metadata.format === 'webp') {
+      buffer = await sharp(rawBuffer, { limitInputPixels: 60000000 }).rotate().webp({ quality: 90 }).toBuffer();
+      contentType = 'image/webp';
+    } else if (metadata.format === 'jpeg' || metadata.format === 'jpg') {
+      buffer = await sharp(rawBuffer, { limitInputPixels: 60000000 }).rotate().jpeg({ quality: 90 }).toBuffer();
+      contentType = 'image/jpeg';
+    }
+  } catch (err) {
+    if (err.status === 400) throw err;
+  }
+
+  return new Promise((resolve, reject) => {
     const upload = bucket().openUploadStream(file.originalname || 'photo.jpg', {
       timeoutMS: 20000,
-      contentType: file.mimetype || 'image/jpeg',
+      contentType,
       metadata: {
         uploadedAt: new Date(),
         purpose: 'order_photo',
-        contentType: file.mimetype || 'image/jpeg',
+        contentType,
         fieldId: meta.fieldId || '',
         folderName: meta.folderName || 'General Photos',
         formSlug: meta.formSlug || '',
@@ -39,6 +67,7 @@ export const storeOrderPhoto = (file, meta = {}) =>
     );
     upload.end(buffer);
   });
+};
 
 export const findOrderPhoto = async (id) => {
   if (!mongoose.isValidObjectId(id)) return null;

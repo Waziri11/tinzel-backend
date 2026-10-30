@@ -23,15 +23,40 @@ const createStorage = (subfolder) =>
     },
   });
 
-const photoFileFilter = (req, file, cb) => {
-  const allowedTypes = /jpeg|jpg|png|webp|heic/;
-  const ext = path.extname(file.originalname).toLowerCase().replace('.', '');
-  const mime = file.mimetype;
-  if (allowedTypes.test(ext) || mime.startsWith('image/')) {
-    cb(null, true);
-  } else {
-    cb(new Error('Invalid image format. Allowed: JPG, PNG, WEBP, HEIC'));
+const ALLOWED_RASTER_EXT = /^(jpe?g|png|webp|heic|heif|avif|gif)$/i;
+const ALLOWED_RASTER_MIME = /^image\/(jpeg|jpg|png|webp|heic|heif|avif|gif)$/i;
+const ACTIVE_CONTENT_PATTERN = /<\s*(svg|\?xml|!doctype|html|script|iframe|object|embed)\b|onload\s*=|onerror\s*=|javascript:/i;
+
+export function assertNoActiveImageContent(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+    const err = new Error('Image file is empty');
+    err.status = 400;
+    throw err;
   }
+  const headText = buffer.subarray(0, Math.min(buffer.length, 1024)).toString('utf8');
+  if (ACTIVE_CONTENT_PATTERN.test(headText)) {
+    const err = new Error('Active or SVG image content is not permitted. Upload a raster image (JPG, PNG, WebP, HEIC).');
+    err.status = 400;
+    throw err;
+  }
+}
+
+const photoFileFilter = (req, file, cb) => {
+  const ext = path.extname(file.originalname || '').toLowerCase().replace('.', '');
+  const mime = String(file.mimetype || '').toLowerCase();
+  if (
+    ext === 'svg' ||
+    mime.includes('svg') ||
+    mime.includes('xml') ||
+    mime.includes('html') ||
+    !ALLOWED_RASTER_EXT.test(ext) ||
+    !ALLOWED_RASTER_MIME.test(mime)
+  ) {
+    const err = new Error('Invalid image format. Allowed raster formats: JPG, PNG, WEBP, HEIC');
+    err.status = 400;
+    return cb(err, false);
+  }
+  return cb(null, true);
 };
 
 const documentFileFilter = (req, file, cb) => {

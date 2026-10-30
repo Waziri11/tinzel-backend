@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import sharp from 'sharp';
+import { assertNoActiveImageContent } from './uploadService.js';
 
 const bucket = () => {
   if (!mongoose.connection.db) throw new Error('Database is not connected');
@@ -7,19 +8,29 @@ const bucket = () => {
 };
 
 export const storeCoverImage = async (file, uploadedBy) => {
-  let buffer = file.buffer;
+  const rawBuffer = Buffer.isBuffer(file.buffer) ? file.buffer : Buffer.from(file.buffer || []);
+  assertNoActiveImageContent(rawBuffer);
+
+  let buffer = rawBuffer;
   let contentType = file.mimetype || 'image/webp';
   let filename = file.originalname || 'cover.webp';
 
   try {
-    buffer = await sharp(file.buffer, { limitInputPixels: 60000000 })
+    const meta = await sharp(rawBuffer, { limitInputPixels: 60000000 }).metadata();
+    if (meta.format === 'svg') {
+      const err = new Error('SVG images are not permitted for covers');
+      err.status = 400;
+      throw err;
+    }
+    buffer = await sharp(rawBuffer, { limitInputPixels: 60000000 })
       .rotate()
       .resize(960, 1280, { fit: 'inside', withoutEnlargement: true })
       .webp({ quality: 82 })
       .toBuffer();
     contentType = 'image/webp';
     filename = filename.replace(/\.[^.]+$/, '') + '.webp';
-  } catch {
+  } catch (err) {
+    if (err.status === 400) throw err;
     // Fallback to raw buffer if synthetic test bytes are passed
   }
 

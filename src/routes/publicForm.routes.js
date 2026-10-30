@@ -22,6 +22,7 @@ router.get('/covers/:id', async (req, res) => {
     const requestedWidth = Number.parseInt(req.query.w, 10);
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
 
     const stream = openCoverImageStream(req.params.id);
     if (Number.isInteger(requestedWidth) && requestedWidth >= 120 && requestedWidth <= 1200) {
