@@ -7,15 +7,23 @@ import { CHUNK_BYTES, createSession, getSession, getEntry, reservePhoto, writeCh
   chunkStatus, completePhoto, removePhoto, cancelSelection, finalizeSession, mediaLimits, blobPath, photoDescriptor } from '../services/mediaSessionService.js';
 import { openAssetStream } from '../services/mediaReadService.js';
 import { verifySignedMediaRequest } from '../services/mediaSignService.js';
+import { createRateLimiter } from '../middlewares/rateLimiter.js';
 import { mediaError, respondMediaError } from '../services/mediaErrors.js';
 
 const router = express.Router();
+const sessionCreateLimiter = createRateLimiter({
+  scope: 'public-media-sessions',
+  maxAttempts: 25,
+  windowMs: 15 * 60 * 1000,
+  keyGenerator: (req) => `${req.ip || 'ip'}:${String(req.body?.slug || '').toLowerCase()}`,
+  message: 'Too many upload sessions started. Please wait before starting another submission.',
+});
 const token = (req) => req.headers['x-upload-token'];
 const route = (fn) => async (req, res) => { try { await fn(req, res); } catch (e) {
   if (res.headersSent) res.destroy(e); else respondMediaError(req, res, e);
 } };
 
-router.post('/sessions', route(async (req, res) => {
+router.post('/sessions', sessionCreateLimiter, route(async (req, res) => {
   const session = await createSession(String(req.body.slug || '').toLowerCase(), req.body.id, token(req));
   res.status(201).json({ success: true, id: session._id, limits: mediaLimits(), result: session.result });
 }));

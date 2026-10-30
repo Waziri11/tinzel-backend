@@ -9,10 +9,19 @@ import { validateFormAnswers } from '../services/formResponseService.js';
 import { findCoverImage, openCoverImageStream } from '../services/coverStorageService.js';
 import { storeOrderPhoto, findOrderPhoto, openOrderPhotoStream } from '../services/photoStorageService.js';
 import { verifySignedMediaRequest } from '../services/mediaSignService.js';
+import { createRateLimiter } from '../middlewares/rateLimiter.js';
 import { notifyOrderSubmitted } from '../services/notificationService.js';
 import sharp from 'sharp';
 
 const router = Router();
+
+const publicPhotoUploadLimiter = createRateLimiter({
+  scope: 'public-photo-upload',
+  maxAttempts: 60,
+  windowMs: 15 * 60 * 1000,
+  keyGenerator: (req) => `${req.ip || 'ip'}:${String(req.params.slug || '').toLowerCase()}`,
+  message: 'Upload quota reached for this session. Please wait a few minutes before uploading more photos.',
+});
 
 router.get('/covers/:id', async (req, res) => {
   try {
@@ -112,7 +121,23 @@ router.get('/forms/:slug', async (req, res) => {
 });
 
 // Upload a single order photo before final form submission (avoids 413 Payload Too Large on multi-photo orders)
-router.post('/forms/:slug/photos', boundPhotoRequest, (req, res) => {
+router.post('/forms/:slug/photos', publicPhotoUploadLimiter, boundPhotoRequest, async (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').toLowerCase();
+    const form = await MagazineForm.findOne({
+      slug,
+      isActive: true,
+      isArchived: false,
+    })
+      .select('_id slug')
+      .lean();
+    if (!form) {
+      return res.status(404).json({ success: false, message: 'Magazine form not found or inactive' });
+    }
+  } catch (err) {
+    return respondMediaError(req, res, err);
+  }
+
   uploadPhotos.single('photo')(req, res, async (uploadErr) => {
     if (uploadErr) {
       return respondMediaError(req, res, Object.assign(uploadErr, { status: 400 }));
@@ -198,19 +223,35 @@ router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos
       preUploadedPhotos = req.body.uploadedPhotos;
     }
 
-    const sanitizedPreUploaded = (Array.isArray(preUploadedPhotos) ? preUploadedPhotos : [])
-      .filter((p) => p && typeof p.url === 'string' && /^\/api\/public\/photos\/[a-f0-9]{24}$/i.test(p.url))
-      .map((p) => ({
-        url: p.url,
-        originalName: String(p.originalName || 'photo.jpg'),
-        size: Number(p.size) || 0,
-        fieldId: String(p.fieldId || ''),
+    const candidatePreUploaded = (Array.isArray(preUploadedPhotos) ? preUploadedPhotos : []).filter((p) => {
+      if (!p || typeof p.url !== 'string') return false;
+      const basePath = p.url.split('?')[0];
+      return /^\/api\/public\/photos\/[a-f0-9]{24}$/i.test(basePath);
+    });
+
+    const sanitizedPreUploaded = [];
+    for (const p of candidatePreUploaded) {
+      const basePath = p.url.split('?')[0];
+      const photoId = basePath.split('/').pop();
+      const storedFile = await findOrderPhoto(photoId);
+      if (!storedFile || (storedFile.metadata?.formSlug && storedFile.metadata.formSlug !== form.slug)) {
+        return res.status(400).json({
+          success: false,
+          message: 'One or more uploaded photos do not belong to this form submission.',
+        });
+      }
+      sanitizedPreUploaded.push({
+        url: basePath,
+        originalName: String(p.originalName || storedFile.filename || 'photo.jpg'),
+        size: Number(storedFile.length || p.size) || 0,
+        fieldId: String(p.fieldId || storedFile.metadata?.fieldId || ''),
         folderName:
           typeof p.folderName === 'string' && p.folderName.trim()
             ? p.folderName.trim()
-            : 'General Photos',
-        uploadedAt: new Date(),
-      }));
+            : storedFile.metadata?.folderName || 'General Photos',
+        uploadedAt: storedFile.uploadDate || new Date(),
+      });
+    }
 
     // Parse photos metadata (maps direct multipart files to question fieldId and folderName)
     let photosMeta = [];
