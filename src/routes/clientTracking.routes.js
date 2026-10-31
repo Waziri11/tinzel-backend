@@ -200,7 +200,7 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res) => {
 router.get('/order', verifyClientToken, async (req, res) => {
   try {
     const order = await Order.findById(req.clientAuth.orderId)
-      .populate('formId', 'title description price currency')
+      .populate('formId', 'title description price currency lipaNambaInstructions')
       .populate('assignedDesigner', 'name');
 
     if (!order) {
