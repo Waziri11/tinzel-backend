@@ -113,7 +113,18 @@ router.post('/request-otp', requestOtpLimiter, async (req, res) => {
     await order.save();
 
     // Send OTP via multi-channel notification service (WhatsApp & Email if available)
-    await notifyClientOtp(order, otpCode);
+    const dispatchResults = await notifyClientOtp(order, otpCode);
+
+    const hasAnySuccess = (dispatchResults || []).some(
+      (res) => res.status === 'sent' || res.status === 'delivered' || res.status === 'simulated'
+    );
+
+    if (!hasAnySuccess && (dispatchResults || []).length > 0) {
+      return res.status(502).json({
+        success: false,
+        message: 'Unable to deliver verification code. Our messaging provider is unreachable. Please contact support.',
+      });
+    }
 
     return res.status(200).json({
       success: true,

@@ -389,7 +389,7 @@ export const sendNotification = async ({
     timestamp,
     createdAt: timestamp,
     isRead: false,
-    status: 'delivered',
+    status: 'queued',
   };
 
   if (!metadata?.bypassSettings && !isTriggerChannelEnabled(template, channel)) {
@@ -422,6 +422,7 @@ export const sendNotification = async ({
       logEntry.status = 'failed';
     } else {
       logEntry.messageId = mailResult.messageId;
+      logEntry.status = mailResult.mode === 'simulated' ? 'simulated' : 'sent';
     }
   }
 
@@ -543,6 +544,7 @@ export const sendNotification = async ({
       }
     } else {
       logEntry.mode = 'simulated';
+      logEntry.status = 'simulated';
     }
   } else {
     logEntry.mode = 'unsupported_channel';
