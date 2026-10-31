@@ -1,13 +1,15 @@
 import { StaffUser } from '../models/StaffUser.model.js';
+import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { notifyOrderAssigned } from './notificationService.js';
 
 /**
  * Automatically assigns an order to the eligible designer with lowest active workload.
  * If all designers are at maximum capacity, moves order to 'queued_for_assignment'.
+ * Uses atomic reservations to prevent race conditions during concurrent assignments.
  */
 export const autoAssignOrder = async (order, assignedBy = null) => {
-  // Find eligible, active designers who have not exceeded their max workload
+  // Find eligible, active designers sorted by current active workload ascending
   const availableDesigners = await StaffUser.find({
     role: 'designer',
     isActive: true,
@@ -16,7 +18,29 @@ export const autoAssignOrder = async (order, assignedBy = null) => {
     $expr: { $lt: ['$currentActiveWorkload', '$maxActiveWorkload'] },
   }).sort({ currentActiveWorkload: 1, updatedAt: 1 });
 
-  if (!availableDesigners || availableDesigners.length === 0) {
+  let selectedDesigner = null;
+
+  // Atomically attempt to claim a workload slot from candidate designers in order of lowest workload
+  for (const candidate of availableDesigners) {
+    const claimed = await StaffUser.findOneAndUpdate(
+      {
+        _id: candidate._id,
+        role: 'designer',
+        isActive: true,
+        deletedAt: null,
+        isEligibleForAssignment: true,
+        $expr: { $lt: ['$currentActiveWorkload', '$maxActiveWorkload'] },
+      },
+      { $inc: { currentActiveWorkload: 1 } },
+      { new: true }
+    );
+    if (claimed) {
+      selectedDesigner = claimed;
+      break;
+    }
+  }
+
+  if (!selectedDesigner) {
     order.status = 'queued_for_assignment';
     await order.save();
 
@@ -32,48 +56,53 @@ export const autoAssignOrder = async (order, assignedBy = null) => {
     return { success: false, queued: true, message: 'All designers at capacity. Queued for assignment.' };
   }
 
-  const selectedDesigner = availableDesigners[0];
-
-  // Assign order
-  order.assignedDesigner = selectedDesigner._id;
-  order.status = 'assigned';
-  order.assignmentHistory.push({
-    designerId: selectedDesigner._id,
-    designerName: selectedDesigner.name,
-    assignedAt: new Date(),
-    assignedBy: assignedBy ? assignedBy._id : null,
-    reason: 'Auto-assignment (Lowest active workload)',
-  });
-
-  await order.save();
-
-  // Increment designer's active workload
-  await StaffUser.findByIdAndUpdate(selectedDesigner._id, {
-    $inc: { currentActiveWorkload: 1 },
-  });
-
-  await AuditLog.create({
-    actor: {
-      type: assignedBy ? assignedBy.role : 'system',
-      id: assignedBy ? assignedBy._id : null,
-      name: assignedBy ? assignedBy.name : 'Auto-Assignment Engine',
-    },
-    action: 'ORDER_ASSIGNED',
-    orderId: order._id,
-    details: {
+  try {
+    // Assign order
+    order.assignedDesigner = selectedDesigner._id;
+    order.status = 'assigned';
+    order.assignmentHistory.push({
       designerId: selectedDesigner._id,
       designerName: selectedDesigner.name,
-      newWorkload: selectedDesigner.currentActiveWorkload + 1,
-    },
-  });
+      assignedAt: new Date(),
+      assignedBy: assignedBy ? assignedBy._id : null,
+      reason: 'Auto-assignment (Lowest active workload)',
+    });
 
-  await notifyOrderAssigned(order, selectedDesigner);
+    await order.save();
 
-  return {
-    success: true,
-    designer: selectedDesigner,
-    message: `Order assigned to ${selectedDesigner.name}`,
-  };
+    await AuditLog.create({
+      actor: {
+        type: assignedBy ? assignedBy.role : 'system',
+        id: assignedBy ? assignedBy._id : null,
+        name: assignedBy ? assignedBy.name : 'Auto-Assignment Engine',
+      },
+      action: 'ORDER_ASSIGNED',
+      orderId: order._id,
+      details: {
+        designerId: selectedDesigner._id,
+        designerName: selectedDesigner.name,
+        newWorkload: selectedDesigner.currentActiveWorkload,
+      },
+    });
+
+    try {
+      await notifyOrderAssigned(order, selectedDesigner);
+    } catch (notifErr) {
+      console.warn(`[Assignment Notification Warning] ${notifErr.message}`);
+    }
+
+    return {
+      success: true,
+      designer: selectedDesigner,
+      message: `Order assigned to ${selectedDesigner.name}`,
+    };
+  } catch (err) {
+    // Rollback reserved workload slot if order update failed
+    await StaffUser.findByIdAndUpdate(selectedDesigner._id, [
+      { $set: { currentActiveWorkload: { $max: [0, { $subtract: ['$currentActiveWorkload', 1] }] } } },
+    ]);
+    throw err;
+  }
 };
 
 /**
@@ -93,11 +122,11 @@ export const manualAssignOrder = async (order, targetDesignerId, reason, manager
 
   const previousDesignerId = order.assignedDesigner;
 
-  // If reassigning, decrement previous designer's workload
+  // If reassigning, decrement previous designer's workload (clamped to 0)
   if (previousDesignerId && previousDesignerId.toString() !== targetDesignerId.toString()) {
-    await StaffUser.findByIdAndUpdate(previousDesignerId, {
-      $inc: { currentActiveWorkload: -1 },
-    });
+    await StaffUser.findByIdAndUpdate(previousDesignerId, [
+      { $set: { currentActiveWorkload: { $max: [0, { $subtract: ['$currentActiveWorkload', 1] }] } } },
+    ]);
   }
 
   // If new designer or reassigned from another, increment new designer's workload
@@ -138,18 +167,59 @@ export const manualAssignOrder = async (order, targetDesignerId, reason, manager
     },
   });
 
-  await notifyOrderAssigned(order, targetDesigner);
+  try {
+    await notifyOrderAssigned(order, targetDesigner);
+  } catch (notifErr) {
+    console.warn(`[Reassignment Notification Warning] ${notifErr.message}`);
+  }
 
   return { success: true, designer: targetDesigner };
 };
 
 /**
- * Releases workload when an order completes or is archived.
+ * Releases workload when an order completes or is archived. Clamped to min 0.
  */
 export const releaseOrderWorkload = async (order) => {
   if (order.assignedDesigner) {
-    await StaffUser.findByIdAndUpdate(order.assignedDesigner, {
-      $inc: { currentActiveWorkload: -1 },
-    });
+    await StaffUser.findByIdAndUpdate(order.assignedDesigner, [
+      { $set: { currentActiveWorkload: { $max: [0, { $subtract: ['$currentActiveWorkload', 1] }] } } },
+    ]);
   }
+};
+
+/**
+ * Reconciles staff designer workload counts against actual active orders in the database.
+ */
+export const reconcileDesignerWorkloads = async () => {
+  const activeStatuses = [
+    'assigned',
+    'in_design',
+    'draft_manager_review',
+    'client_review',
+    'revision_requested',
+  ];
+
+  const designers = await StaffUser.find({ role: 'designer', deletedAt: null }).lean();
+  const results = [];
+
+  for (const designer of designers) {
+    const actualCount = await Order.countDocuments({
+      assignedDesigner: designer._id,
+      status: { $in: activeStatuses },
+    });
+
+    if (designer.currentActiveWorkload !== actualCount) {
+      await StaffUser.findByIdAndUpdate(designer._id, {
+        $set: { currentActiveWorkload: actualCount },
+      });
+      results.push({
+        designerId: designer._id,
+        name: designer.name,
+        previousWorkload: designer.currentActiveWorkload,
+        correctedWorkload: actualCount,
+      });
+    }
+  }
+
+  return results;
 };
