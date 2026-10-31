@@ -1,7 +1,8 @@
+import { kickWorkflowNotifications } from './workflowNotificationService.js';
 import { StaffUser } from '../models/StaffUser.model.js';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
-import { notifyOrderAssigned } from './notificationService.js';
+
 
 /**
  * Automatically assigns an order to the eligible designer with lowest active workload.
@@ -53,6 +54,7 @@ export const autoAssignOrder = async (order, assignedBy = null) => {
       },
     });
 
+    await kickWorkflowNotifications(order._id);
     return { success: false, queued: true, message: 'All designers at capacity. Queued for assignment.' };
   }
 
@@ -86,7 +88,7 @@ export const autoAssignOrder = async (order, assignedBy = null) => {
     });
 
     try {
-      await notifyOrderAssigned(order, selectedDesigner);
+      await kickWorkflowNotifications(order._id);
     } catch (notifErr) {
       console.warn(`[Assignment Notification Warning] ${notifErr.message}`);
     }
@@ -100,7 +102,7 @@ export const autoAssignOrder = async (order, assignedBy = null) => {
     // Rollback reserved workload slot if order update failed
     await StaffUser.findByIdAndUpdate(selectedDesigner._id, [
       { $set: { currentActiveWorkload: { $max: [0, { $subtract: ['$currentActiveWorkload', 1] }] } } },
-    ]);
+    ], { updatePipeline: true });
     throw err;
   }
 };
@@ -126,7 +128,7 @@ export const manualAssignOrder = async (order, targetDesignerId, reason, manager
   if (previousDesignerId && previousDesignerId.toString() !== targetDesignerId.toString()) {
     await StaffUser.findByIdAndUpdate(previousDesignerId, [
       { $set: { currentActiveWorkload: { $max: [0, { $subtract: ['$currentActiveWorkload', 1] }] } } },
-    ]);
+    ], { updatePipeline: true });
   }
 
   // If new designer or reassigned from another, increment new designer's workload
@@ -168,7 +170,7 @@ export const manualAssignOrder = async (order, targetDesignerId, reason, manager
   });
 
   try {
-    await notifyOrderAssigned(order, targetDesigner);
+    await kickWorkflowNotifications(order._id);
   } catch (notifErr) {
     console.warn(`[Reassignment Notification Warning] ${notifErr.message}`);
   }
@@ -183,7 +185,7 @@ export const releaseOrderWorkload = async (order) => {
   if (order.assignedDesigner) {
     await StaffUser.findByIdAndUpdate(order.assignedDesigner, [
       { $set: { currentActiveWorkload: { $max: [0, { $subtract: ['$currentActiveWorkload', 1] }] } } },
-    ]);
+    ], { updatePipeline: true });
   }
 };
 

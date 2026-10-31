@@ -1,3 +1,4 @@
+import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import { Router } from 'express';
 import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
 import { verifyTwilioWebhook } from '../middlewares/twilioWebhook.middleware.js';
@@ -15,27 +16,7 @@ import { Order } from '../models/Order.model.js';
 import { Notification } from '../models/Notification.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { SystemConfig } from '../models/SystemConfig.model.js';
-import {
-  normalizePhoneNumber,
-  updateNotificationDeliveryStatus,
-  recordInboundNotification,
-  getNotificationHistory,
-  getNotificationSummary,
-  markNotificationRead,
-  markAllNotificationsRead,
-  resendNotification,
-  sendNotification,
-  dispatchTriChannelNotification,
-  testTwilioConnection,
-  notifyPrintingInProgress,
-  isTwilioConfigured,
-  getNotificationSettings,
-  updateNotificationSettings,
-  resetNotificationSettings,
-  getUnifiedDiagnostics,
-  runSmsHealthTest,
-  runEmailHealthTest,
-} from '../services/notificationService.js';
+import { normalizePhoneNumber, updateNotificationDeliveryStatus, recordInboundNotification, getNotificationHistory, getNotificationSummary, markNotificationRead, markAllNotificationsRead, resendNotification, sendNotification, dispatchTriChannelNotification, testTwilioConnection, isTwilioConfigured, getNotificationSettings, updateNotificationSettings, resetNotificationSettings, getUnifiedDiagnostics, runSmsHealthTest, runEmailHealthTest } from '../services/notificationService.js';
 
 const router = Router();
 
@@ -200,7 +181,7 @@ router.post('/webhooks/twilio-inbound', verifyTwilioWebhook, async (req, res) =>
         });
 
         // Trigger milestone notification to client: printing is now officially in progress
-        await notifyPrintingInProgress(targetOrder);
+        await kickWorkflowNotifications(targetOrder._id);
 
         const replyMessage = `Tinzel: Asante! Oda ya ${targetOrder.formTitle || targetOrder.trackingId} imethibitishwa kuwa inachapwa sasa.`;
         return res.type('text/xml').send(`<Response><Message>${escapeXml(replyMessage)}</Message></Response>`);
@@ -322,10 +303,11 @@ router.post('/mark-all-read', async (req, res) => {
 router.post('/resend/:id', requireRoles('manager', 'admin'), async (req, res) => {
   try {
     const { channel } = req.body;
-    const result = await resendNotification(req.params.id, { channelOverride: channel });
+    const { retryWorkflowNotification } = await import('../services/workflowNotificationService.js');
+    const result = await retryWorkflowNotification(req.params.id, {confirmUncertain:req.body.confirmUncertain === true}) ?? await resendNotification(req.params.id, { channelOverride: channel });
     res.status(200).json({ success: true, message: 'Notification re-dispatched', result });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 

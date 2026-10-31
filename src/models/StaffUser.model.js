@@ -25,6 +25,7 @@ const staffUserSchema = new mongoose.Schema(
       required: true,
       default: 'designer',
     },
+    preferredLanguage: { type: String, enum: ['en', 'sw'], default: 'sw' },
     phone: {
       type: String,
       trim: true,

@@ -1,3 +1,4 @@
+import workflowNotificationRoutes from './routes/workflowNotification.routes.js';
 import proofReaderRoutes from './routes/proofReader.routes.js';
 import 'dotenv/config';
 import express from 'express';
@@ -71,7 +72,7 @@ app.use(
   })
 );
 
-app.use(morgan('dev', { skip: (req) => req.originalUrl.startsWith('/api/media-download/') }));
+app.use(morgan('dev', { skip: (req) => (req.originalUrl.startsWith('/api/media-download/') || req.originalUrl.startsWith('/api/print-jobs/')) }));
 app.use((req, res, next) => {
   req.requestId = randomUUID();
   res.setHeader('X-Request-Id', req.requestId);
@@ -173,6 +174,7 @@ function sanitizeResponseNode(node) {
   if ('proofAnnotations' in raw) {
     delete ensureClone().proofAnnotations;
   }
+  if ('workflowEvents' in raw) delete ensureClone().workflowEvents;
   if ('draftEvents' in raw) {
     delete ensureClone().draftEvents;
   }
@@ -244,6 +246,7 @@ app.use('/api/items', itemRoutes);
 app.use('/api/public', publicFormRoutes);
 app.use('/api/public/media', mediaRoutes);
 app.use('/api', mediaOperationsRoutes);
+app.use('/api', workflowNotificationRoutes);
 app.use('/api/client', clientTrackingRoutes);
 app.use('/api/staff', staffAuthRoutes);
 app.use('/api/manager', managerRoutes);

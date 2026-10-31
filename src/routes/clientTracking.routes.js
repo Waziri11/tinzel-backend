@@ -1,16 +1,40 @@
+import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import { assertNoPendingAnnotations, submitAnnotations } from '../services/proofReaderService.js';
 import { Router } from 'express';
 import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
+import { Notification } from '../models/Notification.model.js';
+import mongoose from 'mongoose';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyClientToken, generateClientToken, getJwtSecret } from '../middlewares/auth.middleware.js';
 import { createRateLimiter } from '../middlewares/rateLimiter.js';
-import { sendNotification, notifyClientOtp, notifyClientApproved, notifyDraftReturned } from '../services/notificationService.js';
+import { sendNotification, notifyClientOtp } from '../services/notificationService.js';
 import { sanitizeOrderForClient } from '../services/workflowService.js';
 import { streamDraftPdf } from '../services/draftFileService.js';
 import { assertExpectedVersion, createRevisionRequest, normalizeCorrectionItems } from '../services/revisionRequestService.js';
 
 const router = Router();
+
+router.patch('/preferences',verifyClientToken,async(req,res)=>{
+  if(!['en','sw'].includes(req.body.preferredLanguage)) return res.status(400).json({message:'Choose English or Kiswahili'});
+  const result=await Order.updateOne({_id:req.clientAuth.orderId},{$set:{clientPreferredLanguage:req.body.preferredLanguage}});
+  if(!result.matchedCount)return res.sendStatus(404);
+  res.json({success:true,preferredLanguage:req.body.preferredLanguage});
+});
+router.get('/notifications',verifyClientToken,async(req,res)=>{
+  const filter={orderId:req.clientAuth.orderId,recipientRole:'client',channel:'in_system'};
+  const [notifications,unreadCount]=await Promise.all([
+    Notification.find(filter).sort({createdAt:-1}).limit(50).select('_id title message isRead createdAt').lean(),
+    Notification.countDocuments({...filter,isRead:false}),
+  ]);
+  res.json({success:true,notifications,unreadCount});
+});
+router.patch('/notifications/:id/read',verifyClientToken,async(req,res)=>{
+  if(!mongoose.isValidObjectId(req.params.id))return res.sendStatus(404);
+  const result=await Notification.updateOne({_id:req.params.id,orderId:req.clientAuth.orderId,recipientRole:'client',channel:'in_system'},{$set:{isRead:true,readAt:new Date()}});
+  if(!result.matchedCount)return res.sendStatus(404);
+  res.json({success:true});
+});
 
 const MAX_OTP_ATTEMPTS = 5;
 
@@ -276,7 +300,7 @@ router.post('/approve-draft', verifyClientToken, async (req, res) => {
       },
     });
 
-    await notifyClientApproved(order);
+    await kickWorkflowNotifications(order._id);
 
     return res.status(200).json({
       success: true,
@@ -341,7 +365,7 @@ router.post('/request-revision', verifyClientToken, async (req, res) => {
       },
     });
 
-    await notifyDraftReturned(order, revisionRequest, 'client');
+    await kickWorkflowNotifications(order._id);
 
     return res.status(200).json({
       success: true,

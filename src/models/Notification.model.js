@@ -8,11 +8,17 @@ export const NOTIFICATION_STATUSES = [
   'delivered',
   'failed',
   'undelivered',
-  'received',
+  'received', 'skipped', 'simulated', 'unconfirmed',
 ];
 
 const notificationSchema = new mongoose.Schema(
   {
+    deliveryKey: { type: String },
+    workflowEventKey: String,
+    attempts: { type: Number, default: 0 },
+    nextAttemptAt: Date,
+    retryable: { type: Boolean, default: false },
+    attemptHistory: { type: [mongoose.Schema.Types.Mixed], default: [] },
     recipient: {
       type: String,
       required: true,
@@ -131,6 +137,7 @@ const notificationSchema = new mongoose.Schema(
   }
 );
 
+notificationSchema.index({ deliveryKey: 1 }, { unique: true, partialFilterExpression: { deliveryKey: { $type: 'string' } } });
 notificationSchema.index({ createdAt: -1 });
 notificationSchema.index({ isRead: 1, channel: 1, createdAt: -1 });
 notificationSchema.index({ recipientRole: 1, isRead: 1, createdAt: -1 });

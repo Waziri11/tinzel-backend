@@ -1,3 +1,4 @@
+import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import { Router } from 'express';
 import { MagazineForm } from '../models/MagazineForm.model.js';
 import { Order } from '../models/Order.model.js';
@@ -10,7 +11,7 @@ import { findCoverImage, openCoverImageStream } from '../services/coverStorageSe
 import { storeOrderPhoto, findOrderPhoto, openOrderPhotoStream } from '../services/photoStorageService.js';
 import { verifySignedMediaRequest } from '../services/mediaSignService.js';
 import { createRateLimiter } from '../middlewares/rateLimiter.js';
-import { notifyOrderSubmitted } from '../services/notificationService.js';
+
 import sharp from 'sharp';
 
 const router = Router();
@@ -304,6 +305,7 @@ router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos
       return res.status(400).json({ success: false, message: answerErrors[0], errors: answerErrors });
     }
 
+    if (req.body.clientPreferredLanguage !== undefined && !['en','sw'].includes(req.body.clientPreferredLanguage)) return res.status(400).json({message:'Choose English or Kiswahili'});
     const submissionId = await generateUniqueSubmissionId();
 
     const order = await Order.create({
@@ -313,6 +315,7 @@ router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos
       clientName: clientName.trim(),
       clientWhatsApp: clientWhatsApp.trim(),
       clientEmail: clientEmail ? clientEmail.trim() : '',
+      clientPreferredLanguage: req.body.clientPreferredLanguage || 'sw',
       submittedData: parsedData,
       submittedFields: (form.fields || []).map((field) => ({
         fieldId: field.fieldId,
@@ -336,7 +339,7 @@ router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos
       ipAddress: req.ip,
     });
 
-    await notifyOrderSubmitted(order);
+    await kickWorkflowNotifications(order._id);
 
     return res.status(201).json({
       success: true,

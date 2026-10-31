@@ -135,6 +135,7 @@ export const sendNextSMS = async (to, message, senderId) => {
     );
     error.status = isTimeout ? 504 : 502;
     error.cause = networkError;
+    error.uncertain = true;
     throw error;
   }
 
@@ -158,6 +159,8 @@ export const sendNextSMS = async (to, message, senderId) => {
     const error = new Error(`NextSMS API error (${response.status}): ${upstreamMessage}`);
     error.status = response.status >= 400 && response.status < 500 ? response.status : 502;
     error.details = parsedBody;
+    error.uncertain = response.status >= 500;
+    error.retryable = response.status === 429;
     throw error;
   }
 

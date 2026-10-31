@@ -19,6 +19,8 @@ const simulatedNotifications = [];
 const inSystemNotifications = [];
 
 export const NOTIFICATION_TRIGGER_CATALOG = [
+  { key:'assignment_queued',label:'Paid order needs a designer',description:'No designer has capacity; manager assignment required.',category:'Pre-Design',recipient:'Manager & Admin',defaults:{enabled:true,in_system:true,email:true,sms:true} },
+  { key:'printing_completed',label:'Printing completed — dispatch required',description:'Printing is complete; arrange delivery.',category:'Post-Design',recipient:'Manager & Admin',defaults:{enabled:true,in_system:true,email:true,sms:true} },
   {
     key: 'order_submitted',
     label: 'Order Submitted (Client & Staff)',
@@ -367,6 +369,7 @@ export const sendNotification = async ({
   metadata = {},
   orderId = null,
   fallbackToSms = true,
+  skipPersistence = false,
 }) => {
   const timestamp = new Date().toISOString();
   const logEntry = {
@@ -419,7 +422,8 @@ export const sendNotification = async ({
     logEntry.mode = mailResult.mode;
     if (mailResult.error) {
       logEntry.error = mailResult.error;
-      logEntry.status = 'failed';
+      logEntry.status = mailResult.uncertain ? 'unconfirmed' : 'failed';
+      logEntry.retryable = mailResult.retryable === true;
     } else {
       logEntry.messageId = mailResult.messageId;
       logEntry.status = mailResult.mode === 'simulated' ? 'simulated' : 'sent';
@@ -433,7 +437,7 @@ export const sendNotification = async ({
     const useNextSms =
       !isUnitTestContext &&
       isNextSMSConfigured() &&
-      (channel === 'sms' || !client);
+      (channel === 'sms' || (!metadata.workflow && !client));
 
     if (useNextSms) {
       try {
@@ -453,7 +457,8 @@ export const sendNotification = async ({
         }
         logEntry.mode = 'nextsms_live';
         logEntry.sid = String(firstMsg?.messageId || firstMsg?.sendReference || '');
-        logEntry.status = isRejected ? 'failed' : 'sent';
+        logEntry.status = isRejected ? 'failed' : firstMsg?.messageId || firstMsg?.sendReference ? 'sent' : 'unconfirmed';
+        logEntry.retryable = false;
         if (isRejected) {
           logEntry.error =
             firstMsg?.status?.description || firstMsg?.status?.name || 'NextSMS rejected message';
@@ -469,7 +474,8 @@ export const sendNotification = async ({
         console.warn(`[NextSMS Error] ${nextErr.message}`);
         logEntry.channel = 'sms';
         logEntry.mode = 'nextsms_failed';
-        logEntry.status = 'failed';
+        logEntry.status = nextErr.uncertain ? 'unconfirmed' : 'failed';
+        logEntry.retryable = nextErr.retryable === true;
         logEntry.error = nextErr.message;
       }
     } else if (client) {
@@ -540,6 +546,8 @@ export const sendNotification = async ({
           logEntry.mode = 'twilio_failed_fallback_simulated';
           logEntry.status = 'failed';
           logEntry.error = error.message;
+          logEntry.status = !error.status || error.status >= 500 ? 'unconfirmed' : 'failed';
+          logEntry.retryable = error.status === 429;
         }
       }
     } else {
@@ -550,6 +558,8 @@ export const sendNotification = async ({
     logEntry.mode = 'unsupported_channel';
     logEntry.status = 'failed';
   }
+
+  if (skipPersistence) return logEntry;
 
   // Redact sensitive OTP codes before storing in logs or database history
   const storedMessage =
@@ -593,7 +603,7 @@ export const sendNotification = async ({
         errorCode: logEntry.errorCode || null,
         errorMessage: logEntry.error || null,
         fallbackFromChannel: logEntry.fallbackFromChannel || null,
-        metadata,
+        metadata: logEntry.metadata,
       })
         .then((notifDoc) => {
           logEntry._id = notifDoc._id;
@@ -1811,7 +1821,7 @@ export const getNotificationHistory = async ({
       if (user?.role === 'designer') {
         filter.$or = [
           { recipientUser: user._id },
-          { recipientRole: { $in: ['designer', 'all'] } },
+          { recipientUser: null, recipientRole: { $in: ['designer', 'all'] } },
           { recipient: user.email },
           ...(user.phone ? [{ recipient: user.phone }] : []),
         ];
@@ -1842,9 +1852,7 @@ export const getNotificationHistory = async ({
         .populate('orderId', 'trackingId submissionId formTitle clientName status')
         .lean();
 
-      if (items && items.length > 0) {
-        return items;
-      }
+      return items || [];
     } catch (err) {
       console.warn(`[Notification History DB Error] ${err.message}`);
     }
@@ -1857,6 +1865,7 @@ export const getNotificationHistory = async ({
 
   return combined
     .filter((item) => {
+      if (!canUserAccessNotification(item,user)) return false;
       if (orderId && String(item.orderId) !== String(orderId)) return false;
       if (channel && channel !== 'all') {
         if (channel === 'phone') {
@@ -1887,11 +1896,11 @@ export const getNotificationHistory = async ({
 export const getNotificationSummary = async (user = null) => {
   if (mongoose.connection.readyState === 1) {
     try {
-      const roleMatch = {};
+      const roleMatch = user ? { $or:[{recipientUser:new mongoose.Types.ObjectId(user._id || user.id)},{recipientUser:null,recipientRole:{$in:[user.role,'all',...(['admin','manager'].includes(user.role)?['manager']:[])]}}] } : {};
       if (user?.role === 'designer') {
         roleMatch.$or = [
           { recipientUser: new mongoose.Types.ObjectId(user._id) },
-          { recipientRole: { $in: ['designer', 'all'] } },
+          { recipientUser: null, recipientRole: { $in: ['designer', 'all'] } },
           { recipient: user.email },
           ...(user.phone ? [{ recipient: user.phone }] : []),
         ];
@@ -1909,7 +1918,7 @@ export const getNotificationSummary = async (user = null) => {
               { $count: 'count' },
             ],
             unreadGroups: [
-              { $match: { isRead: false } },
+              { $match: { isRead: false, channel: 'in_system' } },
               {
                 $group: {
                   _id: { $ifNull: ['$eventGroupId', { $toString: '$_id' }] },
@@ -1924,7 +1933,7 @@ export const getNotificationSummary = async (user = null) => {
       const byChannelMap = Object.fromEntries((facet?.byChannel || []).map((c) => [c._id, c.count]));
       const totalDb = Object.values(byChannelMap).reduce((sum, n) => sum + n, 0);
 
-      if (totalDb > 0) {
+      if (totalDb >= 0) {
         return {
           unreadCount: facet?.unreadGroups?.[0]?.count || 0,
           channelCounts: {
@@ -1967,7 +1976,7 @@ export const getNotificationSummary = async (user = null) => {
 
   let unreadCount = 0;
   for (const n of allForSummary) {
-    if (!n.isRead && (n.channel === 'in_system' || !n.eventGroupId || !inSystemGroups.has(n.eventGroupId))) {
+    if (!n.isRead && n.channel === 'in_system' && canUserAccessNotification(n,user)) {
       unreadCount += 1;
     }
   }
@@ -2061,17 +2070,18 @@ export const markAllNotificationsRead = async (user = null) => {
 
   for (const list of [inSystemNotifications, simulatedNotifications]) {
     for (const item of list) {
+      if (!canUserAccessNotification(item,user)) continue;
       item.isRead = true;
       item.readAt = now.toISOString();
     }
   }
 
   if (mongoose.connection.readyState === 1) {
-    const filter = { isRead: false };
+    const filter = { isRead: false, ...(user ? {$or:[{recipientUser:user._id},{recipientUser:null,recipientRole:{$in:[user.role,'all']}}]} : {}) };
     if (user?.role === 'designer') {
       filter.$or = [
         { recipientUser: user._id },
-        { recipientRole: { $in: ['designer', 'all'] } },
+        { recipientUser: null, recipientRole: { $in: ['designer', 'all'] } },
         { recipient: user.email },
       ];
     }

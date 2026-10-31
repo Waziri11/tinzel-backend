@@ -45,6 +45,7 @@ router.post('/login', loginRateLimiter, async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        preferredLanguage: user.preferredLanguage || 'sw',
         currentActiveWorkload: user.currentActiveWorkload,
         maxActiveWorkload: user.maxActiveWorkload,
         isEligibleForAssignment: user.isEligibleForAssignment,
@@ -64,11 +65,18 @@ router.get('/me', verifyStaffToken, async (req, res) => {
       name: req.user.name,
       email: req.user.email,
       role: req.user.role,
+      preferredLanguage: req.user.preferredLanguage || 'sw',
       currentActiveWorkload: req.user.currentActiveWorkload,
       maxActiveWorkload: req.user.maxActiveWorkload,
       isEligibleForAssignment: req.user.isEligibleForAssignment,
     },
   });
+});
+
+router.patch('/preferences', verifyStaffToken, async (req,res)=>{
+  if (!['en','sw'].includes(req.body.preferredLanguage)) return res.status(400).json({message:'Choose English or Kiswahili'});
+  await StaffUser.updateOne({_id:req.user._id},{$set:{preferredLanguage:req.body.preferredLanguage}});
+  return res.json({success:true,preferredLanguage:req.body.preferredLanguage});
 });
 
 // Revoke Active Staff Session Tokens on Logout

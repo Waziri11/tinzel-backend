@@ -15,7 +15,8 @@
     "backfill:proof-readers": "node scripts/backfillProofReaders.js",
     "proof:worker": "node scripts/proofWorker.js",
     "proof:diagnose": "node scripts/diagnoseProof.js",
-    "proof:smoke": "node scripts/proofSmoke.js"
+    "proof:smoke": "node scripts/proofSmoke.js",
+    "notifications:worker": "node scripts/notificationWorker.js"
   },
   "keywords": [
     "tinzel",

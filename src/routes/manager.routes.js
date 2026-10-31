@@ -1,3 +1,4 @@
+import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import { pendingAnnotations, assertNoPendingAnnotations, submitAnnotations } from '../services/proofReaderService.js';
 import { Router } from 'express';
 import { Order } from '../models/Order.model.js';
@@ -5,18 +6,9 @@ import { AuditLog } from '../models/AuditLog.model.js';
 import { SystemConfig } from '../models/SystemConfig.model.js';
 import { StaffUser } from '../models/StaffUser.model.js';
 import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
-import { signMediaPath } from '../services/mediaSignService.js';
 import { generateTrackingId } from '../services/workflowService.js';
 import { autoAssignOrder, manualAssignOrder, releaseOrderWorkload } from '../services/assignmentService.js';
-import {
-  notifyPaymentVerified,
-  notifyDraftReleased,
-  notifyDraftReturned,
-  notifyPrinterDispatch,
-  notifyPrintingInProgress,
-  notifyDispatchRecorded,
-  notifyOrderClosed,
-} from '../services/notificationService.js';
+
 import {
   ACTIVE_ORDER_STATUSES,
   ManagerWorkflowError,
@@ -267,9 +259,7 @@ router.post('/orders/:id/verify-payment', async (req, res) => {
 
     // Send payment verification notification to client in safe isolated block
     try {
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-      const trackingUrl = `${frontendUrl}/track`;
-      await notifyPaymentVerified(order, trackingUrl);
+      await kickWorkflowNotifications(order._id);
     } catch (notifErr) {
       console.warn(`[Payment Notification Error] ${notifErr.message}`);
     }
@@ -400,8 +390,7 @@ router.post('/orders/:id/review-draft', async (req, res) => {
 
       // Send WhatsApp notification to Client that draft is released
       try {
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-        await notifyDraftReleased(order, `${frontendUrl}/track`);
+        await kickWorkflowNotifications(order._id);
       } catch (notifErr) {
         console.warn(`[Draft Release Notification Error] ${notifErr.message}`);
       }
@@ -438,7 +427,7 @@ router.post('/orders/:id/review-draft', async (req, res) => {
       });
 
       try {
-        await notifyDraftReturned(order, revisionRequest, 'manager');
+        await kickWorkflowNotifications(order._id);
       } catch (notifErr) {
         console.warn(`[Draft Return Notification Error] ${notifErr.message}`);
       }
@@ -487,6 +476,7 @@ router.post('/orders/:id/authorise-print', async (req, res) => {
       notes: req.body.notes || 'Dispatched by Manager',
     };
 
+    order.$locals.notificationBaseUrl = `${req.protocol}://${req.get('host')}`;
     order.status = 'printing_sent';
     await order.save();
 
@@ -499,9 +489,7 @@ router.post('/orders/:id/authorise-print', async (req, res) => {
 
     // Dispatch WhatsApp notification to printing partner with short-lived signed download link
     try {
-      const signedPrintPath = signMediaPath(order.printDocument.url, 7 * 24 * 3600);
-      const fullPrintUrl = `${req.protocol}://${req.get('host')}${signedPrintPath}`;
-      await notifyPrinterDispatch(order, printerPhone, fullPrintUrl, order.printDocument.specs || {});
+      await kickWorkflowNotifications(order._id);
     } catch (notifErr) {
       console.warn(`[Printer Dispatch Notification Error] ${notifErr.message}`);
     }
@@ -531,11 +519,6 @@ router.post('/orders/:id/printer-update', async (req, res) => {
       if (!order.printingDetails) order.printingDetails = {};
       order.printingDetails.acknowledgedAt = new Date();
       order.printingDetails.notes = notes || order.printingDetails.notes;
-      try {
-        await notifyPrintingInProgress(order);
-      } catch (notifErr) {
-        console.warn(`[Printing In Progress Notification Error] ${notifErr.message}`);
-      }
     } else if (stage === 'completed') {
       requireStatus(order, ['printing_in_progress'], 'Printing completion');
       order.status = 'printing_completed';
@@ -546,6 +529,7 @@ router.post('/orders/:id/printer-update', async (req, res) => {
     }
 
     await order.save();
+    await kickWorkflowNotifications(order._id);
 
     await AuditLog.create({
       actor: { type: 'manager', id: req.user._id, name: req.user.name },
@@ -586,7 +570,7 @@ router.post('/orders/:id/authorise-dispatch', async (req, res) => {
       details: { carrier: dispatch.carrier, trackingReference: dispatch.trackingReference },
     });
 
-    await notifyDispatchRecorded(order, order.dispatchDetails.trackingReference, dispatch.carrier);
+    await kickWorkflowNotifications(order._id);
 
     return res.status(200).json({ success: true, message: 'Order dispatched successfully', order });
   } catch (error) {
@@ -623,7 +607,7 @@ router.post('/orders/:id/close-order', async (req, res) => {
       details: delivery,
     });
 
-    await notifyOrderClosed(order, delivery);
+    await kickWorkflowNotifications(order._id);
 
     return res.status(200).json({ success: true, message: 'Order marked delivered and closed', order });
   } catch (error) {

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { installWorkflowEvents } from '../services/workflowEvents.js';
 
 export const ORDER_STATUSES = [
   'awaiting_payment',
@@ -218,6 +219,8 @@ const orderSchema = new mongoose.Schema(
       type: String,
     },
     draftVersions: [draftVersionSchema],
+    clientPreferredLanguage: { type: String, enum: ['en', 'sw'], default: 'sw' },
+    workflowEvents: { type: [mongoose.Schema.Types.Mixed], default: [] },
     draftEvents: { type: [new mongoose.Schema({ key: String, version: Number, state: String, actor: mongoose.Schema.Types.Mixed, createdAt: Date, completedAt: Date, attempts: Number, owner: String, leaseUntil: Date, runAfter: Date, error: String }, { _id: false })], default: [] },
     proofAnnotations: { type: [proofAnnotationSchema], default: [] },
     revisionRequests: { type: [revisionRequestSchema], default: [] },
@@ -291,6 +294,9 @@ const orderSchema = new mongoose.Schema(
   }
 );
 
+orderSchema.set('toJSON',{transform:(_doc,ret)=>{delete ret.workflowEvents;delete ret.draftEvents;return ret;}});
+installWorkflowEvents(orderSchema);
+orderSchema.index({ 'workflowEvents.state': 1, 'workflowEvents.runAfter': 1 });
 orderSchema.index({ status: 1, updatedAt: -1 });
 orderSchema.index({ assignedDesigner: 1, status: 1, updatedAt: -1 });
 orderSchema.index({ assignedDesigner: 1, updatedAt: -1 });

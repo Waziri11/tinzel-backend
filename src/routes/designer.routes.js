@@ -1,3 +1,4 @@
+import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import {scheduleProofPreparation,afterProofResponse} from '../services/proofPreparationService.js';
 import { enqueueProof } from '../services/proofReaderService.js';
 import express, { Router } from 'express';
@@ -14,7 +15,7 @@ import { enqueueArchive, createPhotoArchive } from '../services/mediaJobService.
 import { archiveStatus } from './mediaOperations.routes.js';
 import { deleteDraftPdf, isPdf, saveDraftPdf, streamDraftPdf } from '../services/draftFileService.js';
 import { activeRevisionRequest, assertExpectedVersion } from '../services/revisionRequestService.js';
-import { notifyDraftUploaded, notifyPrintDocumentUploaded } from '../services/notificationService.js';
+
 import { buildOrderSearchClauses, escapeRegex } from '../utils/regexUtils.js';
 
 const router = Router();
@@ -442,7 +443,7 @@ router.post(
       });
 
       await enqueueProof(order._id, nextVersion);
-      await notifyDraftUploaded(order, nextVersion);
+      await kickWorkflowNotifications(order._id);
 
       return res.status(200).json({
         success: true,
@@ -515,7 +516,7 @@ router.post('/orders/:id/upload-print-document', requireRoles('designer', 'admin
       details: { printUrl, specs },
     });
 
-    await notifyPrintDocumentUploaded(order);
+    await kickWorkflowNotifications(order._id);
 
     return res.status(200).json({
       success: true,

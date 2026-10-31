@@ -1,3 +1,4 @@
+import { workflowEvent } from './workflowEvents.js';
 import mongoose from 'mongoose';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { head, BlobNotFoundError } from '@vercel/blob';
@@ -171,8 +172,9 @@ export async function cancelSelection(id, token, clientId) {
 }
 
 export async function finalizeSession(id, token, body) {
+  if (body.clientPreferredLanguage !== undefined && !['en','sw'].includes(body.clientPreferredLanguage)) throw mediaError(400,'Choose English or Kiswahili');
   let session = await getSession(id, token);
-  if (session.result) return session.result;
+  if (session.result) {const {kickWorkflowNotifications}=await import('./workflowNotificationService.js');await kickWorkflowNotifications(session.orderId);return session.result;}
   if (!session.finalization) {
     const form = await MagazineForm.findOne({ _id: session.formId, isActive: true, isArchived: false }).lean();
     if (!form) throw mediaError(404, 'Magazine form is no longer available');
@@ -189,7 +191,7 @@ export async function finalizeSession(id, token, body) {
     const finalization = {
       order: { _id: session.orderId, mediaSessionId: id, submissionId: `SUB-${new Date().getFullYear()}-${session.orderId.toString().toUpperCase()}`,
         formId: form._id, formTitle: form.title, clientName: String(body.clientName).trim(),
-        clientWhatsApp: String(body.clientWhatsApp).trim(), clientEmail: String(body.clientEmail || '').trim(),
+        clientPreferredLanguage: body.clientPreferredLanguage || 'sw', clientWhatsApp: String(body.clientWhatsApp).trim(), clientEmail: String(body.clientEmail || '').trim(),
         submittedData: body.answers || {}, submittedFields: form.fields.map(({ fieldId, label, sectionId, order }) => ({ fieldId, label, sectionId, order })),
         uploadedPhotos: photos, status: 'awaiting_payment' },
       price: form.price, currency: form.currency, lipaNambaInstructions: form.lipaNambaInstructions,
@@ -199,12 +201,15 @@ export async function finalizeSession(id, token, body) {
     if (!session.finalization) throw mediaError(409, 'Photo selection changed. Please submit again.');
   }
   const snap = session.finalization;
-  const order = await Order.findOneAndUpdate({ _id: session.orderId }, { $setOnInsert: snap.order }, { upsert: true, returnDocument: 'after', runValidators: true });
+  const initialOrder = {...snap.order, workflowEvents:[workflowEvent(snap.order,'order_submitted',`submission:${id}`)]};
+  const order = await Order.findOneAndUpdate({ _id: session.orderId }, { $setOnInsert: initialOrder }, { upsert: true, returnDocument: 'after', runValidators: true });
   await AuditLog.updateOne({ _id: session.auditId }, { $setOnInsert: { actor: { type: 'client', name: order.clientName },
     action: 'ORDER_SUBMITTED', orderId: order._id, details: { submissionId: order.submissionId, photosCount: order.uploadedPhotos.length, formSlug: session.slug } } }, { upsert: true });
   const result = { success: true, order: { submissionId: order.submissionId, formTitle: order.formTitle,
     clientName: order.clientName, clientWhatsApp: order.clientWhatsApp, status: order.status,
     photosCount: order.uploadedPhotos.length, price: snap.price, currency: snap.currency }, lipaNambaInstructions: snap.lipaNambaInstructions };
   await UploadSession.updateOne({ _id: id }, { $set: { state: 'submitted', result } });
+  const { kickWorkflowNotifications } = await import('./workflowNotificationService.js');
+  await kickWorkflowNotifications(order._id);
   return result;
 }

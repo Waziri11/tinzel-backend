@@ -298,9 +298,11 @@ router.post('/staff', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Email already registered' });
     }
 
+    if (req.body.preferredLanguage !== undefined && !['en','sw'].includes(req.body.preferredLanguage)) return res.status(400).json({message:'Choose English or Kiswahili'});
     const passwordHash = await bcrypt.hash(password, 10);
 
     const user = await StaffUser.create({
+      preferredLanguage: req.body.preferredLanguage || 'sw',
       name: name.trim(),
       email: email.trim().toLowerCase(),
       passwordHash,
@@ -326,6 +328,10 @@ router.put('/staff/:id', async (req, res) => {
   try {
     const user = await StaffUser.findOne({ _id: req.params.id, deletedAt: null });
     if (!user) return res.status(404).json({ success: false, message: 'Staff user not found' });
+    if (req.body.preferredLanguage !== undefined) {
+      if (!['en','sw'].includes(req.body.preferredLanguage)) return res.status(400).json({message:'Choose English or Kiswahili'});
+      user.preferredLanguage = req.body.preferredLanguage;
+    }
     const wasActiveAdmin = user.role === 'admin' && user.isActive;
     const previousRole = user.role;
     const previousActive = user.isActive;
@@ -423,6 +429,7 @@ router.get('/config', async (req, res) => {
 });
 
 const CONFIG_KEY_VALIDATORS = {
+  printer_preferred_language: (v) => ['en','sw'].includes(v),
   printer_whatsapp_phone: (v) => typeof v === 'string' && /^\+?[\d\s-]{9,20}$/.test(v.trim()),
   printer_name: (v) => typeof v === 'string' && v.trim().length <= 120,
   printer_email: (v) => typeof v === 'string' && (v === '' || emailPattern.test(v.trim())),

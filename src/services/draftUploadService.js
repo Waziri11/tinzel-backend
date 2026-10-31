@@ -85,7 +85,7 @@ export async function finishDraftUpload(session, user) {
   // The order is the durable receipt if the final response/session update was interrupted.
   let order=await Order.findById(session.orderId);
   let committed=order?.draftVersions.find((v)=>String(v.uploadSessionId)===String(session._id));
-  if(committed){await DraftUpload.updateOne({_id:session._id},{$set:{state:'complete',version:committed.versionNumber}});await enqueueProof(order._id,committed.versionNumber);return {success:true,order,version:committed.versionNumber};}
+  if(committed){const {kickWorkflowNotifications}=await import('./workflowNotificationService.js');await kickWorkflowNotifications(order._id);await DraftUpload.updateOne({_id:session._id},{$set:{state:'complete',version:committed.versionNumber}});await enqueueProof(order._id,committed.versionNumber);return {success:true,order,version:committed.versionNumber};}
   const claimed=await DraftUpload.findOneAndUpdate({_id:session._id,expiresAt:{$gt:new Date()},$or:[{state:'open'},{state:'finalizing',leaseUntil:{$lt:new Date()}}]},{$set:{state:'finalizing',leaseUntil:new Date(Date.now()+60000)}},{returnDocument:'after'});
   if(!claimed)throw draftError(409,'Upload is being finalized. Retry shortly to retrieve its result.');
   try {
@@ -114,6 +114,8 @@ export async function finishDraftUpload(session, user) {
     await order.save();committed=order.draftVersions.at(-1);
     await DraftUpload.updateOne({_id:claimed._id},{$set:{state:'complete',version}});
     await enqueueProof(order._id,version,0,300);
+    const { kickWorkflowNotifications } = await import('./workflowNotificationService.js');
+    await kickWorkflowNotifications(order._id);
     console.info(JSON.stringify({event:'draft_finalized',session:String(session._id),provider:claimed.provider,sizeBytes:claimed.size,durationMs:Math.round(performance.now()-started)}));
     return {success:true,order,version};
   } catch(e) {

@@ -54,8 +54,8 @@ export async function draftRangeSource(draft) {
     if (!file) throw Object.assign(new Error('Draft PDF is unavailable'), { status: 404 });
     return { length: file.length, read: (start, end) => bucket().openDownloadStream(file._id, { start, end }) };
   }
-  if (draft.fileUrl?.startsWith('/uploads/drafts/')) {
-    const root = path.resolve(process.cwd(), 'uploads/drafts');
+  if (draft.fileUrl?.startsWith('/uploads/drafts/') || draft.fileUrl?.startsWith('/uploads/print/')) {
+    const root = path.resolve(process.cwd(), draft.fileUrl.startsWith('/uploads/print/') ? 'uploads/print' : 'uploads/drafts');
     const filename = path.resolve(process.cwd(), draft.fileUrl.slice(1));
     if (!filename.startsWith(root + path.sep)) throw new Error('Invalid legacy draft path');
     const stat = await fs.promises.stat(filename);

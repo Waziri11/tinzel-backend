@@ -511,6 +511,8 @@ export const sendEmail = async ({ to, subject, html, text }) => {
       from,
       subject,
       error: error.message,
+      uncertain: !error.responseCode && !['EAUTH','ECONNECTION','EDNS'].includes(error.code),
+      retryable: (error.responseCode >= 400 && error.responseCode < 500) || ['ECONNECTION','EDNS'].includes(error.code),
     };
   }
 };

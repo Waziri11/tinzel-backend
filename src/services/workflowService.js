@@ -155,6 +155,7 @@ export const sanitizeOrderForClient = (order) => {
     clientName: obj.clientName,
     clientWhatsApp: obj.clientWhatsApp,
     clientEmail: obj.clientEmail,
+    clientPreferredLanguage: obj.clientPreferredLanguage || 'sw',
     status: obj.status,
     previousStatusBeforeHold: obj.previousStatusBeforeHold,
     holdReason: obj.holdReason,

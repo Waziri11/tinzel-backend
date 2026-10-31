@@ -19,6 +19,7 @@ export function signMediaPath(rawUrl, ttlSeconds = 3600) {
     !basePath.startsWith('/api/public/photos/') &&
     !basePath.startsWith('/api/public/media/assets/') &&
     !basePath.startsWith('/api/designer/orders/') &&
+    !basePath.startsWith('/api/print-jobs/') &&
     !basePath.startsWith('/uploads/')
   ) {
     return rawUrl;

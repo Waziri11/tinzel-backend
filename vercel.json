@@ -13,6 +13,10 @@
     {
       "path": "/api/internal/media-jobs",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/internal/notification-jobs",
+      "schedule": "* * * * *"
     }
   ]
 }
