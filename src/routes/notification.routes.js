@@ -12,6 +12,7 @@ export function escapeXml(value) {
     .replace(/'/g, '&apos;');
 }
 import { Order } from '../models/Order.model.js';
+import { Notification } from '../models/Notification.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { SystemConfig } from '../models/SystemConfig.model.js';
 import {
@@ -115,6 +116,17 @@ router.post('/webhooks/twilio-inbound', verifyTwilioWebhook, async (req, res) =>
     const isWhatsApp = rawFrom.startsWith('whatsapp:') || rawTo.startsWith('whatsapp:');
     const channel = isWhatsApp ? 'whatsapp' : 'sms';
 
+    // Deduplicate webhook deliveries using Twilio MessageSid
+    if (messageSid) {
+      const existingNotification = await Notification.findOne({
+        $or: [{ twilioSid: messageSid }, { 'metadata.twilioSid': messageSid }],
+      }).lean();
+      if (existingNotification) {
+        console.log(`[Twilio Inbound Deduplication] Duplicate message ignored: ${messageSid}`);
+        return res.type('text/xml').send('<Response></Response>');
+      }
+    }
+
     // Normalize phone numbers
     const cleanFromPhone = rawFrom.replace(/^whatsapp:/i, '').trim();
     const normalizedSender = normalizePhoneNumber(cleanFromPhone);
@@ -134,9 +146,31 @@ router.post('/webhooks/twilio-inbound', verifyTwilioWebhook, async (req, res) =>
 
     // Automation: Printer confirms order receipt with 'POKEA'
     if (isPrinterSender && /pokea|poke|received|confirm/i.test(body)) {
-      // Find the most recent order in 'printing_sent' status
-      const targetOrder = await Order.findOne({ status: 'printing_sent' })
-        .sort({ updatedAt: -1 });
+      // Check if message explicitly mentions an order trackingId or submissionId
+      const orderMatch = body.match(/\b(TNZ-\d{4}-\d+|SUB-\d{4}-\d+|TNZ-TRK-\d+)\b/i);
+      let targetOrder = null;
+
+      if (orderMatch) {
+        const ref = orderMatch[1].toUpperCase();
+        targetOrder = await Order.findOne({
+          $or: [{ trackingId: ref }, { submissionId: ref }],
+          status: 'printing_sent',
+        });
+      }
+
+      if (!targetOrder && !orderMatch) {
+        const pendingOrders = await Order.find({ status: 'printing_sent' })
+          .sort({ updatedAt: -1 })
+          .limit(2);
+
+        if (pendingOrders.length === 1) {
+          targetOrder = pendingOrders[0];
+        } else if (pendingOrders.length > 1) {
+          const orderList = pendingOrders.map((o) => o.trackingId || o.submissionId).join(', ');
+          const replyMessage = `Tinzel: Kuna zaidi ya oda moja inayosubiri kuchapwa (${orderList}). Tafadhali taja namba ya oda katika jibu lako (mf. POKEA TNZ-2026-0001).`;
+          return res.type('text/xml').send(`<Response><Message>${escapeXml(replyMessage)}</Message></Response>`);
+        }
+      }
 
       if (targetOrder) {
         targetOrder.status = 'printing_in_progress';

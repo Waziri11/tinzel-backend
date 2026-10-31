@@ -131,6 +131,24 @@ test('Twilio Inbound Webhook: printer replies "POKEA" to advance order to printi
   assert.equal(inboundNotif.status, 'received');
 });
 
+test('Twilio Inbound Webhook: deduplicates duplicate MessageSid', async () => {
+  const printerPhone = '+255711223344';
+  const response = await fetch(`${baseUrl}/webhooks/twilio-inbound`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      From: `whatsapp:${printerPhone}`,
+      To: 'whatsapp:+14155238886',
+      Body: 'POKEA',
+      MessageSid: 'SM_INBOUND_PRINTER_POKEA',
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  const twiml = await response.text();
+  assert.equal(twiml, '<Response></Response>');
+});
+
 test('Twilio Diagnostics API: returns diagnostics for authenticated managers', async () => {
   const response = await fetch(`${baseUrl}/diagnostics`, {
     headers: { Authorization: `Bearer ${adminToken}` },
