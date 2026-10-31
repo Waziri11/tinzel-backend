@@ -1,3 +1,5 @@
+import { notificationFrontendUrl, notificationTrackingUrl } from './notificationUrls.js';
+import { clientOtpMessage } from './accountMessages.js';
 import twilio from 'twilio';
 import mongoose from 'mongoose';
 import { waitUntil } from '@vercel/functions';
@@ -804,7 +806,7 @@ const getActiveStaffByRole = async (roles = ['manager']) => {
  * Dispatches tri-channel (In-System + Email + Phone) to Client and active Managers.
  */
 export const notifyOrderSubmitted = async (order) => {
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const frontendUrl = notificationFrontendUrl();
   const staffUrl = `${frontendUrl}/staff/pre-design`;
   const clientTemplate = emailTemplates.order_submitted({
     clientName: order.clientName,
@@ -880,6 +882,7 @@ export const notifyOrderSubmitted = async (order) => {
  * Sends WhatsApp, Email (if clientEmail is present), and In-System notification.
  */
 export const notifyPaymentVerified = async (order, trackingUrl) => {
+  trackingUrl = notificationTrackingUrl(trackingUrl);
   const notifications = [];
   const eventGroupId = `evt-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
   const sharedMeta = {
@@ -968,7 +971,7 @@ export const notifyPaymentVerified = async (order, trackingUrl) => {
  */
 export const notifyOrderAssigned = async (order, designer) => {
   if (!designer) return [];
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const frontendUrl = notificationFrontendUrl();
   const staffUrl = `${frontendUrl}/staff/design/orders/${order._id}`;
   const trackingLabel = order.trackingId || order.submissionId;
 
@@ -1000,7 +1003,7 @@ export const notifyOrderAssigned = async (order, designer) => {
  * Dispatches tri-channel (In-System + Email + Phone) to active Managers.
  */
 export const notifyDraftUploaded = async (order, versionNumber) => {
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const frontendUrl = notificationFrontendUrl();
   const staffUrl = `${frontendUrl}/staff/design-phase`;
   const trackingLabel = order.trackingId || order.submissionId;
   const managers = await getActiveStaffByRole(['manager', 'admin']);
@@ -1052,6 +1055,7 @@ export const notifyDraftUploaded = async (order, versionNumber) => {
  * Sends WhatsApp, Email (if clientEmail is present), and In-System notification.
  */
 export const notifyDraftReleased = async (order, trackingUrl) => {
+  trackingUrl = notificationTrackingUrl(trackingUrl);
   const notifications = [];
   const eventGroupId = `evt-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
   const sharedMeta = {
@@ -1140,7 +1144,7 @@ export const notifyDraftReleased = async (order, trackingUrl) => {
  * Dispatches tri-channel (In-System + Email + Phone) to the assigned Designer and active Managers.
  */
 export const notifyDraftReturned = async (order, revisionRequest, source = 'manager') => {
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const frontendUrl = notificationFrontendUrl();
   const staffUrl = `${frontendUrl}/staff/returns`;
   const trackingLabel = order.trackingId || order.submissionId;
   const items = revisionRequest?.items || [];
@@ -1238,7 +1242,7 @@ export const notifyDraftReturned = async (order, revisionRequest, source = 'mana
  * Dispatches tri-channel (In-System + Email + Phone) to Assigned Designer and Managers.
  */
 export const notifyClientApproved = async (order) => {
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const frontendUrl = notificationFrontendUrl();
   const staffUrl = `${frontendUrl}/staff/post-design`;
   const trackingLabel = order.trackingId || order.submissionId;
 
@@ -1300,7 +1304,7 @@ export const notifyClientApproved = async (order) => {
  * Dispatches tri-channel (In-System + Email + Phone) to active Managers.
  */
 export const notifyPrintDocumentUploaded = async (order) => {
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const frontendUrl = notificationFrontendUrl();
   const staffUrl = `${frontendUrl}/staff/post-design`;
   const trackingLabel = order.trackingId || order.submissionId;
   const managers = await getActiveStaffByRole(['manager', 'admin']);
@@ -1483,7 +1487,7 @@ export const notifyPrintingInProgress = async (order) => {
  */
 export const notifyDispatchRecorded = async (order, trackingRef, carrier, trackingUrl = null) => {
   const notifications = [];
-  const resolvedTrackingUrl = trackingUrl || `${process.env.FRONTEND_URL || 'http://localhost:5173'}/track`;
+  const resolvedTrackingUrl = notificationTrackingUrl(trackingUrl);
   const eventGroupId = `evt-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
   const sharedMeta = {
     trackingId: order.trackingId,
@@ -1612,7 +1616,8 @@ export const notifyClientOtp = async (order, otpCode) => {
     },
   };
 
-  const message = `Namba yako ya siri (OTP) ya kuingia kwenye mfumo wa Tinzel ni: ${otpCode}. Itatumika kwa dakika 10.`;
+  const otpContent = clientOtpMessage(order, otpCode);
+  const message = otpContent.message;
   const redactedSystemMessage = `Namba ya siri (OTP) ya kuingia kwenye mfumo wa Tinzel imetumwa kwa mteja (${order.clientName || order.trackingId}). [REDACTED-OTP]`;
 
   const inSystemPromise = recordInSystemNotification({
@@ -1636,7 +1641,7 @@ export const notifyClientOtp = async (order, otpCode) => {
         recipientName: order.clientName,
         recipientRole: 'client',
         eventGroupId,
-        title: 'Namba Yako ya Siri (OTP) ya Kuingia',
+        title: otpContent.title,
         channel: 'whatsapp',
         template: 'client_otp',
         message,
@@ -1647,11 +1652,7 @@ export const notifyClientOtp = async (order, otpCode) => {
   }
 
   if (order.clientEmail) {
-    const templateData = emailTemplates.client_otp({
-      clientName: order.clientName,
-      otpCode,
-      validityMinutes: 10,
-    });
+    const templateData = { ...otpContent, text: otpContent.message };
 
     notifications.push(
       sendNotification({

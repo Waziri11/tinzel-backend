@@ -1,3 +1,4 @@
+import { notificationFrontendUrl, notificationBackendUrl } from './notificationUrls.js';
 import { randomUUID } from 'node:crypto';
 import mongoose from 'mongoose';
 import { waitUntil } from '@vercel/functions';
@@ -62,11 +63,11 @@ async function currentRecipient(order, task) {
   return task;
 }
 function actionUrl(order, event, role, channel) {
-  const frontend = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/,'');
+  const frontend = notificationFrontendUrl();
   if (role === 'client') return `${frontend}/track`;
   if (role === 'printer') {
     if (channel !== 'whatsapp') return '';
-    const base = process.env.BACKEND_URL || event.baseUrl || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : 'http://localhost:5001');
+    const base = notificationBackendUrl(event.baseUrl);
     return `${base.replace(/\/$/,'')}${signMediaPath(`/api/print-jobs/${order._id}/${event.key}/file`,7*24*3600)}`;
   }
   if (['order_submitted','assignment_queued','payment_verified'].includes(typeOf(event))) return `${frontend}/staff/pre-design?orderId=${order._id}`;
@@ -88,7 +89,7 @@ async function deliver(order, event, task, { send, now }) {
   if (row?.nextAttemptAt > now) return row.nextAttemptAt;
   const person = await currentRecipient(order,task), type = typeOf(event);
   const url = actionUrl(order,event,task.role,task.channel);
-  const content = workflowMessage(type,order,event,{...task},person?.language || task.language,url);
+  const content = workflowMessage(type,order,event,person || task,person?.language || task.language,url);
   const metadata = { workflow:true, language:person?.language || task.language, actionUrl:url, versionNumber:event.version, trackingId:order.trackingId, submissionId:order.submissionId, phase:event.status };
   if (!row) {
     try {

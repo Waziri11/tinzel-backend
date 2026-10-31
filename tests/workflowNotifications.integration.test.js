@@ -70,6 +70,9 @@ test('complete HTTP workflow notifies each next recipient, including correction 
  for(const type of expected){rows=await notices(order,type);assert.ok(rows.some(row=>row.channel==='in_system'),type);assert.ok(rows.some(row=>row.channel==='sms'),type);assert.ok(rows.every(row=>row.status==='simulated'||row.status==='delivered'),`${type}: ${JSON.stringify(rows.map(row=>[row.status,row.errorMessage]))}`);}
  rows=await notices(order,'print_dispatched');assert.equal(rows.filter(row=>row.channel==='sms').length,1);assert.equal(rows.filter(row=>row.channel==='whatsapp').length,1);assert.match(rows.find(row=>row.channel==='whatsapp').message,/POKEA TNZ/);
  const signed=rows.find(row=>row.channel==='whatsapp').metadata.actionUrl;
+ assert.ok(rows.find(row=>row.channel==='sms').message.includes('WhatsApp'));
+ const assigned=(await notices(order,'order_assigned')).find(row=>row.channel==='sms');assert.ok(assigned.message.includes(designer.name));assert.match(assigned.message,/Role: Designer/);assert.ok(assigned.metadata.actionUrl.startsWith('https://tinzel.stryxis.com/staff/'));
+ const paid=(await notices(order,'payment_verified')).find(row=>row.channel==='sms');assert.match(paid.message,/PAY-123/);assert.match(paid.message,/50,000/);
  assert.ok(signed.includes('/api/print-jobs/'));
  let file=await fetch(signed);assert.equal(file.status,200);assert.equal(file.headers.get('cache-control'),'private, no-store');assert.equal(Buffer.from(await file.arrayBuffer()).subarray(0,5).toString(),'%PDF-');
  file=await fetch(signed.split('?')[0]);assert.equal(file.status,403);

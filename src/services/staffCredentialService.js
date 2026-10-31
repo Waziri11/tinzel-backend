@@ -1,3 +1,4 @@
+import { staffCredentialMessage } from './accountMessages.js';
 import { randomInt, randomBytes, createCipheriv, createDecipheriv, randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
@@ -67,19 +68,12 @@ export async function reissueInitialPassword(id) {
   if(!validStaffPhone(user.phone) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user.email))throw fail(400,'A valid email and phone number are required before issuing credentials.');
   const generation=Number(user.credentialGeneration || 0)+1;
   const fields=await initialCredentialFields(user._id,generation);
+  fields.credentialJob.reason='reissue';
   const updated=await StaffUser.findOneAndUpdate({_id:user._id,passwordHash:user.passwordHash,credentialGeneration:{$in:[generation-1,...(generation===1?[null]:[])]},tokenVersion:{$in:[user.tokenVersion || 0,...(!user.tokenVersion?[null]:[])]}},{$set:fields,$inc:{tokenVersion:1}},{returnDocument:'after',runValidators:true});
   if(!updated)throw fail(409,'This account changed. Refresh before issuing another password.');
   await finishStaffCredentialDelivery(user._id,user.credentialGeneration || 0).catch(()=>{});
   await kickStaffCredentials(updated._id);
   return StaffUser.findById(updated._id).select('-passwordHash');
-}
-function credentialMessage(user,password,channel) {
-  const sw=user.preferredLanguage!=='en',url=`${(process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/,'')}/staff`;
-  const expiry=new Intl.DateTimeFormat(sw?'sw-TZ':'en-TZ',{timeZone:'Africa/Dar_es_Salaam',dateStyle:'medium',timeStyle:'short'}).format(user.temporaryPasswordExpiresAt);
-  const title=sw?'Akaunti yako ya Tinzel iko tayari':'Your Tinzel account is ready';
-  const body=sw?`Habari ${user.name},\nBarua pepe ya kuingia: ${user.email}\nNenosiri la awali: ${password}\nLinaisha: ${expiry} EAT (saa 24 tangu kutolewa). Lazima ubadilishe nenosiri baada ya kuingia.\n${url}`:`Hello ${user.name},\nSign-in email: ${user.email}\nInitial password: ${password}\nExpires: ${expiry} EAT (24 hours from issue). You must change it after signing in.\n${url}`;
-  const escape=value=>String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-  return {title,message:body,html:channel==='email'?`<html lang="${sw?'sw':'en'}"><body><h2>${escape(title)}</h2><p>${escape(body).replaceAll('\n','<br>')}</p></body></html>`:undefined};
 }
 const activeCredential=(user,generation,now)=>user?.isActive&&!user.deletedAt&&user.mustChangePassword&&user.credentialGeneration===generation&&user.temporaryPasswordExpiresAt>now;
 async function credentialChannel(user,channel,owner,{send,now}) {
@@ -99,7 +93,7 @@ async function credentialChannel(user,channel,owner,{send,now}) {
   if(!isTriggerChannelEnabled('staff_credentials',channel,settings))reason='Disabled in notification settings.';
   const invalid=channel==='sms'?!validStaffPhone(fresh.phone):!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fresh.email || '');
   if(reason||invalid){const status=reason?'skipped':'failed',error=reason || 'Missing or invalid recipient contact.';await Notification.updateOne({_id:row._id},{$set:{status,errorMessage:error,retryable:false}});return {status,attempts:row.attempts,error};}
-  const password=decryptInitialPassword(fresh),content=credentialMessage(fresh,password,channel),attempt=row.attempts+1,historyIndex=row.attemptHistory.length;
+  const password=decryptInitialPassword(fresh),content=staffCredentialMessage(fresh,password,channel),attempt=row.attempts+1,historyIndex=row.attemptHistory.length;
   const changed=await Notification.updateOne({_id:row._id,status:row.status,attempts:row.attempts},{$set:{status:'queued',retryable:false,recipient:channel==='sms'?fresh.phone:fresh.email,title:content.title,'metadata.language':fresh.preferredLanguage || 'sw'},$inc:{attempts:1},$push:{attemptHistory:{attempt,startedAt:now,status:'queued'}}});
   if(!changed.modifiedCount)return null;
   // Fence the actual send against resets/deactivation after the attempt was persisted.

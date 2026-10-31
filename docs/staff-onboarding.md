@@ -36,3 +36,5 @@ Continue using the existing SMTP, SMS, `FRONTEND_URL` and protected cron configu
 ## Verification
 
 Backend integration tests exercise generated length/classes, admin creation, encrypted storage/redacted responses, both channels/languages, first-login API restrictions, expiry, reissue, session revocation, assignment gates, disabled/partial delivery, retry limits, interruption recovery, concurrent workers/changes, encryption recovery, callback generation checks and legacy accounts. Frontend browser journeys exercise admin creation/status/reissue and desktop/mobile setup, mismatch validation, refresh, token replacement and navigation. Providers are isolated/simulated during local verification.
+
+Welcome and replacement-password messages include the recipient name, actual role and responsibilities, sign-in email, initial password, exact EAT expiry and first-login instructions. Public sign-in links default to `https://tinzel.stryxis.com/staff`; loopback values in `FRONTEND_URL` are ignored for outbound messages. See [the complete English/Kiswahili message comparison](notification-message-comparison.md).
