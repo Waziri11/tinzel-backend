@@ -19,6 +19,7 @@ const simulatedNotifications = [];
 const inSystemNotifications = [];
 
 export const NOTIFICATION_TRIGGER_CATALOG = [
+  {key:'staff_credentials',label:'Staff account credentials',description:'Initial staff credentials and administrative reissues.',category:'Security',recipient:'Staff member',defaults:{enabled:true,in_system:false,email:true,sms:true}},
   { key:'assignment_queued',label:'Paid order needs a designer',description:'No designer has capacity; manager assignment required.',category:'Pre-Design',recipient:'Manager & Admin',defaults:{enabled:true,in_system:true,email:true,sms:true} },
   { key:'printing_completed',label:'Printing completed — dispatch required',description:'Printing is complete; arrange delivery.',category:'Post-Design',recipient:'Manager & Admin',defaults:{enabled:true,in_system:true,email:true,sms:true} },
   {
@@ -417,6 +418,7 @@ export const sendNotification = async ({
       subject: subject || title || `Taarifa ya Tinzel: ${template}`,
       html,
       text: message,
+      sensitive: template === 'staff_credentials',
     });
 
     logEntry.mode = mailResult.mode;
@@ -471,12 +473,12 @@ export const sendNotification = async ({
           price: firstMsg?.price ?? null,
         };
       } catch (nextErr) {
-        console.warn(`[NextSMS Error] ${nextErr.message}`);
+        console.warn(`[NextSMS Error] ${template === 'staff_credentials' ? 'Credential delivery failed.' : nextErr.message}`);
         logEntry.channel = 'sms';
         logEntry.mode = 'nextsms_failed';
         logEntry.status = nextErr.uncertain ? 'unconfirmed' : 'failed';
         logEntry.retryable = nextErr.retryable === true;
-        logEntry.error = nextErr.message;
+        logEntry.error = template === 'staff_credentials' ? 'Credential delivery failed.' : nextErr.message;
       }
     } else if (client) {
       const formattedRecipient = normalizePhoneNumber(to);
@@ -509,7 +511,7 @@ export const sendNotification = async ({
         logEntry.mode = 'twilio_live';
         logEntry.status = 'sent';
       } catch (error) {
-        console.warn(`[Twilio Error - ${channel.toUpperCase()}] ${error.message}`);
+        console.warn(`[Twilio Error - ${channel.toUpperCase()}] ${template === 'staff_credentials' ? 'Credential delivery failed.' : error.message}`);
 
         // Automatic fallback to SMS if WhatsApp fails
         const shouldFallback =
@@ -545,7 +547,7 @@ export const sendNotification = async ({
         } else {
           logEntry.mode = 'twilio_failed_fallback_simulated';
           logEntry.status = 'failed';
-          logEntry.error = error.message;
+          logEntry.error = template === 'staff_credentials' ? 'Credential delivery failed.' : error.message;
           logEntry.status = !error.status || error.status >= 500 ? 'unconfirmed' : 'failed';
           logEntry.retryable = error.status === 429;
         }
@@ -563,7 +565,7 @@ export const sendNotification = async ({
 
   // Redact sensitive OTP codes before storing in logs or database history
   const storedMessage =
-    template === 'client_otp'
+    template === 'staff_credentials' ? 'Initial account credentials [REDACTED].' : template === 'client_otp'
       ? String(message || '').replace(/\b\d{6}\b/g, '[REDACTED-OTP]')
       : message;
   logEntry.message = storedMessage;
@@ -1730,6 +1732,9 @@ export const updateNotificationDeliveryStatus = async ({
         },
         { returnDocument: 'after' }
       );
+      if(updated?.metadata?.staffCredential && ['sms','email'].includes(updated.channel)) {
+        await StaffUser.updateOne({_id:updated.recipientUser,credentialGeneration:updated.metadata.credentialGeneration},{$set:{[`credentialDelivery.${updated.channel}.status`]:normalizedStatus,[`credentialDelivery.${updated.channel}.error`]:['failed','undelivered'].includes(normalizedStatus)?'Credential delivery failed.':null}});
+      }
       return updated;
     } catch (err) {
       console.warn(`[Notification Status Update Error] ${err.message}`);
@@ -2109,6 +2114,7 @@ export const resendNotification = async (notificationId, { channelOverride = nul
     throw new Error('Notification record not found');
   }
 
+  if(original.metadata?.staffCredential)throw Object.assign(new Error('Use the administrator credential-delivery action for this message.'),{status:403});
   const targetChannel = channelOverride || original.channel;
   const result = await sendNotification({
     to: original.recipient || original.to,

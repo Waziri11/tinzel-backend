@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import bcrypt from 'bcryptjs';
+import mongoose from 'mongoose';
+import { initialCredentialFields, finishStaffCredentialDelivery, kickStaffCredentials, publicStaff, reissueInitialPassword, retryStaffCredentials, validStaffPhone } from '../services/staffCredentialService.js';
 import { MagazineForm } from '../models/MagazineForm.model.js';
 import { StaffUser } from '../models/StaffUser.model.js';
 import { Order } from '../models/Order.model.js';
@@ -247,11 +248,6 @@ router.use(verifyStaffToken, requireRoles('admin'));
 // --- Staff Management & Workload Endpoints ---
 const staffRoles = ['admin', 'manager', 'designer'];
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const publicStaff = (user) => {
-  const data = user.toObject();
-  delete data.passwordHash;
-  return data;
-};
 const logStaffChange = (req, action, user) => AuditLog.create({
   actor: { type: req.user.role, id: req.user._id, name: req.user.name },
   action,
@@ -265,7 +261,7 @@ const activeDesignerOrder = (id) => Order.exists({
 router.get('/staff', async (req, res) => {
   try {
     const staff = await StaffUser.find({ deletedAt: null }).select('-passwordHash').sort({ role: 1, name: 1 });
-    return res.status(200).json({ success: true, staff });
+    return res.status(200).json({ success: true, staff: staff.map(publicStaff) });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -275,7 +271,7 @@ router.get('/staff/:id', async (req, res) => {
   try {
     const user = await StaffUser.findOne({ _id: req.params.id, deletedAt: null }).select('-passwordHash');
     if (!user) return res.status(404).json({ success: false, message: 'Staff user not found' });
-    return res.status(200).json({ success: true, user });
+    return res.status(200).json({ success: true, user: publicStaff(user) });
   } catch (error) {
     if (error.name === 'CastError') return res.status(404).json({ success: false, message: 'Staff user not found' });
     return res.status(500).json({ success: false, message: error.message });
@@ -285,8 +281,8 @@ router.get('/staff/:id', async (req, res) => {
 router.post('/staff', async (req, res) => {
   try {
     const { name, email, password, role, phone, maxActiveWorkload, isEligibleForAssignment } = req.body;
-    if (typeof name !== 'string' || !name.trim() || typeof email !== 'string' || !emailPattern.test(email.trim()) || typeof password !== 'string' || password.length < 8) {
-      return res.status(400).json({ success: false, message: 'Name, valid email, and a password of at least 8 characters are required' });
+    if (typeof name !== 'string' || !name.trim() || typeof email !== 'string' || !emailPattern.test(email.trim()) || !validStaffPhone(phone)) {
+      return res.status(400).json({ success: false, message: 'Name, valid email, and a valid phone number are required' });
     }
     if (!staffRoles.includes(role)) return res.status(400).json({ success: false, message: 'Choose a valid internal role' });
     if (role === 'designer' && maxActiveWorkload !== undefined && (!Number.isInteger(Number(maxActiveWorkload)) || Number(maxActiveWorkload) < 1 || Number(maxActiveWorkload) > 20)) {
@@ -299,13 +295,16 @@ router.post('/staff', async (req, res) => {
     }
 
     if (req.body.preferredLanguage !== undefined && !['en','sw'].includes(req.body.preferredLanguage)) return res.status(400).json({message:'Choose English or Kiswahili'});
-    const passwordHash = await bcrypt.hash(password, 10);
+    if (password !== undefined) return res.status(400).json({message:'Initial passwords are generated automatically.'});
+    const staffId = new mongoose.Types.ObjectId();
+    const credentials = await initialCredentialFields(staffId);
 
     const user = await StaffUser.create({
       preferredLanguage: req.body.preferredLanguage || 'sw',
       name: name.trim(),
       email: email.trim().toLowerCase(),
-      passwordHash,
+      _id: staffId,
+      ...credentials,
       role,
       phone: typeof phone === 'string' ? phone.trim() : '',
       maxActiveWorkload: role === 'designer' && maxActiveWorkload !== undefined ? Number(maxActiveWorkload) : 5,
@@ -313,15 +312,26 @@ router.post('/staff', async (req, res) => {
     });
 
     await logStaffChange(req, 'STAFF_CREATED', user);
+    await kickStaffCredentials(user._id);
+    const savedUser = await StaffUser.findById(user._id).select('-passwordHash');
     return res.status(201).json({
       success: true,
       message: 'Staff account created successfully',
-      user: publicStaff(user),
+      user: publicStaff(savedUser),
     });
   } catch (error) {
     if (error.code === 11000) return res.status(409).json({ success: false, message: 'Email already registered' });
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.status || 500).json({ success: false, message: error.message, errorCode:error.code });
   }
+});
+
+router.post('/staff/:id/initial-password',async(req,res)=>{
+  try {const user=await reissueInitialPassword(req.params.id);await logStaffChange(req,'STAFF_INITIAL_PASSWORD_REISSUED',user);res.json({success:true,user:publicStaff(user)});}
+  catch(error){res.status(error.name==='CastError'?404:error.status || 500).json({message:error.message,errorCode:error.code});}
+});
+router.post('/staff/:id/credential-delivery/retry',async(req,res)=>{
+  try{await retryStaffCredentials(req.params.id,req.body.channel,{confirmUncertain:req.body.confirmUncertain===true});const user=await StaffUser.findById(req.params.id);res.json({success:true,user:publicStaff(user)});}
+  catch(error){res.status(error.name==='CastError'?404:error.status || 500).json({message:error.message});}
 });
 
 router.put('/staff/:id', async (req, res) => {
@@ -368,11 +378,8 @@ router.put('/staff/:id', async (req, res) => {
       if (!Number.isInteger(Number(maxActiveWorkload)) || Number(maxActiveWorkload) < 1 || Number(maxActiveWorkload) > 20) return res.status(400).json({ success: false, message: 'Designer capacity must be between 1 and 20' });
       user.maxActiveWorkload = Number(maxActiveWorkload);
     }
-    if (password !== undefined && password !== '') {
-      if (typeof password !== 'string' || password.length < 8) return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
-      user.passwordHash = await bcrypt.hash(password, 10);
-      shouldRevokeSessions = true;
-    }
+    if (password !== undefined) return res.status(400).json({message:'Use Issue new initial password to reset access.'});
+    if (!user.isActive || user.deletedAt) user.credentialJob=null;
     if (shouldRevokeSessions) {
       user.tokenVersion = (user.tokenVersion || 0) + 1;
     }
@@ -385,6 +392,7 @@ router.put('/staff/:id', async (req, res) => {
       if (await activeDesignerOrder(user._id)) return res.status(409).json({ success: false, message: 'Reassign this designer’s open orders before changing their role or access' });
     }
     await user.save();
+    if(!user.isActive)await finishStaffCredentialDelivery(user._id,user.credentialGeneration || 0).catch(()=>{});
     await logStaffChange(req, 'STAFF_UPDATED', user);
     return res.status(200).json({ success: true, message: 'Staff user updated', user: publicStaff(user) });
   } catch (error) {
@@ -406,9 +414,11 @@ router.delete('/staff/:id', async (req, res) => {
     }
     if (await activeDesignerOrder(user._id)) return res.status(409).json({ success: false, message: 'Reassign this designer’s open orders before deleting their account' });
     user.isActive = false;
+    user.credentialJob = null;
     user.deletedAt = new Date();
     user.tokenVersion = (user.tokenVersion || 0) + 1;
     await user.save();
+    await finishStaffCredentialDelivery(user._id,user.credentialGeneration || 0).catch(()=>{});
     await logStaffChange(req, 'STAFF_DELETED', user);
     return res.status(200).json({ success: true, message: 'Staff account deleted' });
   } catch (error) {

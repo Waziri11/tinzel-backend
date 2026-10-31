@@ -470,7 +470,7 @@ export const emailTemplates = Object.fromEntries(
 /**
  * Dispatch an email message via Nodemailer or simulation mode.
  */
-export const sendEmail = async ({ to, subject, html, text }) => {
+export const sendEmail = async ({ to, subject, html, text, sensitive = false }) => {
   const from = process.env.SMTP_FROM || `Tinzel <${process.env.SMTP_USER || 'notifications@tinzel.com'}>`;
 
   if (!isEmailConfigured()) {
@@ -481,7 +481,7 @@ export const sendEmail = async ({ to, subject, html, text }) => {
       to,
       from,
       subject,
-      preview: text ? text.slice(0, 150) : '',
+      preview: sensitive ? '[REDACTED]' : text ? text.slice(0, 150) : '',
     };
   }
 
@@ -504,13 +504,13 @@ export const sendEmail = async ({ to, subject, html, text }) => {
       subject,
     };
   } catch (error) {
-    console.error(`[Email Service - Error] Failed to send email to ${to}: ${error.message}`);
+    console.error(`[Email Service - Error] Failed to send email to ${to}: ${sensitive ? 'Credential delivery failed.' : error.message}`);
     return {
       mode: 'smtp_failed_fallback_simulated',
       to,
       from,
       subject,
-      error: error.message,
+      error: sensitive ? 'Credential delivery failed.' : error.message,
       uncertain: !error.responseCode && !['EAUTH','ECONNECTION','EDNS'].includes(error.code),
       retryable: (error.responseCode >= 400 && error.responseCode < 500) || ['ECONNECTION','EDNS'].includes(error.code),
     };

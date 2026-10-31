@@ -155,7 +155,7 @@ app.get('/', (req, res) => {
 
 // Remove private proof storage and unpublished annotations from order/audit responses without double JSON serialization.
 const PRIVATE_DRAFT_KEYS = ['assetId', 'fileUrl', 'previewPages', 'uploadSessionId', 'blobPath', 'storageProvider'];
-const ENVELOPE_KEYS = ['order', 'orders', 'logs', 'auditLogs', 'data', 'items', 'result', 'results'];
+const ENVELOPE_KEYS = ['user','staff','order', 'orders', 'logs', 'auditLogs', 'data', 'items', 'result', 'results'];
 
 function sanitizeResponseNode(node) {
   if (!node || typeof node !== 'object' || Buffer.isBuffer(node) || node instanceof Date) {
@@ -174,6 +174,8 @@ function sanitizeResponseNode(node) {
   if ('proofAnnotations' in raw) {
     delete ensureClone().proofAnnotations;
   }
+  if ('credentialJob' in raw) delete ensureClone().credentialJob;
+  if ('passwordHash' in raw) delete ensureClone().passwordHash;
   if ('workflowEvents' in raw) delete ensureClone().workflowEvents;
   if ('draftEvents' in raw) {
     delete ensureClone().draftEvents;

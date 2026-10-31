@@ -52,6 +52,12 @@ const staffUserSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    mustChangePassword: { type: Boolean, default: false },
+    temporaryPasswordExpiresAt: { type: Date, default: null },
+    passwordChangedAt: Date,
+    credentialGeneration: { type: Number, default: 0 },
+    credentialDelivery: { type: mongoose.Schema.Types.Mixed, default: {} },
+    credentialJob: { type: mongoose.Schema.Types.Mixed, default: null, select: false },
     tokenVersion: {
       type: Number,
       default: 0,
@@ -61,6 +67,9 @@ const staffUserSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+staffUserSchema.index({ 'credentialJob.state': 1, 'credentialJob.runAfter': 1 });
+for (const format of ['toJSON','toObject']) staffUserSchema.set(format,{transform:(_doc,ret)=>{delete ret.passwordHash;delete ret.credentialJob;return ret;}});
 
 staffUserSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.passwordHash);

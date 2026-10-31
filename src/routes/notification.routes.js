@@ -303,6 +303,14 @@ router.post('/mark-all-read', async (req, res) => {
 router.post('/resend/:id', requireRoles('manager', 'admin'), async (req, res) => {
   try {
     const { channel } = req.body;
+    const original = await Notification.findById(req.params.id).lean();
+    if(original?.metadata?.staffCredential) {
+      if(req.user.role!=='admin')return res.status(403).json({message:'Only administrators may retry account credential delivery.'});
+      if(channel && channel!==original.channel)return res.status(400).json({message:'Retry the original credential channel.'});
+      const {retryStaffCredentials}=await import('../services/staffCredentialService.js');
+      const result=await retryStaffCredentials(original.metadata.staffId,original.channel,{confirmUncertain:req.body.confirmUncertain===true,generation:original.metadata.credentialGeneration});
+      return res.json({success:true,result});
+    }
     const { retryWorkflowNotification } = await import('../services/workflowNotificationService.js');
     const result = await retryWorkflowNotification(req.params.id, {confirmUncertain:req.body.confirmUncertain === true}) ?? await resendNotification(req.params.id, { channelOverride: channel });
     res.status(200).json({ success: true, message: 'Notification re-dispatched', result });

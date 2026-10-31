@@ -14,6 +14,7 @@ export const autoAssignOrder = async (order, assignedBy = null) => {
   const availableDesigners = await StaffUser.find({
     role: 'designer',
     isActive: true,
+    mustChangePassword: { $ne: true },
     deletedAt: null,
     isEligibleForAssignment: true,
     $expr: { $lt: ['$currentActiveWorkload', '$maxActiveWorkload'] },
@@ -28,6 +29,7 @@ export const autoAssignOrder = async (order, assignedBy = null) => {
         _id: candidate._id,
         role: 'designer',
         isActive: true,
+        mustChangePassword: { $ne: true },
         deletedAt: null,
         isEligibleForAssignment: true,
         $expr: { $lt: ['$currentActiveWorkload', '$maxActiveWorkload'] },
@@ -115,6 +117,7 @@ export const manualAssignOrder = async (order, targetDesignerId, reason, manager
     _id: targetDesignerId,
     role: 'designer',
     isActive: true,
+    mustChangePassword: { $ne: true },
     deletedAt: null,
   });
 

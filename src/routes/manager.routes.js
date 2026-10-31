@@ -38,7 +38,7 @@ router.use(verifyStaffToken, requireRoles('manager', 'admin'));
 router.get('/designers', async (_req, res) => {
   try {
     const designers = await StaffUser.find({
-      role: 'designer', isActive: true, deletedAt: null, isEligibleForAssignment: true,
+      role: 'designer', isActive: true, mustChangePassword: { $ne: true }, deletedAt: null, isEligibleForAssignment: true,
     })
       .select('name currentActiveWorkload maxActiveWorkload')
       .sort({ currentActiveWorkload: 1, name: 1 })

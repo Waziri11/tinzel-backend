@@ -1,3 +1,4 @@
+import { runStaffCredentials } from '../services/staffCredentialService.js';
 import mongoose from 'mongoose';
 import { pipeline } from 'node:stream/promises';
 import { Order } from '../models/Order.model.js';
@@ -10,7 +11,7 @@ const router=Router();
 router.get('/internal/notification-jobs',async(req,res)=>{
   const expected=Buffer.from(`Bearer ${process.env.CRON_SECRET || ''}`),actual=Buffer.from(String(req.headers.authorization || ''));
   if(!process.env.CRON_SECRET || expected.length!==actual.length || !timingSafeEqual(expected,actual)) return res.sendStatus(401);
-  try {res.json(await runWorkflowNotifications());}catch {res.status(503).json({message:'Notification worker temporarily unavailable.'});}
+  try {const credentials=await runStaffCredentials();res.json({...await runWorkflowNotifications(),credentials});}catch {res.status(503).json({message:'Notification worker temporarily unavailable.'});}
 });
 // Only the explicitly authorized printer capability can retrieve this print file.
 router.get('/print-jobs/:orderId/:eventKey/file',async(req,res)=>{

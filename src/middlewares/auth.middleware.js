@@ -56,6 +56,9 @@ if (process.env.REQUIRE_JWT_SECRET === 'true') {
 }
 
 export const generateToken = (user) => {
+  const setup=Boolean(user.mustChangePassword);
+  const ttl=setup?Math.min(900,Math.floor((new Date(user.temporaryPasswordExpiresAt).getTime()-Date.now())/1000)):(process.env.STAFF_JWT_EXPIRES_IN || '12h');
+  if(setup && (!Number.isFinite(ttl)||ttl<1))throw Object.assign(new Error('Your initial password has expired. Ask an administrator to issue a new one.'),{status:401,code:'INITIAL_PASSWORD_EXPIRED'});
   return jwt.sign(
     {
       id: user._id,
@@ -63,9 +66,10 @@ export const generateToken = (user) => {
       role: user.role,
       name: user.name,
       tv: Number(user.tokenVersion || 0),
+      purpose: setup?'password_setup':'staff',
     },
     getJwtSecret(),
-    { expiresIn: process.env.STAFF_JWT_EXPIRES_IN || '12h' }
+    { expiresIn: ttl }
   );
 };
 
@@ -101,6 +105,12 @@ export const verifyStaffToken = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Session has been revoked. Please sign in again.' });
     }
 
+    if(decoded.purpose==='password_setup' && !user.mustChangePassword)return res.status(401).json({message:'Your setup session has ended. Please sign in again.'});
+    if(user.mustChangePassword) {
+      if(!user.temporaryPasswordExpiresAt || new Date(user.temporaryPasswordExpiresAt)<=new Date())return res.status(401).json({errorCode:'INITIAL_PASSWORD_EXPIRED',message:'Your initial password has expired. Ask an administrator to issue a new one.'});
+      const allowed=new Set(['/api/staff/me','/api/staff/preferences','/api/staff/change-password','/api/staff/logout']);
+      if(!allowed.has(req.originalUrl.split('?')[0]))return res.status(403).json({errorCode:'PASSWORD_CHANGE_REQUIRED',message:'Change your initial password before continuing.'});
+    }
     req.user = user;
     next();
   } catch (error) {
