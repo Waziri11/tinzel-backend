@@ -1,19 +1,65 @@
+import { randomInt } from 'node:crypto';
+import { Counter } from '../models/Counter.model.js';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 
 export const generateSubmissionId = () => {
   const year = new Date().getFullYear();
-  const randomPart = Math.floor(10000 + Math.random() * 90000);
+  const randomPart = randomInt(10000, 100000);
   return `SUB-${year}-${randomPart}`;
+};
+
+export const generateUniqueSubmissionId = async () => {
+  const year = new Date().getFullYear();
+  const isDbReady = Order.db?.readyState === 1;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const candidate = generateSubmissionId();
+    if (isDbReady) {
+      const exists = await Order.exists({ submissionId: candidate });
+      if (!exists) return candidate;
+    } else {
+      return candidate;
+    }
+  }
+  const fallback = randomInt(100000, 1000000);
+  return `SUB-${year}-${fallback}`;
 };
 
 export const generateTrackingId = async () => {
   const year = new Date().getFullYear();
-  // Count existing tracking IDs for this year to create sequential sequence
-  const count = await Order.countDocuments({
-    trackingId: { $regex: `^TNZ-${year}-` },
-  });
-  const sequence = String(count + 1).padStart(4, '0');
+  const counterId = `trackingId_${year}`;
+
+  let counter = await Counter.findByIdAndUpdate(
+    counterId,
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true }
+  );
+
+  // If counter is 1, check if there are pre-existing orders from before Counter was introduced
+  if (counter.seq === 1) {
+    const existingOrders = await Order.find({
+      trackingId: { $regex: `^TNZ-${year}-\\d+` },
+    }).select('trackingId').lean();
+
+    let maxSeq = 0;
+    for (const o of existingOrders) {
+      const match = o.trackingId?.match(new RegExp(`^TNZ-${year}-(\\d+)`));
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxSeq) maxSeq = num;
+      }
+    }
+
+    if (maxSeq >= 1) {
+      counter = await Counter.findByIdAndUpdate(
+        counterId,
+        { $set: { seq: maxSeq + 1 } },
+        { new: true }
+      );
+    }
+  }
+
+  const sequence = String(counter.seq).padStart(4, '0');
   return `TNZ-${year}-${sequence}`;
 };
 

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   generateSubmissionId,
+  generateUniqueSubmissionId,
   validateTransition,
   sanitizeOrderForClient,
 } from '../src/services/workflowService.js';
@@ -10,6 +11,15 @@ test('Workflow Gate: Submission ID format matches SUB-YYYY-XXXXX', () => {
   const subId = generateSubmissionId();
   const year = new Date().getFullYear();
   assert.match(subId, new RegExp(`^SUB-${year}-\\d{5}$`));
+});
+
+test('Workflow Gate: Cryptographic submission IDs are formatted and distinct', async () => {
+  const year = new Date().getFullYear();
+  const id1 = await generateUniqueSubmissionId();
+  const id2 = await generateUniqueSubmissionId();
+  assert.match(id1, new RegExp(`^SUB-${year}-\\d{5,6}$`));
+  assert.match(id2, new RegExp(`^SUB-${year}-\\d{5,6}$`));
+  assert.notEqual(id1, id2);
 });
 
 test('Workflow Gate: State machine transition rules are strictly enforced', () => {

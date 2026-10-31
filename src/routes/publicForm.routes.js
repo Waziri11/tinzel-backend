@@ -4,7 +4,7 @@ import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { uploadPhotos, boundPhotoRequest } from '../services/uploadService.js';
 import { respondMediaError } from '../services/mediaErrors.js';
-import { generateSubmissionId } from '../services/workflowService.js';
+import { generateSubmissionId, generateUniqueSubmissionId } from '../services/workflowService.js';
 import { validateFormAnswers } from '../services/formResponseService.js';
 import { findCoverImage, openCoverImageStream } from '../services/coverStorageService.js';
 import { storeOrderPhoto, findOrderPhoto, openOrderPhotoStream } from '../services/photoStorageService.js';
@@ -304,7 +304,7 @@ router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos
       return res.status(400).json({ success: false, message: answerErrors[0], errors: answerErrors });
     }
 
-    const submissionId = generateSubmissionId();
+    const submissionId = await generateUniqueSubmissionId();
 
     const order = await Order.create({
       submissionId,
