@@ -227,6 +227,17 @@ router.post('/orders/:id/verify-payment', async (req, res) => {
     }
 
     if (order.status !== 'awaiting_payment') {
+      // Idempotent retry guard: if already payment_verified with identical reference, return saved state
+      if (order.status === 'payment_verified' || order.trackingId) {
+        if (order.paymentDetails?.lipaNambaReference === reference) {
+          return res.status(200).json({
+            success: true,
+            message: 'Payment was already verified.',
+            trackingId: order.trackingId,
+            order,
+          });
+        }
+      }
       return res.status(400).json({
         success: false,
         message: `Order status is '${order.status}'. Payment can only be verified when 'awaiting_payment'.`,
@@ -254,10 +265,14 @@ router.post('/orders/:id/verify-payment', async (req, res) => {
       details: { trackingId, lipaNambaReference: reference, amountPaid: amount },
     });
 
-    // Send payment verification notification to client
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const trackingUrl = `${frontendUrl}/track`;
-    await notifyPaymentVerified(order, trackingUrl);
+    // Send payment verification notification to client in safe isolated block
+    try {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      const trackingUrl = `${frontendUrl}/track`;
+      await notifyPaymentVerified(order, trackingUrl);
+    } catch (notifErr) {
+      console.warn(`[Payment Notification Error] ${notifErr.message}`);
+    }
 
     // Trigger auto-assignment to eligible designer with lowest workload
     const assignResult = await autoAssignOrder(order, req.user);
@@ -384,8 +399,12 @@ router.post('/orders/:id/review-draft', async (req, res) => {
       });
 
       // Send WhatsApp notification to Client that draft is released
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-      await notifyDraftReleased(order, `${frontendUrl}/track`);
+      try {
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        await notifyDraftReleased(order, `${frontendUrl}/track`);
+      } catch (notifErr) {
+        console.warn(`[Draft Release Notification Error] ${notifErr.message}`);
+      }
 
       return res.status(200).json({
         success: true,
@@ -418,7 +437,11 @@ router.post('/orders/:id/review-draft', async (req, res) => {
         details: { versionNumber: order.currentDraftVersion, feedback, requestId: revisionRequest._id, items: correctionItems },
       });
 
-      await notifyDraftReturned(order, revisionRequest, 'manager');
+      try {
+        await notifyDraftReturned(order, revisionRequest, 'manager');
+      } catch (notifErr) {
+        console.warn(`[Draft Return Notification Error] ${notifErr.message}`);
+      }
 
       return res.status(200).json({
         success: true,
@@ -475,9 +498,13 @@ router.post('/orders/:id/authorise-print', async (req, res) => {
     });
 
     // Dispatch WhatsApp notification to printing partner with short-lived signed download link
-    const signedPrintPath = signMediaPath(order.printDocument.url, 7 * 24 * 3600);
-    const fullPrintUrl = `${req.protocol}://${req.get('host')}${signedPrintPath}`;
-    await notifyPrinterDispatch(order, printerPhone, fullPrintUrl, order.printDocument.specs || {});
+    try {
+      const signedPrintPath = signMediaPath(order.printDocument.url, 7 * 24 * 3600);
+      const fullPrintUrl = `${req.protocol}://${req.get('host')}${signedPrintPath}`;
+      await notifyPrinterDispatch(order, printerPhone, fullPrintUrl, order.printDocument.specs || {});
+    } catch (notifErr) {
+      console.warn(`[Printer Dispatch Notification Error] ${notifErr.message}`);
+    }
 
     return res.status(200).json({
       success: true,
@@ -504,7 +531,11 @@ router.post('/orders/:id/printer-update', async (req, res) => {
       if (!order.printingDetails) order.printingDetails = {};
       order.printingDetails.acknowledgedAt = new Date();
       order.printingDetails.notes = notes || order.printingDetails.notes;
-      await notifyPrintingInProgress(order);
+      try {
+        await notifyPrintingInProgress(order);
+      } catch (notifErr) {
+        console.warn(`[Printing In Progress Notification Error] ${notifErr.message}`);
+      }
     } else if (stage === 'completed') {
       requireStatus(order, ['printing_in_progress'], 'Printing completion');
       order.status = 'printing_completed';
