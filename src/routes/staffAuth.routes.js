@@ -47,6 +47,7 @@ router.post('/login', loginRateLimiter, async (req, res) => {
       user: {
         id: user._id,
         name: user.name,
+        phone: user.phone,
         email: user.email,
         role: user.role,
         preferredLanguage: user.preferredLanguage || 'sw',
