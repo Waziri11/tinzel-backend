@@ -1,3 +1,4 @@
+import staffManagementRoutes from './staffManagement.routes.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import { pendingAnnotations, assertNoPendingAnnotations, submitAnnotations } from '../services/proofReaderService.js';
 import { Router } from 'express';
@@ -34,6 +35,7 @@ const handleManagerError = (res, error) => {
 
 // Manager or Admin only for all manager routes
 router.use(verifyStaffToken, requireRoles('manager', 'admin'));
+router.use(staffManagementRoutes);
 
 router.get('/designers', async (_req, res) => {
   try {
