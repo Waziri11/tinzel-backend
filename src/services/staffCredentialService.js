@@ -62,14 +62,14 @@ export async function finishStaffCredentialDelivery(id,generation,reason='These 
   for(const channel of ['sms','email'])await StaffUser.updateOne({_id:id,credentialGeneration:generation,[`credentialDelivery.${channel}.status`]:{$in:['queued','failed']}},{$set:{[`credentialDelivery.${channel}.status`]:'skipped',[`credentialDelivery.${channel}.error`]:reason}});
   await StaffUser.updateOne({_id:id,credentialGeneration:generation},{$unset:{'credentialDelivery.error':1}});
 }
-export async function reissueInitialPassword(id) {
-  const user=await StaffUser.findOne({_id:id,isActive:true,deletedAt:null});
+export async function reissueInitialPassword(id,{expectedRole=null}={}) {
+  const user=await StaffUser.findOne({_id:id,isActive:true,deletedAt:null,...(expectedRole?{role:expectedRole}:{})});
   if(!user)throw fail(404,'Active staff user not found.');
   if(!validStaffPhone(user.phone) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user.email))throw fail(400,'A valid email and phone number are required before issuing credentials.');
   const generation=Number(user.credentialGeneration || 0)+1;
   const fields=await initialCredentialFields(user._id,generation);
   fields.credentialJob.reason='reissue';
-  const updated=await StaffUser.findOneAndUpdate({_id:user._id,passwordHash:user.passwordHash,credentialGeneration:{$in:[generation-1,...(generation===1?[null]:[])]},tokenVersion:{$in:[user.tokenVersion || 0,...(!user.tokenVersion?[null]:[])]}},{$set:fields,$inc:{tokenVersion:1}},{returnDocument:'after',runValidators:true});
+  const updated=await StaffUser.findOneAndUpdate({_id:user._id,...(expectedRole?{role:expectedRole}:{}),passwordHash:user.passwordHash,credentialGeneration:{$in:[generation-1,...(generation===1?[null]:[])]},tokenVersion:{$in:[user.tokenVersion || 0,...(!user.tokenVersion?[null]:[])]}},{$set:fields,$inc:{tokenVersion:1}},{returnDocument:'after',runValidators:true});
   if(!updated)throw fail(409,'This account changed. Refresh before issuing another password.');
   await finishStaffCredentialDelivery(user._id,user.credentialGeneration || 0).catch(()=>{});
   await kickStaffCredentials(updated._id);
@@ -138,9 +138,10 @@ export async function kickStaffCredentials(staffId) {
   if(!process.env.NODE_TEST_CONTEXT&&process.env.VERCEL==='1'){try{waitUntil(promise);return {scheduled:true};}catch{/* Await on local hosts. */}}
   return promise;
 }
-export async function retryStaffCredentials(id,channel,{confirmUncertain=false,generation=null}={}) {
+export async function retryStaffCredentials(id,channel,{confirmUncertain=false,generation=null,expectedRole=null}={}) {
   if(!['sms','email'].includes(channel))throw fail(400,'Choose SMS or email.');
-  const user=await StaffUser.findById(id).select('+credentialJob');
+  const user=await StaffUser.findOne({_id:id,...(expectedRole?{role:expectedRole}:{})}).select('+credentialJob');
+  if(!user)throw fail(404,'Staff user not found.');
   if(generation!==null && generation!==user?.credentialGeneration)throw fail(409,'These initial credentials have been replaced. Refresh the account details.');
   if(!activeCredential(user,user?.credentialGeneration,new Date()) || !user.credentialJob?.payload)throw fail(409,'Initial credentials have expired or are no longer current. Issue a new initial password.');
   const row=await Notification.findOne({deliveryKey:`staff:${id}:${user.credentialGeneration}:${channel}`});
@@ -148,6 +149,7 @@ export async function retryStaffCredentials(id,channel,{confirmUncertain=false,g
   if(row.status==='unconfirmed'&&!confirmUncertain)throw fail(409,'Provider acceptance is unknown. Confirm that retrying may send a duplicate.');
   const updated=await Notification.updateOne({_id:row._id,status:row.status,retries:row.retries},{$set:{status:'failed',retryable:true,attempts:0,nextAttemptAt:new Date()},$inc:{retries:1}});
   if(!updated.modifiedCount)throw fail(409,'A retry is already in progress.');
-  await StaffUser.updateOne({_id:user._id,credentialGeneration:user.credentialGeneration},{$set:{'credentialJob.state':'pending','credentialJob.runAfter':new Date()}});
+  const scheduled=await StaffUser.updateOne({_id:user._id,...(expectedRole?{role:expectedRole}:{}),credentialGeneration:user.credentialGeneration},{$set:{'credentialJob.state':'pending','credentialJob.runAfter':new Date()}});
+  if(!scheduled.matchedCount)throw fail(409,'This account changed. Refresh before retrying.');
   return kickStaffCredentials(user._id);
 }
