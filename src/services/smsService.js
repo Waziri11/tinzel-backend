@@ -1,3 +1,4 @@
+import {providerValue,refreshProviderSettings,redactProviderText,redactProviderDiagnostics} from './providerConfigService.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -48,9 +49,10 @@ export const formatTanzanianPhone = (phone) => {
  * Checks whether NextSMS credentials (v2 API key or v1 username/password) are configured.
  */
 export const isNextSMSConfigured = () => {
+  const mode=providerValue('NEXTSMS_AUTH_MODE')||'auto';
   return Boolean(
-    process.env.NEXTSMS_API_KEY?.trim() ||
-      (process.env.NEXTSMS_USERNAME?.trim() && process.env.NEXTSMS_PASSWORD?.trim())
+    (mode!=='basic' && providerValue('NEXTSMS_API_KEY')?.trim()) ||
+      (mode!=='api_key' && providerValue('NEXTSMS_USERNAME')?.trim() && providerValue('NEXTSMS_PASSWORD')?.trim())
   );
 };
 
@@ -60,11 +62,12 @@ export const isNextSMSConfigured = () => {
  * - Falls back to NextSMS API v1 with Basic Auth (Base64 username:password) otherwise.
  */
 export const resolveNextSMSAuth = () => {
-  const apiKey = process.env.NEXTSMS_API_KEY?.trim();
-  const username = process.env.NEXTSMS_USERNAME?.trim();
-  const password = process.env.NEXTSMS_PASSWORD?.trim();
+  const apiKey = providerValue('NEXTSMS_API_KEY')?.trim();
+  const username = providerValue('NEXTSMS_USERNAME')?.trim();
+  const password = providerValue('NEXTSMS_PASSWORD')?.trim();
 
-  if (apiKey) {
+  const mode=providerValue('NEXTSMS_AUTH_MODE')||'auto';
+  if (apiKey && mode!=='basic') {
     const cleanToken = apiKey.replace(/^(Bearer|Basic)\s+/i, '');
     return {
       version: 'v2',
@@ -73,7 +76,7 @@ export const resolveNextSMSAuth = () => {
     };
   }
 
-  if (username && password) {
+  if (username && password && mode!=='api_key') {
     const basicAuthToken = Buffer.from(`${username}:${password}`).toString('base64');
     return {
       version: 'v1',
@@ -98,6 +101,7 @@ export const resolveNextSMSAuth = () => {
  * @returns {Promise<object>} Parsed response payload from NextSMS
  */
 export const sendNextSMS = async (to, message, senderId) => {
+  await refreshProviderSettings();
   if (typeof message !== 'string' || !message.trim()) {
     const error = new Error('A non-empty SMS "message" is required.');
     error.status = 400;
@@ -106,7 +110,7 @@ export const sendNextSMS = async (to, message, senderId) => {
 
   const formattedPhone = formatTanzanianPhone(to);
   const { endpoint, authHeader } = resolveNextSMSAuth();
-  const resolvedSender = (senderId || process.env.NEXTSMS_SENDER_ID || DEFAULT_SENDER_ID).trim();
+  const resolvedSender = (senderId || providerValue('NEXTSMS_SENDER_ID') || DEFAULT_SENDER_ID).trim();
 
   const payload = {
     from: resolvedSender,
@@ -131,10 +135,10 @@ export const sendNextSMS = async (to, message, senderId) => {
     const error = new Error(
       isTimeout
         ? `NextSMS API timed out after ${NEXTSMS_TIMEOUT_MS}ms`
-        : `Failed to reach NextSMS API: ${networkError.message}`
+        : `Failed to reach NextSMS API: ${redactProviderText(networkError.message)}`
     );
     error.status = isTimeout ? 504 : 502;
-    error.cause = networkError;
+    error.cause = new Error(redactProviderText(networkError.message));
     error.uncertain = true;
     throw error;
   }
@@ -156,9 +160,9 @@ export const sendNextSMS = async (to, message, senderId) => {
       parsedBody?.requestError?.serviceException?.text ||
       response.statusText ||
       'Unknown NextSMS API error';
-    const error = new Error(`NextSMS API error (${response.status}): ${upstreamMessage}`);
+    const error = new Error(`NextSMS API error (${response.status}): ${redactProviderText(upstreamMessage)}`);
     error.status = response.status >= 400 && response.status < 500 ? response.status : 502;
-    error.details = parsedBody;
+    error.details = redactProviderDiagnostics(parsedBody);
     error.uncertain = response.status >= 500;
     error.retryable = response.status === 429;
     throw error;
@@ -171,7 +175,8 @@ export const sendNextSMS = async (to, message, senderId) => {
  * Queries the NextSMS v2 balance endpoint to verify account health & SMS credits.
  */
 export const getNextSMSHealth = async () => {
-  const senderId = (process.env.NEXTSMS_SENDER_ID || DEFAULT_SENDER_ID).trim();
+  await refreshProviderSettings();
+  const senderId = (providerValue('NEXTSMS_SENDER_ID') || DEFAULT_SENDER_ID).trim();
   if (!isNextSMSConfigured()) {
     return {
       configured: false,
@@ -223,7 +228,7 @@ export const getNextSMSHealth = async () => {
       httpStatus: 502,
       latencyMs: Date.now() - startedAt,
       balance: null,
-      message: `Failed to reach NextSMS API: ${error.message}`,
+      message: `Failed to reach NextSMS API: ${redactProviderText(error.message)}`,
     };
   }
 };

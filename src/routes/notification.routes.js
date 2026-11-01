@@ -1,3 +1,4 @@
+import {redactProviderDiagnostics} from '../services/providerConfigService.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import { Router } from 'express';
 import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
@@ -323,7 +324,7 @@ router.post('/resend/:id', requireRoles('manager', 'admin'), async (req, res) =>
  * POST /api/notifications/test-send
  * Dispatches an ad-hoc notification across either a single channel or all 3 channels (In-System + Email + Phone).
  */
-router.post('/test-send', requireRoles('manager', 'admin'), async (req, res) => {
+router.post('/test-send', requireRoles('admin'), async (req, res) => {
   try {
     const {
       to,
@@ -398,7 +399,7 @@ router.get('/settings', requireRoles('manager', 'admin'), async (_req, res) => {
  * PUT /api/notifications/settings
  * Updates global channel toggles, NextSMS Sender ID, and per-trigger channel toggles.
  */
-router.put('/settings', requireRoles('manager', 'admin'), async (req, res) => {
+router.put('/settings', requireRoles('admin'), async (req, res) => {
   try {
     const settings = await updateNotificationSettings(req.body || {}, req.user?._id);
     try {
@@ -427,7 +428,7 @@ router.put('/settings', requireRoles('manager', 'admin'), async (req, res) => {
  * POST /api/notifications/settings/reset
  * Resets all notification triggers and channel settings to factory defaults.
  */
-router.post('/settings/reset', requireRoles('manager', 'admin'), async (req, res) => {
+router.post('/settings/reset', requireRoles('admin'), async (req, res) => {
   try {
     const settings = await resetNotificationSettings(req.user?._id);
     res.status(200).json({
@@ -444,10 +445,10 @@ router.post('/settings/reset', requireRoles('manager', 'admin'), async (req, res
  * GET /api/notifications/diagnostics
  * Tests NextSMS, Email SMTP, and Twilio credentials and reports unified health diagnostics.
  */
-router.get('/diagnostics', requireRoles('manager', 'admin'), async (_req, res) => {
+router.get('/diagnostics', requireRoles('admin'), async (_req, res) => {
   try {
     const report = await getUnifiedDiagnostics();
-    res.status(200).json({ success: true, diagnostics: report });
+    res.status(200).json({ success: true, diagnostics: redactProviderDiagnostics(report) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -457,7 +458,7 @@ router.get('/diagnostics', requireRoles('manager', 'admin'), async (_req, res) =
  * POST /api/notifications/health-test/sms
  * Dispatches an interactive SMS health test via NextSMS and logs to history.
  */
-router.post('/health-test/sms', requireRoles('manager', 'admin'), async (req, res) => {
+router.post('/health-test/sms', requireRoles('admin'), async (req, res) => {
   try {
     const { to, message, from } = req.body || {};
     if (!to || typeof to !== 'string' || !to.trim()) {
@@ -493,7 +494,7 @@ router.post('/health-test/sms', requireRoles('manager', 'admin'), async (req, re
  * POST /api/notifications/health-test/email
  * Dispatches an interactive Email health test via Google SMTP (or simulation fallback) and logs to history.
  */
-router.post('/health-test/email', requireRoles('manager', 'admin'), async (req, res) => {
+router.post('/health-test/email', requireRoles('admin'), async (req, res) => {
   try {
     const { to, subject, message } = req.body || {};
     if (!to || typeof to !== 'string' || !to.includes('@')) {

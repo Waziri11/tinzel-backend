@@ -1,3 +1,4 @@
+import {providerValue,providerOverride,refreshProviderSettings,redactProviderText} from './providerConfigService.js';
 import { notificationFrontendUrl, notificationTrackingUrl } from './notificationUrls.js';
 import { clientOtpMessage } from './accountMessages.js';
 import twilio from 'twilio';
@@ -149,7 +150,7 @@ export const buildDefaultNotificationSettings = () => {
       email: true,
       sms: true,
     },
-    smsSenderId: process.env.NEXTSMS_SENDER_ID || 'ORDER',
+    smsSenderId: providerValue('NEXTSMS_SENDER_ID') || 'ORDER',
     triggers,
   };
 };
@@ -192,6 +193,7 @@ const mergeWithDefaults = (raw = {}) => {
  * Loads active notification settings from MongoDB SystemConfig (or in-memory fallback).
  */
 export const getNotificationSettings = async () => {
+  await refreshProviderSettings();
   if (mongoose.connection.readyState === 1) {
     try {
       const doc = await SystemConfig.findOne({ key: 'notification_settings' }).lean();
@@ -204,6 +206,7 @@ export const getNotificationSettings = async () => {
   }
   return {
     ...inMemoryNotificationSettings,
+    smsSenderId:providerOverride('NEXTSMS_SENDER_ID')||inMemoryNotificationSettings.smsSenderId,
     catalog: NOTIFICATION_TRIGGER_CATALOG,
   };
 };
@@ -311,15 +314,16 @@ export const clearSimulatedNotifications = () => {
 };
 
 let cachedTwilioClient = null;
+let twilioClientKey;
 
 /**
  * Checks whether live Twilio credentials are provided.
  */
 export const isTwilioConfigured = () => {
   return Boolean(
-    process.env.TWILIO_ACCOUNT_SID &&
-    process.env.TWILIO_AUTH_TOKEN &&
-    process.env.TWILIO_PHONE_NUMBER
+    providerValue('TWILIO_ACCOUNT_SID') &&
+    providerValue('TWILIO_AUTH_TOKEN') &&
+    providerValue('TWILIO_PHONE_NUMBER')
   );
 };
 
@@ -327,12 +331,14 @@ export const isTwilioConfigured = () => {
  * Returns an initialized Twilio client instance if configured.
  */
 const getTwilioClient = () => {
+  const signature=JSON.stringify(['TWILIO_ACCOUNT_SID','TWILIO_AUTH_TOKEN'].map(providerValue));
+  if(twilioClientKey!==signature){cachedTwilioClient=null;twilioClientKey=signature;}
   if (cachedTwilioClient) return cachedTwilioClient;
   if (!isTwilioConfigured()) return null;
 
   cachedTwilioClient = twilio(
-    process.env.TWILIO_ACCOUNT_SID,
-    process.env.TWILIO_AUTH_TOKEN
+    providerValue('TWILIO_ACCOUNT_SID'),
+    providerValue('TWILIO_AUTH_TOKEN')
   );
   return cachedTwilioClient;
 };
@@ -374,6 +380,7 @@ export const sendNotification = async ({
   fallbackToSms = true,
   skipPersistence = false,
 }) => {
+  await refreshProviderSettings();
   const timestamp = new Date().toISOString();
   const logEntry = {
     id: `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -447,8 +454,9 @@ export const sendNotification = async ({
       try {
         const senderId =
           metadata?.senderId ||
+          providerOverride('NEXTSMS_SENDER_ID') ||
           inMemoryNotificationSettings?.smsSenderId ||
-          process.env.NEXTSMS_SENDER_ID ||
+          providerValue('NEXTSMS_SENDER_ID') ||
           'ORDER';
         const formatted = formatTanzanianPhone(to);
         const nextSmsRes = await sendNextSMS(formatted, message, senderId);
@@ -486,8 +494,8 @@ export const sendNotification = async ({
       const formattedRecipient = normalizePhoneNumber(to);
       const isWhatsApp = channel === 'whatsapp';
       const fromNumber = isWhatsApp
-        ? `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER || process.env.TWILIO_PHONE_NUMBER}`
-        : process.env.TWILIO_PHONE_NUMBER;
+        ? `whatsapp:${providerValue('TWILIO_WHATSAPP_NUMBER') || providerValue('TWILIO_PHONE_NUMBER')}`
+        : providerValue('TWILIO_PHONE_NUMBER');
 
       const toNumber = isWhatsApp
         ? `whatsapp:${formattedRecipient}`
@@ -503,8 +511,8 @@ export const sendNotification = async ({
         payload.mediaUrl = [mediaUrl];
       }
 
-      if (process.env.TWILIO_STATUS_CALLBACK_URL) {
-        payload.statusCallback = process.env.TWILIO_STATUS_CALLBACK_URL;
+      if (providerValue('TWILIO_STATUS_CALLBACK_URL')) {
+        payload.statusCallback = providerValue('TWILIO_STATUS_CALLBACK_URL');
       }
 
       try {
@@ -513,25 +521,25 @@ export const sendNotification = async ({
         logEntry.mode = 'twilio_live';
         logEntry.status = 'sent';
       } catch (error) {
-        console.warn(`[Twilio Error - ${channel.toUpperCase()}] ${template === 'staff_credentials' ? 'Credential delivery failed.' : error.message}`);
+        console.warn(`[Twilio Error - ${channel.toUpperCase()}] ${template === 'staff_credentials' ? 'Credential delivery failed.' : redactProviderText(error.message)}`);
 
         // Automatic fallback to SMS if WhatsApp fails
         const shouldFallback =
           isWhatsApp &&
           fallbackToSms &&
-          process.env.ENABLE_TWILIO_SMS_FALLBACK !== 'false' &&
-          process.env.TWILIO_PHONE_NUMBER;
+          providerValue('ENABLE_TWILIO_SMS_FALLBACK') !== 'false' &&
+          providerValue('TWILIO_PHONE_NUMBER');
 
         if (shouldFallback) {
           console.log(`[Twilio WhatsApp Fallback] Falling back to SMS for ${formattedRecipient}...`);
           try {
             const smsPayload = {
-              from: process.env.TWILIO_PHONE_NUMBER,
+              from: providerValue('TWILIO_PHONE_NUMBER'),
               to: formattedRecipient,
               body: message,
             };
-            if (process.env.TWILIO_STATUS_CALLBACK_URL) {
-              smsPayload.statusCallback = process.env.TWILIO_STATUS_CALLBACK_URL;
+            if (providerValue('TWILIO_STATUS_CALLBACK_URL')) {
+              smsPayload.statusCallback = providerValue('TWILIO_STATUS_CALLBACK_URL');
             }
             const smsRes = await client.messages.create(smsPayload);
             logEntry.sid = smsRes.sid;
@@ -544,12 +552,12 @@ export const sendNotification = async ({
             console.warn(`[Twilio SMS Fallback Error] ${smsError.message}`);
             logEntry.mode = 'twilio_failed_fallback_simulated';
             logEntry.status = 'failed';
-            logEntry.error = `WhatsApp: ${error.message} | SMS: ${smsError.message}`;
+            logEntry.error = `WhatsApp: ${redactProviderText(error.message)} | SMS: ${smsError.message}`;
           }
         } else {
           logEntry.mode = 'twilio_failed_fallback_simulated';
           logEntry.status = 'failed';
-          logEntry.error = template === 'staff_credentials' ? 'Credential delivery failed.' : error.message;
+          logEntry.error = template === 'staff_credentials' ? 'Credential delivery failed.' : redactProviderText(error.message);
           logEntry.status = !error.status || error.status >= 500 ? 'unconfirmed' : 'failed';
           logEntry.retryable = error.status === 429;
         }
@@ -2143,6 +2151,7 @@ export const resendNotification = async (notificationId, { channelOverride = nul
  * Diagnostics function to test Twilio API connectivity and credentials.
  */
 export const testTwilioConnection = async () => {
+  await refreshProviderSettings();
   const configured = isTwilioConfigured();
   if (!configured) {
     return {
@@ -2155,15 +2164,15 @@ export const testTwilioConnection = async () => {
 
   const client = getTwilioClient();
   try {
-    const account = await client.api.v2010.accounts(process.env.TWILIO_ACCOUNT_SID).fetch();
+    const account = await client.api.v2010.accounts(providerValue('TWILIO_ACCOUNT_SID')).fetch();
     return {
       success: true,
       configured: true,
       mode: 'twilio_live',
       accountName: account.friendlyName,
       status: account.status,
-      phoneNumber: process.env.TWILIO_PHONE_NUMBER,
-      whatsappNumber: process.env.TWILIO_WHATSAPP_NUMBER || process.env.TWILIO_PHONE_NUMBER,
+      phoneNumber: providerValue('TWILIO_PHONE_NUMBER'),
+      whatsappNumber: providerValue('TWILIO_WHATSAPP_NUMBER') || providerValue('TWILIO_PHONE_NUMBER'),
       message: 'Successfully connected and verified against Twilio API.',
     };
   } catch (error) {
@@ -2171,7 +2180,7 @@ export const testTwilioConnection = async () => {
       success: false,
       configured: true,
       mode: 'error',
-      message: `Failed to authenticate with Twilio API: ${error.message}`,
+      message: `Failed to authenticate with Twilio API: ${redactProviderText(error.message)}`,
     };
   }
 };
@@ -2180,6 +2189,7 @@ export const testTwilioConnection = async () => {
  * Returns a unified QAMS diagnostics report covering NextSMS, Google SMTP Email, Twilio, and active settings.
  */
 export const getUnifiedDiagnostics = async () => {
+  await refreshProviderSettings();
   const [smsHealth, emailHealth, twilioHealth, settings] = await Promise.all([
     getNextSMSHealth(),
     getEmailHealth(),
@@ -2219,9 +2229,10 @@ export const getUnifiedDiagnostics = async () => {
  * Executes an interactive SMS health test via NextSMS and logs the result to Notification history.
  */
 export const runSmsHealthTest = async ({ to, message, from, user = null }) => {
+  await refreshProviderSettings();
   const startedAt = Date.now();
   const settings = await getNotificationSettings();
-  const senderId = (from || settings.smsSenderId || process.env.NEXTSMS_SENDER_ID || 'ORDER').trim();
+  const senderId = (from || settings.smsSenderId || providerValue('NEXTSMS_SENDER_ID') || 'ORDER').trim();
   const formattedPhone = formatTanzanianPhone(to);
   const testMessage =
     (message && message.trim()) ||
@@ -2269,6 +2280,7 @@ export const runSmsHealthTest = async ({ to, message, from, user = null }) => {
  * Executes an interactive Email health test via Google SMTP (or simulation fallback) and logs to history.
  */
 export const runEmailHealthTest = async ({ to, subject, message, user = null }) => {
+  await refreshProviderSettings();
   if (!to || typeof to !== 'string' || !to.includes('@')) {
     const error = new Error('A valid recipient email address ("to") is required.');
     error.status = 400;

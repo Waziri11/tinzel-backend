@@ -1,26 +1,30 @@
+import {providerValue,refreshProviderSettings,redactProviderText} from './providerConfigService.js';
 import nodemailer from 'nodemailer';
 
 let transporterInstance = null;
+let transporterKey;
 
 /**
  * Checks whether live SMTP credentials are provided in the environment.
  */
 export const isEmailConfigured = () => {
-  return Boolean(process.env.SMTP_USER && process.env.SMTP_PASS);
+  return Boolean(providerValue('SMTP_USER') && providerValue('SMTP_PASS'));
 };
 
 /**
  * Creates or returns the cached Nodemailer transporter.
  */
 export const getTransporter = () => {
+  const signature=JSON.stringify(['SMTP_HOST','SMTP_PORT','SMTP_SECURE','SMTP_USER','SMTP_PASS'].map(providerValue));
+  if(transporterKey!==signature){transporterInstance?.close();transporterInstance=null;transporterKey=signature;}
   if (transporterInstance) {
     return transporterInstance;
   }
 
-  const host = process.env.SMTP_HOST || 'smtp.gmail.com';
-  const port = parseInt(process.env.SMTP_PORT, 10) || 465;
-  const isSecure = process.env.SMTP_SECURE !== undefined
-    ? process.env.SMTP_SECURE === 'true'
+  const host = providerValue('SMTP_HOST') || 'smtp.gmail.com';
+  const port = parseInt(providerValue('SMTP_PORT'), 10) || 465;
+  const isSecure = providerValue('SMTP_SECURE') !== undefined
+    ? providerValue('SMTP_SECURE') === 'true'
     : port === 465;
 
   transporterInstance = nodemailer.createTransport({
@@ -28,8 +32,8 @@ export const getTransporter = () => {
     port,
     secure: isSecure,
     auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
+      user: providerValue('SMTP_USER'),
+      pass: providerValue('SMTP_PASS'),
     },
     // Useful timeout options for production stability
     connectionTimeout: 10000,
@@ -471,7 +475,8 @@ export const emailTemplates = Object.fromEntries(
  * Dispatch an email message via Nodemailer or simulation mode.
  */
 export const sendEmail = async ({ to, subject, html, text, sensitive = false }) => {
-  const from = process.env.SMTP_FROM || `Tinzel <${process.env.SMTP_USER || 'notifications@tinzel.com'}>`;
+  await refreshProviderSettings();
+  const from = providerValue('SMTP_FROM') || `Tinzel <${providerValue('SMTP_USER') || 'notifications@tinzel.com'}>`;
 
   if (!isEmailConfigured()) {
     console.log(`[Email Service - Simulated] To: ${to} | Subject: "${subject}"`);
@@ -504,13 +509,13 @@ export const sendEmail = async ({ to, subject, html, text, sensitive = false }) 
       subject,
     };
   } catch (error) {
-    console.error(`[Email Service - Error] Failed to send email to ${to}: ${sensitive ? 'Credential delivery failed.' : error.message}`);
+    console.error(`[Email Service - Error] Failed to send email to ${to}: ${sensitive ? 'Credential delivery failed.' : redactProviderText(error.message)}`);
     return {
       mode: 'smtp_failed_fallback_simulated',
       to,
       from,
       subject,
-      error: sensitive ? 'Credential delivery failed.' : error.message,
+      error: sensitive ? 'Credential delivery failed.' : redactProviderText(error.message),
       uncertain: !error.responseCode && !['EAUTH','ECONNECTION','EDNS'].includes(error.code),
       retryable: (error.responseCode >= 400 && error.responseCode < 500) || ['ECONNECTION','EDNS'].includes(error.code),
     };
@@ -521,13 +526,14 @@ export const sendEmail = async ({ to, subject, html, text, sensitive = false }) 
  * Checks the health and live connectivity of the Google SMTP / Nodemailer service.
  */
 export const getEmailHealth = async () => {
+  await refreshProviderSettings();
   const configured = isEmailConfigured();
-  const host = process.env.SMTP_HOST || 'smtp.gmail.com';
-  const port = parseInt(process.env.SMTP_PORT, 10) || 465;
+  const host = providerValue('SMTP_HOST') || 'smtp.gmail.com';
+  const port = parseInt(providerValue('SMTP_PORT'), 10) || 465;
   const secure =
-    process.env.SMTP_SECURE !== undefined ? process.env.SMTP_SECURE === 'true' : port === 465;
-  const from = process.env.SMTP_FROM || `Tinzel <${process.env.SMTP_USER || 'notifications@tinzel.com'}>`;
-  const user = process.env.SMTP_USER || '';
+    providerValue('SMTP_SECURE') !== undefined ? providerValue('SMTP_SECURE') === 'true' : port === 465;
+  const from = providerValue('SMTP_FROM') || `Tinzel <${providerValue('SMTP_USER') || 'notifications@tinzel.com'}>`;
+  const user = providerValue('SMTP_USER') || '';
 
   if (!configured) {
     return {
@@ -571,7 +577,7 @@ export const getEmailHealth = async () => {
       from,
       user,
       latencyMs: Date.now() - startedAt,
-      message: `SMTP verification failed: ${error.message}`,
+      message: `SMTP verification failed: ${redactProviderText(error.message)}`,
     };
   }
 };

@@ -1,3 +1,4 @@
+import providerConfigRoutes from './routes/providerConfig.routes.js';
 import systemRoutes from './routes/system.routes.js';
 import workflowNotificationRoutes from './routes/workflowNotification.routes.js';
 import proofReaderRoutes from './routes/proofReader.routes.js';
@@ -256,6 +257,7 @@ app.use('/api/manager', managerRoutes);
 app.use('/api/designer', designerRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/system', systemRoutes);
+app.use('/api/admin/providers', providerConfigRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/v1/sms', smsRoutes);
 

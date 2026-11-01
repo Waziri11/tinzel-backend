@@ -1,3 +1,4 @@
+import {providerValue,refreshProviderSettings} from '../services/providerConfigService.js';
 import twilio from 'twilio';
 
 /**
@@ -5,16 +6,17 @@ import twilio from 'twilio';
  * In development or test environments, or if TWILIO_AUTH_TOKEN is not configured,
  * requests are allowed through with a log.
  */
-export const verifyTwilioWebhook = (req, res, next) => {
+export const verifyTwilioWebhook = async (req, res, next) => {
+  try{await refreshProviderSettings();}catch{return res.status(503).send('Webhook configuration unavailable');}
   if (process.env.NODE_ENV === 'production') {
-    if (!process.env.TWILIO_AUTH_TOKEN) {
+    if (!providerValue('TWILIO_AUTH_TOKEN')) {
       console.error('[Twilio Webhook] CRITICAL: TWILIO_AUTH_TOKEN is missing in production');
       return res.status(503).send('Forbidden: Webhook authentication not configured');
     }
   } else if (
     process.env.NODE_ENV === 'test' ||
     process.env.TWILIO_VALIDATE_WEBHOOKS === 'false' ||
-    !process.env.TWILIO_AUTH_TOKEN
+    !providerValue('TWILIO_AUTH_TOKEN')
   ) {
     return next();
   }
@@ -30,7 +32,7 @@ export const verifyTwilioWebhook = (req, res, next) => {
   const fullUrl = `${protocol}://${host}${req.originalUrl}`;
 
   const isValid = twilio.validateRequest(
-    process.env.TWILIO_AUTH_TOKEN,
+    providerValue('TWILIO_AUTH_TOKEN'),
     twilioSignature,
     fullUrl,
     req.body || {}
