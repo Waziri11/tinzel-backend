@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import { passwordErrors, finishStaffCredentialDelivery } from '../services/staffCredentialService.js';
+import { validStaffPhone, passwordErrors, finishStaffCredentialDelivery } from '../services/staffCredentialService.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { Router } from 'express';
 import { StaffUser } from '../models/StaffUser.model.js';
@@ -69,6 +69,7 @@ router.get('/me', verifyStaffToken, async (req, res) => {
     user: {
       id: req.user._id,
       name: req.user.name,
+      phone: req.user.phone,
       email: req.user.email,
       role: req.user.role,
       preferredLanguage: req.user.preferredLanguage || 'sw',
@@ -79,6 +80,18 @@ router.get('/me', verifyStaffToken, async (req, res) => {
       isEligibleForAssignment: req.user.isEligibleForAssignment,
     },
   });
+});
+
+router.patch('/profile', verifyStaffToken, async (req, res) => {
+  const { name, phone } = req.body || {};
+  if (Object.keys(req.body || {}).some(key => !['name', 'phone'].includes(key))) return res.status(400).json({message:'Only name and phone may be changed.'});
+  if (typeof name !== 'string' || !name.trim() || name.trim().length > 120 || !validStaffPhone(phone)) return res.status(400).json({message:'Provide a name and valid phone number.'});
+  try {
+    const user = await StaffUser.findOneAndUpdate({_id:req.user._id,isActive:true,deletedAt:null}, {$set:{name:name.trim(),phone:phone.trim()}}, {new:true});
+    if (!user) return res.status(401).json({message:'Account unavailable.'});
+    await AuditLog.create({actor:{type:user.role,id:user._id,name:user.name},action:'STAFF_PROFILE_UPDATED',details:{staffId:user._id}});
+    res.json({success:true,user:{id:user._id,name:user.name,phone:user.phone,email:user.email,role:user.role,preferredLanguage:user.preferredLanguage}});
+  } catch { res.status(500).json({message:'Unable to update profile.'}); }
 });
 
 router.patch('/preferences', verifyStaffToken, async (req,res)=>{
