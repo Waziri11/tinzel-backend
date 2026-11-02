@@ -234,7 +234,7 @@ app.use((req, res, next) => {
     if (res.statusCode >= 500 && shouldRedactServerErrors() && body && typeof body === 'object' && !Array.isArray(body)) {
       const original = body.message || body.error;
       if (original) {
-        console.error(JSON.stringify({ event: 'server_error', requestId: req.requestId, path: req.path, status: res.statusCode, message: String(original) }));
+        console.error(JSON.stringify({ event: 'server_error', requestId: req.requestId, path: req.path.replace(/(\/invitations\/)[^/]+/,'$1[redacted]'), status: res.statusCode, message: String(original) }));
       }
       const { message: _m, error: _e, details: _d, stack: _s, ...rest } = body;
       body = { ...rest, success: false, message: SAFE_SERVER_ERROR, requestId: req.requestId };

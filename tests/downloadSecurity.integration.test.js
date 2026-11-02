@@ -57,3 +57,21 @@ test('recent verification and account revocation are enforced on every original 
  await StaffUser.updateOne({role:'admin'},{$set:{isActive:false}});
  assert.equal((await get(`/api/security/orders/${order._id}/download/1`,'admin')).status,401);
 });
+
+test('printer authorization rejects replacement, recipient change, cancellation, invitation and session expiry',async()=>{
+ const {AccessSession}=await import('../src/models/AccessSession.model.js');
+ const {RateLimitBucket}=await import('../src/middlewares/rateLimiter.js');
+ const fresh=await Order.findById(order._id);const invitation=await createPrinterInvitation(fresh,'security-print',{reissue:true});
+ const path=`/api/printer/invitations/${invitation._id}`;
+ await RateLimitBucket.deleteOne({_id:`otp-send-minute:printer:${order._id}`});
+ const challenge=await (await post(path+'/otp',{phone:'0712999999'})).json();const message=otpSink.get(digest(challenge.challengeId));assert.equal(message.destination,'0712000001');
+ const verified=await post(path+'/verify',{challengeId:challenge.challengeId,code:message.code});const cookie=verified.headers.get('set-cookie').split(';')[0];
+ const download=()=>fetch(base+path+'/file',{headers:{Cookie:cookie}});
+ for(const [field,value,original] of [['printingDetails.printerPhone','0712999999',fresh.printingDetails.printerPhone],['status','cancelled',fresh.status],['printDocument.uploadedAt',new Date(0),fresh.printDocument.uploadedAt]]){
+ await Order.updateOne({_id:order._id},{$set:{[field]:value}});assert.equal((await download()).status,404);await Order.updateOne({_id:order._id},{$set:{[field]:original}});
+ }
+ await PrinterInvitation.updateOne({_id:invitation._id},{$set:{expiresAt:new Date(0)}});assert.equal((await download()).status,404);
+ await PrinterInvitation.updateOne({_id:invitation._id},{$set:{expiresAt:new Date(Date.now()+60000)}});
+ await AccessSession.updateMany({kind:'printer'},{$set:{expiresAt:new Date(0)}});assert.equal((await download()).status,401);
+ assert.equal((await get('/api/security/downloads','designer')).status,403);
+});
