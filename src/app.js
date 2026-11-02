@@ -73,7 +73,8 @@ app.use(
   })
 );
 
-app.use(morgan('dev', { skip: (req) => (req.originalUrl.startsWith('/api/media-download/') || req.originalUrl.startsWith('/api/print-jobs/')) }));
+morgan.token('safe-path',req=>req.path.replace(/(\/invitations\/)[^/]+/,'$1[redacted]').replace(/(\/media-download\/).+/,'$1[redacted]'));
+app.use(morgan(':method :safe-path :status :response-time ms', { skip: (req) => (req.originalUrl.startsWith('/api/media-download/') || req.originalUrl.startsWith('/api/print-jobs/')) }));
 app.use((req, res, next) => {
   req.requestId = randomUUID();
   res.setHeader('X-Request-Id', req.requestId);
@@ -122,10 +123,13 @@ app.use('/uploads', async (req, res, next) => {
     if (normalized === '/drafts' || normalized.startsWith('/drafts/') || normalized === '/print' || normalized.startsWith('/print/')) {
       return res.status(404).json({ message: 'Not found' });
     }
-    if (normalized.startsWith('/print') || normalized.startsWith('/photos')) {
+    if (normalized.startsWith('/photos/')) {
+      if (!await connectDB()) return res.status(503).json({message: 'Database temporarily unavailable'});
       await authorizePrivatePhoto(req,null,`/uploads${req.path}`);
       res.setHeader('Cache-Control', 'private, no-store');
       res.setHeader('X-Content-Type-Options', 'nosniff');
+    } else if (!normalized.startsWith('/covers/')) {
+      return res.status(404).json({message: 'Not found'});
     }
     next();
   } catch { res.status(404).json({ message: 'Not found' }); }
@@ -230,7 +234,7 @@ app.use((req, res, next) => {
     if (res.statusCode >= 500 && shouldRedactServerErrors() && body && typeof body === 'object' && !Array.isArray(body)) {
       const original = body.message || body.error;
       if (original) {
-        console.error(JSON.stringify({ event: 'server_error', requestId: req.requestId, path: req.originalUrl, status: res.statusCode, message: String(original) }));
+        console.error(JSON.stringify({ event: 'server_error', requestId: req.requestId, path: req.path, status: res.statusCode, message: String(original) }));
       }
       const { message: _m, error: _e, details: _d, stack: _s, ...rest } = body;
       body = { ...rest, success: false, message: SAFE_SERVER_ERROR, requestId: req.requestId };

@@ -1,3 +1,7 @@
+import {StaffUser} from '../models/StaffUser.model.js';
+import {readSession,contactFingerprint} from './accessSessionService.js';
+import {permits} from './authorizationService.js';
+import {Order} from '../models/Order.model.js';
 import {createHash,randomUUID} from 'node:crypto';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {createWriteStream,createReadStream} from 'node:fs';
@@ -23,11 +27,20 @@ export async function deliverMagazine(req,res,order,source,{version,expectedHash
  const details={orderId:String(order._id),version,fileHash:prepared.hash,transferId};
  try{
   if(expectedHash && prepared.hash!==expectedHash)throw Object.assign(new Error('Print file has changed'),{status:403});
+  if(req.user?.role==='printer'){
+    const {PrinterInvitation,invitationMatches}=await import('./printerAccessService.js');
+    const session=await readSession(req,'printer');const invitation=await PrinterInvitation.findById(session.scope.invitationId);
+    if(!invitationMatches(invitation,await Order.findById(order._id)) || invitation.fileHash!==prepared.hash)throw Object.assign(new Error('Printer permission revoked'),{status:403});
+  }else{
+    const session=await readSession(req,'staff');const user=await StaffUser.findById(session.subjectId);
+    if(!permits(user,'magazine.download_original',order)||session.role!==user.role||session.tokenVersion!==(user.tokenVersion||0)||session.contactFingerprint!==contactFingerprint(user)||!session.verifiedAt||Date.now()-session.verifiedAt>600000)throw Object.assign(new Error('Download permission revoked'),{status:403});
+  }
   await recordSecurityEvent(req,{...details,action:'DOWNLOAD_AUTHORIZED',outcome:'authorized'});
   res.set({'Content-Type':'application/pdf','Content-Length':String(prepared.size),'Cache-Control':'private, no-store','Content-Disposition':'attachment; filename="tinzel-magazine.pdf"'});
   try{
    await pipeline(createReadStream(prepared.filename),new Transform({transform(chunk,encoding,done){bytes+=chunk.length;done(null,chunk);}}),res);
-   await recordSecurityEvent(req,{...details,action:'DOWNLOAD_COMPLETED',outcome:'completed'});
-  }catch(e){await recordSecurityEvent(req,{...details,action:'DOWNLOAD_INTERRUPTED',outcome:res.destroyed?'interrupted':'failed'});if(!res.headersSent)throw e;}
+
+  }catch(e){await recordSecurityEvent(req,{...details,action:'DOWNLOAD_INTERRUPTED',outcome:res.destroyed?'interrupted':'failed'});if(!res.headersSent)throw e;return;}
+  await recordSecurityEvent(req,{...details,action:'DOWNLOAD_COMPLETED',outcome:'completed'});
  }finally{await prepared.cleanup();}
 }

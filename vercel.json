@@ -17,6 +17,10 @@
     {
       "path": "/api/internal/notification-jobs",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/internal/security-audit-export",
+      "schedule": "* * * * *"
     }
   ]
 }

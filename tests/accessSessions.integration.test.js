@@ -32,3 +32,18 @@ test('opaque sessions reject JWTs, expiry, contact changes and role changes',asy
  const token=await createSession('staff',user,{verifiedAt:new Date()});await StaffUser.updateOne({_id:user._id},{$set:{role:'designer'}});assert.equal((await call('/api/staff/me',null,{cookie:`tinzel_staff=${token}`})).status,401);
  assert.equal((await call('/api/staff/me',null,{cookie:'tinzel_staff=old.jwt.token'})).status,401);
 });
+test('OTP permits five attempts, rejects reuse, expires, and invalidates older codes on resend',async()=>{
+ const {issueChallenge,consumeChallenge}=await import('../src/services/accessSessionService.js');
+ const {RateLimitBucket}=await import('../src/middlewares/rateLimiter.js');
+ const args={subjectId:'attempt-fixture',purpose:'test',channel:'email',destination:'fixture@example.test',ip:'test-fixture-ip'};
+ const first=await issueChallenge(args),firstCode=otpSink.get(digest(first.challengeId)).code;
+ for(let i=0;i<5;i++)await assert.rejects(consumeChallenge(first.challengeId,'000000','test',args.ip));
+ await assert.rejects(consumeChallenge(first.challengeId,firstCode,'test',args.ip),/limit/);
+ await RateLimitBucket.deleteMany({_id:{$regex:'otp-send-minute:test:attempt-fixture'}});
+ const second=await issueChallenge(args);await AccessChallenge.updateOne({_id:digest(second.challengeId)},{$set:{expiresAt:new Date(0)}});
+ await assert.rejects(consumeChallenge(second.challengeId,'123456','test',args.ip),/expired/);
+ await RateLimitBucket.deleteMany({_id:{$regex:'otp-send-minute:test:attempt-fixture'}});
+ const third=await issueChallenge({...args,channel:'sms'});const thirdCode=otpSink.get(digest(third.challengeId)).code;
+ const race=await Promise.allSettled([consumeChallenge(third.challengeId,thirdCode,'test',args.ip),consumeChallenge(third.challengeId,thirdCode,'test',args.ip)]);
+ assert.equal(race.filter(r=>r.status==='fulfilled').length,1);
+});

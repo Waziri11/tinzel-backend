@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 const schema = new mongoose.Schema({
   eventId: {type:String,required:true,unique:true},
-  actorId: String, role: String, action: {type:String,required:true},
+  actorName:String, actorId: String, role: String, action: {type:String,required:true},
   orderId: String, version: Number, fileHash: String, requestId: String,
   ipAddress: String, outcome: String, transferId: String,
   page:Number, previewId:String,

@@ -28,7 +28,7 @@ test('only verified admin/manager get original bytes and durable transfer events
  assert.equal((await get(`/api/security/orders/${order._id}/download/1`,'designer')).status,403);
  assert.equal((await fetch(base+`/api/security/orders/${order._id}/download/1`)).status,401);
  const events=await SecurityEvent.find({action:'DOWNLOAD_AUTHORIZED'});assert.equal(events.length,2);assert.equal(events[0].fileHash,createHash('sha256').update(pdf).digest('hex'));
- assert.equal(await SecurityEvent.countDocuments({action:'DOWNLOAD_DENIED'}),1);
+ assert.equal(await SecurityEvent.countDocuments({action:'DOWNLOAD_DENIED'}),2);
 });
 test('audit failure prevents all original bytes',async()=>{const original=SecurityEvent.create;SecurityEvent.create=async()=>{throw new Error('audit unavailable');};try{const response=await get(`/api/security/orders/${order._id}/download/1`);assert.equal(response.status,500);assert.match(response.headers.get('content-type'),/json/);}finally{SecurityEvent.create=original;}});
 test('printer link alone fails; designated OTP permits exact file and revocation stops it',async()=>{
@@ -41,4 +41,19 @@ test('printer link alone fails; designated OTP permits exact file and revocation
  await PrinterInvitation.updateOne({_id:invitation._id},{$set:{revokedAt:new Date()}});
  assert.equal((await fetch(base+path+'/file',{headers:{Cookie:cookie}})).status,404);
  assert.equal((await fetch(base+`/api/print-jobs/${order._id}/security-print/file?sig=old&exp=9999999999`)).status,410);
+});
+test('interrupted transfer has an outcome and a retry succeeds',async()=>{
+ const large=Buffer.concat([pdf,Buffer.alloc(12*1024*1024,32)]);const assetId=await saveDraftPdf({originalname:'large.pdf',buffer:large},order._id,2);
+ await Order.updateOne({_id:order._id},{$push:{draftVersions:{versionNumber:2,assetId}}});
+ const response=await get(`/api/security/orders/${order._id}/download/2`);assert.equal(response.status,200);await response.body.cancel();
+ for(let n=0;n<40&&!await SecurityEvent.exists({action:'DOWNLOAD_INTERRUPTED',version:2});n++)await new Promise(r=>setTimeout(r,25));
+ assert.ok(await SecurityEvent.exists({action:'DOWNLOAD_INTERRUPTED',version:2}));
+ const retry=await get(`/api/security/orders/${order._id}/download/2`);assert.equal(retry.status,200);assert.equal((await retry.arrayBuffer()).byteLength,large.length);
+});
+test('recent verification and account revocation are enforced on every original request',async()=>{
+ const {AccessSession}=await import('../src/models/AccessSession.model.js');
+ await AccessSession.updateOne({_id:digest(tokens.manager)},{$set:{verifiedAt:new Date(Date.now()-600001)}});
+ const response=await get(`/api/security/orders/${order._id}/download/1`);assert.equal(response.status,403);assert.equal((await response.json()).errorCode,'OTP_REQUIRED');
+ await StaffUser.updateOne({role:'admin'},{$set:{isActive:false}});
+ assert.equal((await get(`/api/security/orders/${order._id}/download/1`,'admin')).status,401);
 });

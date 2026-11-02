@@ -1,13 +1,13 @@
 import {randomUUID} from 'node:crypto';
 import {SecurityEvent,SecurityEventDelivery} from '../models/SecurityEvent.model.js';
-const fields=['actorId','role','action','orderId','version','fileHash','requestId','ipAddress','outcome','transferId','page','previewId'];
+const fields=['actorName','actorId','role','action','orderId','version','fileHash','requestId','ipAddress','outcome','transferId','page','previewId'];
 export function securityEventData(input) {
   const result={eventId:randomUUID(),expiresAt:new Date(Date.now()+365*86400000)};
   for(const key of fields)if(input[key]!==undefined)result[key]=input[key];
   return result;
 }
 export async function recordSecurityEvent(req, details) {
-  const event=await SecurityEvent.create(securityEventData({actorId:String(req.user?._id || req.clientAuth?.orderId || ''),role:req.user?.role || (req.clientAuth?'client':'anonymous'),requestId:req.requestId,ipAddress:req.ip,...details}));
+  const event=await SecurityEvent.create(securityEventData({actorName:req.user?.name || (req.user?.role==='printer'?'Designated printer':undefined),actorId:String(req.user?._id || req.clientAuth?.orderId || ''),role:req.user?.role || (req.clientAuth?'client':'anonymous'),requestId:req.requestId,ipAddress:req.ip,...details}));
   // The immutable event itself is the durable outbox; missing delivery records are recreated by the worker.
   return event;
 }

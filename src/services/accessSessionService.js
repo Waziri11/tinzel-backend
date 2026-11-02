@@ -18,7 +18,7 @@ export async function createSession(kind,subject,{verifiedAt,scope,purpose}={}){
  const expiresAt=new Date(Math.min(now+(subject.mustChangePassword?900000:duration),subject.mustChangePassword?+new Date(subject.temporaryPasswordExpiresAt):Infinity));
  if(+expiresAt<=now)throw Object.assign(new Error('Initial password expired'),{status:401});
  await AccessSession.create({_id:digest(token),kind,subjectId:String(subject._id),role:subject.role,tokenVersion:subject.tokenVersion||0,
-  contactFingerprint:kind==='staff'?contactFingerprint(subject):undefined,verifiedAt,scope,purpose:purpose||(subject.mustChangePassword?'password_setup':kind),
+  contactFingerprint:kind==='staff'?contactFingerprint(subject):kind==='client'?digest(`${subject.trackingId}|${subject.clientWhatsApp}`):undefined,verifiedAt,scope,purpose:purpose||(subject.mustChangePassword?'password_setup':kind),
   expiresAt,idleUntil:new Date(Math.min(+expiresAt,now+1800000)),csrf:randomBytes(24).toString('hex'),previewId:randomBytes(16).toString('hex')});
  return token;
 }
@@ -41,6 +41,7 @@ export async function issueChallenge({subjectId,purpose,channel,destination,ip,s
  assertDeliveryConfiguration();if(!['email','sms'].includes(channel)||!destination)throw Object.assign(new Error('Choose a configured email or SMS destination'),{status:400});
  await limit('otp-send-minute',`${purpose}:${subjectId}`,1,60000);
  await limit('otp-send-account',subjectId,5,900000);await limit('otp-send-ip',ip,20,900000);
+ const previous=await AccessChallenge.find({subjectId,purpose,consumedAt:null}).select('_id').lean();for(const item of previous)otpSink.delete(item._id);
  await AccessChallenge.updateMany({subjectId,purpose,consumedAt:null},{$set:{consumedAt:new Date()}});
  const id=randomBytes(32).toString('hex'), code=String(randomInt(100000,1000000));
  const codeHash=createHmac('sha256',getJwtSecret()).update(`${id}:${code}`).digest('hex');

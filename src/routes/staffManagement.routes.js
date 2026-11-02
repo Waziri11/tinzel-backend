@@ -288,7 +288,7 @@ router.put('/staff/:id', async (req, res) => {
           .json({ success: false, message: 'Name is required' });
       user.name = name.trim();
     }
-    if(email!==undefined && email.trim().toLowerCase()!==user.email)return res.status(403).json({message:'The account holder must verify contact changes through Account security.'});
+    if(typeof email==='string' && email.trim().toLowerCase()!==user.email)return res.status(403).json({message:'The account holder must verify contact changes through Account security.'});
     if(phone!==undefined && phone!==user.phone)return res.status(403).json({message:'The account holder must verify contact changes through Account security.'});
     if (email !== undefined) {
       if (typeof email !== 'string' || !emailPattern.test(email.trim()))
