@@ -1,3 +1,4 @@
+import {SecurityEvent} from '../src/models/SecurityEvent.model.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -17,10 +18,10 @@ let mongo, server, base, order, tokens={};
 before(async()=>{
   mongo=await MongoMemoryServer.create();await mongoose.connect(mongo.getUri());await ProofPage.init();
   await updateNotificationSettings({ channels:{sms:false,email:false,in_system:false} });
-  for(const role of ['designer','manager','admin']) {const user=await StaffUser.create({name:`Test ${role}`,email:`${role}@example.test`,role,passwordHash:'unused',isActive:true});tokens[role]=generateToken(user);tokens[role+'Id']=user._id;}
+  for(const role of ['designer','manager','admin']) {const user=await StaffUser.create({name:`Test ${role}`,email:`${role}@example.test`,role,passwordHash:'unused',isActive:true});tokens[role]=await generateToken(user,{verifiedAt:new Date()});tokens[role+'Id']=user._id;}
   const form=await MagazineForm.create({title:'Proof test',slug:'proof-reader-test',price:100});
   order=await Order.create({submissionId:'SUB-PROOF',trackingId:'TNZ-PROOF',formId:form._id,clientName:'Test client',clientWhatsApp:'0712000000',assignedDesigner:tokens.designerId,status:'in_design'});
-  tokens.client=generateClientToken(order);
+  tokens.client=await generateClientToken(order);
   server=app.listen(0);await new Promise((r)=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;
 });
 after(async()=>{server?.closeAllConnections();await new Promise((r)=>server?.close(r));await mongoose.disconnect();await mongo?.stop();});
@@ -45,7 +46,7 @@ test('protected magazine review completes upload, render, manager and client cor
   const metadata=await request(path());assert.equal(metadata.data.pageCount,2,JSON.stringify(await MediaJob.find({kind:'proof'}).select('state error').lean()));assert.equal(metadata.data.pages.length,2);assert.equal(metadata.data.canComment,true);
   const positions=await request(path()+'/pages/1?text=1');assert.match(positions.data.text[0].str,/Magazine/);
   const rotated=await request(path()+'/pages/2?text=1');assert.ok(rotated.data.height>rotated.data.width);
-  const page=await fetch(base+path()+'/pages/1',{headers:{Authorization:`Bearer ${tokens.manager}`}});assert.equal(page.status,200);assert.match(page.headers.get('content-type'),/image\/webp/);assert.match(page.headers.get('cache-control'),/no-store/);const image=Buffer.from(await page.arrayBuffer());assert.ok(image.length>1000);assert.match(page.headers.get('server-timing'),/watermark;dur=\d+, audit;dur=\d+/);assert.ok(await AuditLog.exists({orderId:order._id,action:'PROOF_PAGE_VIEWED','details.page':1}));
+  const page=await fetch(base+path()+'/pages/1',{headers:{Authorization:`Bearer ${tokens.manager}`}});assert.equal(page.status,200);assert.match(page.headers.get('content-type'),/image\/webp/);assert.match(page.headers.get('cache-control'),/no-store/);const image=Buffer.from(await page.arrayBuffer());assert.ok(image.length>1000);assert.match(page.headers.get('server-timing'),/watermark;dur=\d+, audit;dur=\d+/);assert.ok(await SecurityEvent.exists({orderId:String(order._id),action:'PROOF_PAGE_DELIVERED',page:1}));
   const adminPage=await fetch(base+path()+'/pages/1',{headers:{Authorization:`Bearer ${tokens.admin}`}});assert.notDeepEqual(Buffer.from(await adminPage.arrayBuffer()),image);
   const bundleUrl=base+path()+'/pages/1?bundle=1&view=reader-session-test';
   const bundle=await fetch(bundleUrl,{headers:{Authorization:`Bearer ${tokens.manager}`}});assert.equal(bundle.status,200);assert.match(bundle.headers.get('content-type'),/application\/vnd.tinzel.proof-page/);assert.match(bundle.headers.get('cache-control'),/no-store/);
@@ -54,7 +55,9 @@ test('protected magazine review completes upload, render, manager and client cor
   const isolated=await fetch(bundleUrl,{headers:{Authorization:`Bearer ${tokens.admin}`}});assert.notDeepEqual(Buffer.from(await isolated.arrayBuffer()),packed);
   assert.equal((await request(path()+'/diagnostics','designer')).status,403);assert.equal((await request(path()+'/diagnostics','manager')).status,200);
 
-  for(const role of ['designer','manager','admin']) for(const suffix of ['view','download']) assert.equal((await request(`/api/designer/orders/${order._id}/drafts/1/${suffix}`,role)).status,403);
+  for(const role of ['designer','manager','admin']) assert.equal((await request(`/api/designer/orders/${order._id}/drafts/1/view`,role)).status,403);
+  assert.equal((await request(`/api/designer/orders/${order._id}/drafts/1/download`,'designer')).status,403);
+  for(const role of ['manager','admin']){const response=await fetch(base+`/api/designer/orders/${order._id}/drafts/1/download`,{headers:{Authorization:`Bearer ${tokens[role]}`}});assert.equal(response.status,200);assert.match(response.headers.get('content-type'),/pdf/);await response.arrayBuffer();}
   assert.equal((await request('/api/client/draft/view','client')).status,404);
   assert.equal((await fetch(base+'/uploads/drafts/legacy.pdf')).status,404);
   assert.equal((await request(path(),'designer',annotation)).status,404);
@@ -93,7 +96,7 @@ test('protected magazine review completes upload, render, manager and client cor
 
 test('reader checks authentication, assignment, immutable historical annotations, and preparation retry',async()=>{
   assert.equal((await fetch(base+path())).status,401);
-  const other=await StaffUser.create({name:'Other',email:'other@example.test',role:'designer',passwordHash:'unused'});tokens.other=generateToken(other);
+  const other=await StaffUser.create({name:'Other',email:'other@example.test',role:'designer',passwordHash:'unused'});tokens.other=await generateToken(other,{verifiedAt:new Date()});
   assert.equal((await request(path(),'other')).status,403);
   await MediaJob.updateOne({_id:`proof:${order._id}:1:0`},{$set:{state:'failed',attempts:3}});
   const reopened=(await request(path())).data;assert.equal(reopened.state,'ready');assert.equal(reopened.coverReady,true);assert.equal(reopened.diagnostics.length,1);
@@ -122,7 +125,7 @@ test('detected image anchors are authoritative, tracked, private and upgraded wi
  const body=new FormData();body.append('draftFile',new Blob([imageProofPdf()],{type:'application/pdf'}),'images.pdf');body.append('expectedVersion','0');
  assert.equal((await request(`/api/designer/orders/${record._id}/upload-draft`,'designer',body)).status,200);
  await runMediaJobs({maxJobs:4,proofFilter:{orderId:record._id,version:1}});
- tokens.imageClient=generateClientToken(record);
+ tokens.imageClient=await generateClientToken(record);
  const url=`/api/proofs/staff/${record._id}/1`,g=(await request(url+'/pages/1?text=1')).data;
  assert.equal(g.geometryVersion,2);assert.ok(g.imageRegions.length>=3,JSON.stringify(g));assert.equal(g.text[0].dir,'ltr');assert.ok(g.text[0].fontFamily);assert.ok(g.text.some(t=>t.hasEOL));
  const region=g.imageRegions.find(r=>r.rect.width<.2),payload={page:1,kind:'image',imageRegionId:region.id,rects:[{x:0,y:0,width:1,height:1}],text:'Replace the small photo',clientMutationId:randomUUID()};

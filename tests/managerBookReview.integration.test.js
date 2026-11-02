@@ -35,7 +35,7 @@ before(async () => {
       role,
       passwordHash: 'unused',
     });
-    tokens[role] = generateToken(user);
+    tokens[role] = await generateToken(user,{verifiedAt:new Date()});
     if (role === 'designer') designer = user;
   }
   form = await MagazineForm.create({
@@ -124,7 +124,7 @@ async function address(order, round) {
 
 test('manager notes-only return reaches designer, corrected draft returns to manager and approval releases it to client', async () => {
   const order = await createOrder();
-  tokens.client = generateClientToken(order);
+  tokens.client = await generateClientToken(order);
   const empty = await req(review(order), {
     action: 'return_to_designer',
     expectedVersion: 1,

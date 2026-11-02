@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {SecurityEvent,SecurityEventDelivery} from '../models/SecurityEvent.model.js';
-const fields=['actorId','role','action','orderId','version','fileHash','requestId','ipAddress','outcome','transferId'];
+const fields=['actorId','role','action','orderId','version','fileHash','requestId','ipAddress','outcome','transferId','page','previewId'];
 export function securityEventData(input) {
   const result={eventId:randomUUID(),expiresAt:new Date(Date.now()+365*86400000)};
   for(const key of fields)if(input[key]!==undefined)result[key]=input[key];

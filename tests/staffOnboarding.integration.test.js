@@ -1,3 +1,5 @@
+import {AccessSession} from '../src/models/AccessSession.model.js';
+import {digest,otpSink} from '../src/services/accessSessionService.js';
 import { test, before, after, beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
@@ -19,12 +21,13 @@ import { autoAssignOrder, manualAssignOrder } from '../src/services/assignmentSe
 let mongo,server,base,admin,adminToken,managerToken,form;
 const encryptionKey=randomBytes(32).toString('base64');
 before(async()=>{
+  process.env.NODE_ENV='test';process.env.SECURITY_OTP_SINK='true';
   for(const key of ['SMTP_USER','SMTP_PASS','TWILIO_ACCOUNT_SID','TWILIO_AUTH_TOKEN','TWILIO_PHONE_NUMBER','NEXTSMS_API_KEY','NEXTSMS_USERNAME','NEXTSMS_PASSWORD'])delete process.env[key];
   process.env.STAFF_CREDENTIAL_ENCRYPTION_KEY=encryptionKey;
   mongo=await MongoMemoryServer.create();await mongoose.connect(mongo.getUri());
   await Promise.all([StaffUser.init(),Notification.init(),Order.init()]);
-  admin=await StaffUser.create({name:'Existing admin',email:'existing-admin@example.test',passwordHash:await bcrypt.hash('Existing!123',10),role:'admin',phone:'0712000001',preferredLanguage:'en'});adminToken=generateToken(admin);
-  const manager=await StaffUser.create({name:'Manager',email:'existing-manager@example.test',passwordHash:'unused',role:'manager'});managerToken=generateToken(manager);
+  admin=await StaffUser.create({name:'Existing admin',email:'existing-admin@example.test',passwordHash:await bcrypt.hash('Existing!123',10),role:'admin',phone:'0712000001',preferredLanguage:'en'});adminToken=await generateToken(admin,{verifiedAt:new Date()});
+  const manager=await StaffUser.create({name:'Manager',email:'existing-manager@example.test',passwordHash:'unused',role:'manager'});managerToken=await generateToken(manager,{verifiedAt:new Date()});
   form=await MagazineForm.create({title:'Onboarding order',slug:'onboarding-test',price:1});
   server=app.listen(0);await new Promise(resolve=>server.once('listening',resolve));base=`http://127.0.0.1:${server.address().port}/api`;
 });
@@ -32,7 +35,8 @@ after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.c
 beforeEach(async()=>{process.env.STAFF_CREDENTIAL_ENCRYPTION_KEY=encryptionKey;await resetNotificationSettings();});
 async function request(path,body,token=adminToken,method=body===undefined?'GET':'POST') {
  const response=await fetch(base+path,{method,headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(body!==undefined?{'Content-Type':'application/json'}:{})},body:body===undefined?undefined:JSON.stringify(body)});
- const text=await response.text();let data;try{data=JSON.parse(text);}catch{data={text};}return {status:response.status,data};
+ const text=await response.text();let data;try{data=JSON.parse(text);}catch{data={text};}if(data.otpRequired){const code=otpSink.get(digest(data.challengeId)).code;return request('/staff/otp/verify',{challengeId:data.challengeId,code},null);}
+ const cookie=response.headers.get('set-cookie');if(cookie && data.token)data.token=cookie.split(';')[0].split('=')[1];return {status:response.status,data};
 }
 let serial=0;
 const details=(extra={})=>({name:'New Designer',email:`new-${serial++}@example.test`,role:'designer',phone:'0712000009',preferredLanguage:'en',...extra});
@@ -52,7 +56,7 @@ test('admin creation, notification, restricted first login and password change c
  assert.equal(response.data.user.onboardingStatus,'awaiting_first_sign_in');assert.equal(response.data.user.credentialDelivery.sms.status,'simulated');assert.equal(response.data.user.credentialDelivery.email.status,'simulated');
  const notifications=await Notification.find({'metadata.staffId':String(user._id)}).lean();assert.equal(notifications.length,2);assert.ok(notifications.every(row=>row.message==='Initial account credentials [REDACTED].'));assert.ok(!JSON.stringify(await AuditLog.find().lean()).includes(password));
  const login=await request('/staff/login',{email:user.email,password},null);assert.equal(login.status,200);assert.equal(login.data.user.mustChangePassword,true);
- const claims=jwt.decode(login.data.token);assert.equal(claims.purpose,'password_setup');assert.ok(claims.exp-claims.iat<=900);
+ const claims=await AccessSession.findById(digest(login.data.token));assert.equal(claims.purpose,'password_setup');assert.ok(claims.expiresAt-Date.now()<=900000);
  for(const path of ['/designer/orders','/manager/orders','/notifications/history','/admin/staff']){const blocked=await request(path,undefined,login.data.token);assert.equal(blocked.status,403);assert.equal(blocked.data.errorCode,'PASSWORD_CHANGE_REQUIRED');}
  assert.equal((await request('/staff/me',undefined,login.data.token)).status,200);
  assert.equal((await request('/staff/preferences',{preferredLanguage:'sw'},login.data.token,'PATCH')).status,200);
@@ -136,7 +140,7 @@ test('concurrent reissues and password changes cannot overwrite newer credential
 });
 
 test('existing accounts keep their passwords and full access without a forced setup',async()=>{
- const login=await request('/staff/login',{email:admin.email,password:'Existing!123'},null);assert.equal(login.status,200);assert.equal(login.data.user.mustChangePassword,false);assert.equal(jwt.decode(login.data.token).purpose,'staff');assert.equal((await request('/admin/staff',undefined,login.data.token)).status,200);
+ const login=await request('/staff/login',{email:admin.email,password:'Existing!123'},null);assert.equal(login.status,200);assert.equal(login.data.user.mustChangePassword,false);assert.equal((await AccessSession.findById(digest(login.data.token))).purpose,'staff');assert.equal((await request('/admin/staff',undefined,login.data.token)).status,200);
 });
 
 test('encryption failures are visible without exposing secrets and recover after configuration is restored',async()=>{
@@ -147,8 +151,8 @@ test('encryption failures are visible without exposing secrets and recover after
 
 test('setup tokens are bounded by initial expiry and reissue invalidates existing normal sessions',async()=>{
  const id=new mongoose.Types.ObjectId(),fields=await initialCredentialFields(id);fields.temporaryPasswordExpiresAt=new Date(Date.now()+120000);const user=await StaffUser.create({_id:id,...details(),...fields});
- const claims=jwt.decode(generateToken(user));assert.ok(claims.exp-claims.iat<=120);
- const normal=await StaffUser.create({...details(),passwordHash:await bcrypt.hash('NormalPass!7',10)}),oldToken=generateToken(normal);
+ const claims=await AccessSession.findById(digest(await generateToken(user)));assert.ok(claims.expiresAt-Date.now()<=120000);
+ const normal=await StaffUser.create({...details(),passwordHash:await bcrypt.hash('NormalPass!7',10)}),oldToken=await generateToken(normal,{verifiedAt:new Date()});
  assert.equal((await request('/designer/orders',undefined,oldToken)).status,200);
  assert.equal((await request(`/admin/staff/${normal._id}/initial-password`,{})).status,200);
  assert.equal((await request('/staff/me',undefined,oldToken)).status,401);

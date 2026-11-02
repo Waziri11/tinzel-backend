@@ -1,3 +1,4 @@
+import {recordSecurityEvent} from '../services/securityAuditService.js';
 import { clientCanReadVersion } from '../services/proofAccessService.js';
 import { permits } from '../services/authorizationService.js';
 import {pageGeometry,GEOMETRY_VERSION} from '../services/proofGeometry.js';
@@ -34,7 +35,9 @@ async function access(req, res, next) {
     const key = `${req.clientAuth ? 'client:' + orderId : 'staff:' + req.user._id}`;
     const rate = await consumeRateLimit({ scope: 'proof-reader', key, maxAttempts: 240, windowMs: 60000 });
     const ipRate = await consumeRateLimit({ scope: 'proof-reader-ip', key: req.ip || 'unknown', maxAttempts: 720, windowMs: 60000 });
-    if (!rate.allowed || !ipRate.allowed) { res.set('Retry-After', String(rate.retryAfterSeconds)); return res.status(429).json({ message: 'Please wait before loading more pages' }); }
+    const orderRate=await consumeRateLimit({scope:'proof-order-hour',key:`${key}:${orderId}`,maxAttempts:1200,windowMs:3600000,failClosed:true});
+    if (!rate.allowed || !ipRate.allowed || !orderRate.allowed) {
+      if(rate.count===241 || orderRate.count===1201)await recordSecurityEvent(req,{action:'PREVIEW_HARVEST_ALERT',orderId:String(orderId),version,outcome:'throttled',previewId:req.accessSession.previewId}); res.set('Retry-After', String(rate.retryAfterSeconds)); return res.status(429).json({ message: 'Please wait before loading more pages' }); }
     next();
   } catch (e) { next(e); }
 }
@@ -69,7 +72,7 @@ function routes() {
       canComment:req.proofCanComment,annotations:visibleAnnotations(req)};
   };
   r.get('/',async(req,res,next)=>{
-    try { const data=await describe(req);if(!data.pageCount)await requestProofBatch(req.proofOrder._id,req.proofVersion,[1]);if(!data.coverReady)scheduleProofPreparation(req.proofOrder._id,req.proofVersion,{startAfter:afterProofResponse(res)});res.json(data); } catch(e){next(e);}
+    try { await recordSecurityEvent(req,{action:'PROOF_SESSION_ACCESSED',orderId:String(req.proofOrder._id),version:req.proofVersion,previewId:req.accessSession.previewId});const data=await describe(req);if(!data.pageCount)await requestProofBatch(req.proofOrder._id,req.proofVersion,[1]);if(!data.coverReady)scheduleProofPreparation(req.proofOrder._id,req.proofVersion,{startAfter:afterProofResponse(res)});res.json(data); } catch(e){next(e);}
   });
   r.post('/prepare',async(req,res,next)=>{
     try {
@@ -102,40 +105,20 @@ function routes() {
         const job = await MediaJob.findById(proofJobId(req.proofOrder._id, req.proofVersion, number)).lean();
         return res.status(job?.state === 'failed' ? 422 : 202).json({ message: job?.state === 'failed' ? publicProofDiagnostic(job).message : 'Page is being prepared', ...(job?.state === 'failed' ? { diagnostic: publicProofDiagnostic(job) } : {}) });
       }
-      if (req.query.text === '1') { return res.json(pageGeometry(page)); }
+      if (req.query.text === '1') { if(!req.proofCanComment)return res.status(403).json({message:'Text selection is available during active review only'});await recordSecurityEvent(req,{action:'PROOF_TEXT_ACCESSED',orderId:String(req.proofOrder._id),version:req.proofVersion,page:number,previewId:req.accessSession.previewId});return res.json(pageGeometry(page)); }
       const identity = req.clientAuth ? `${req.proofOrder.clientName} (${req.proofOrder.trackingId})` : `${req.user.name} (${req.user.email})`;
       const started=performance.now();
-      const view = /^[a-zA-Z0-9-]{8,80}$/.test(req.query.view||'') ? req.query.view : '';
-      const recordView=()=>AuditLog.updateOne(
-        {
-          orderId: req.proofOrder._id,
-          action: 'PROOF_PAGE_VIEWED',
-          'actor.name': identity,
-          'details.version': req.proofVersion,
-          'details.page': number,
-          ...(view ? { 'details.view': view } : {}),
-        },
-        {
-          $setOnInsert: {
-            actor: { type: req.clientAuth ? 'client' : req.user.role, id: String(req.user?._id || req.proofOrder._id), name: identity },
-            ipAddress: req.ip || '',
-            action: 'PROOF_PAGE_VIEWED',
-            orderId: req.proofOrder._id,
-            details: { version: req.proofVersion, page: number, ...(view ? { view } : {}) },
-            createdAt: new Date(),
-          },
-        },
-        { upsert: true }
-      );
+      const view = req.accessSession.previewId;
+      const recordView=()=>recordSecurityEvent(req,{action:'PROOF_PAGE_DELIVERED',orderId:String(req.proofOrder._id),version:req.proofVersion,page:number,previewId:view,outcome:'authorized'});
       let watermarkMs=0,auditMs=0;
       // Keep audit durability before delivery, but overlap its database round trip with image work.
       const [image] = await Promise.all([
-        watermarkedPage(page, `${identity} · ${req.proofOrder.trackingId || req.proofOrder.submissionId} · v${req.proofVersion}`, view).then(image=>{watermarkMs=performance.now()-started;return image;}),
+        watermarkedPage(page, `${identity} · ${req.proofOrder.trackingId || req.proofOrder.submissionId} · v${req.proofVersion} · ${view}`, view).then(image=>{watermarkMs=performance.now()-started;return image;}),
         recordView().then(()=>{auditMs=performance.now()-started;}),
       ]);
       res.set('Server-Timing',`watermark;dur=${Math.round(watermarkMs)}, audit;dur=${Math.round(auditMs)}`);
       if(req.query.bundle==='1' && process.env.PROOF_PAGE_BUNDLE !== 'false'){
-        const metadata=Buffer.from(JSON.stringify(pageGeometry(page)));
+        const metadata=Buffer.from(JSON.stringify(req.proofCanComment?pageGeometry(page):{width:page.width,height:page.height,items:[],imageRegions:[]}));
         const length=Buffer.alloc(4);length.writeUInt32BE(metadata.length);
         return res.type('application/vnd.tinzel.proof-page').send(Buffer.concat([length,metadata,image]));
       }

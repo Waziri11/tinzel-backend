@@ -4,6 +4,7 @@ const schema = new mongoose.Schema({
   actorId: String, role: String, action: {type:String,required:true},
   orderId: String, version: Number, fileHash: String, requestId: String,
   ipAddress: String, outcome: String, transferId: String,
+  page:Number, previewId:String,
   createdAt: {type:Date,default:Date.now,immutable:true},
   expiresAt: {type:Date,required:true,index:{expireAfterSeconds:0}},
 }, {versionKey:false});

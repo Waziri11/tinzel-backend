@@ -32,7 +32,7 @@ before(async () => {
     role: 'admin',
     isActive: true,
   });
-  adminToken = generateToken(admin);
+  adminToken = await generateToken(admin,{verifiedAt:new Date()});
 
   server = app.listen(0);
   await new Promise((resolve) => server.once('listening', resolve));

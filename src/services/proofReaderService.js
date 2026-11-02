@@ -185,8 +185,10 @@ async function makeWatermarkedPage(page, identity) {
   const lines = String(identity).split(' · ').map((part) => part.slice(0, 160));
   const fontSize = Math.max(9, Math.min(18, (page.width - 40) / (Math.max(...lines.map((l) => l.length)) * .65)));
   const rows = [];
-  for (let y = 45; y < page.height; y += 240) {
-    lines.forEach((line, index) => rows.push(`<text x="20" y="${y + index * (fontSize + 4)}" fill="#333" fill-opacity="0.30" font-size="${fontSize}" font-family="sans-serif">${escapeXml(line)}</text>`));
+  for (let y = 45; y < page.height; y += 200) {
+   for(let x=20;x<page.width;x+=Math.max(300,page.width/2)){
+    lines.forEach((line, index) => rows.push(`<text x="${x}" y="${y + index * (fontSize + 4)}" fill="#333" fill-opacity="0.30" font-size="${fontSize}" font-family="sans-serif">${escapeXml(line)}</text>`));
+  }
   }
   const overlay = Buffer.from(`<svg width="${page.width}" height="${page.height}" xmlns="http://www.w3.org/2000/svg">${rows.join('')}</svg>`);
   return sharp(image).composite([{ input: overlay }]).webp({ quality: 85, effort: 2 }).toBuffer();

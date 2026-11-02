@@ -27,7 +27,7 @@ const digest=(b)=>createHash('sha256').update(b).digest('hex');
 before(async()=>{
   mongo=await MongoMemoryServer.create();await mongoose.connect(mongo.getUri());await ProofPage.init();
   await updateNotificationSettings({channels:{email:false,sms:false,in_system:false}});
-  designer=await StaffUser.create({name:'Draft tester',email:'draft@example.test',role:'designer',passwordHash:'unused'});token=generateToken(designer);
+  designer=await StaffUser.create({name:'Draft tester',email:'draft@example.test',role:'designer',passwordHash:'unused'});token=await generateToken(designer,{verifiedAt:new Date()});
   form=await MagazineForm.create({title:'Draft upload',slug:'draft-upload',price:1});
   const gateway=express();gateway.use((req,res,next)=>Number(req.headers['content-length'])>4.5*1024*1024?res.status(413).json({code:'FUNCTION_PAYLOAD_TOO_LARGE'}):next());gateway.use(app);
   server=gateway.listen(0);await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;
@@ -84,9 +84,9 @@ test('sessions enforce assignment, integrity, cancellation, expiry, incomplete p
   const order=await newOrder(),bytes=proofPdf();
   assert.equal((await request(order,'',input(MAX_DRAFT_BYTES+1))).status,413);
   const other=await StaffUser.create({name:'Other designer',email:'otherdraft@example.test',role:'designer',passwordHash:'unused'});
-  assert.equal((await request(order,'',input(bytes.length),'POST',generateToken(other))).status,403);
+  assert.equal((await request(order,'',input(bytes.length),'POST',await generateToken(other,{verifiedAt:new Date()}))).status,403);
   const manager=await StaffUser.create({name:'Manager',email:'draftmanager@example.test',role:'manager',passwordHash:'unused'});
-  assert.equal((await request(order,'',input(bytes.length),'POST',generateToken(manager))).status,403);
+  assert.equal((await request(order,'',input(bytes.length),'POST',await generateToken(manager,{verifiedAt:new Date()}))).status,403);
   const session=(await request(order,'',input(bytes.length))).data;
   assert.equal((await request(order,`/${session.id}/complete`,{})).status,409);
   assert.equal((await request(order,`/${session.id}/chunks/0`,bytes,'PUT',token,{'X-Chunk-SHA256':'0'.repeat(64)})).status,409);
@@ -164,7 +164,7 @@ test('private Blob sessions commit once without proxying PDF bytes and keep dura
   assert.equal((await part(order,session,0,proofPdf())).status,400);
   assert.equal((await request(order,`/${session.id}/complete`,{})).status,409);
   const other=await StaffUser.create({name:'Blob outsider',email:'bloboutsider@example.test',role:'designer',passwordHash:'unused'});
-  assert.equal((await request(order,`/${session.id}`,undefined,'GET',generateToken(other))).status,403);
+  assert.equal((await request(order,`/${session.id}`,undefined,'GET',await generateToken(other,{verifiedAt:new Date()}))).status,403);
   const count=Math.ceil(size/BLOB_PART_BYTES),parts=Array.from({length:count},(_,i)=>({partNumber:i+1,etag:`etag-${i+1}`,sha256:'a'.repeat(64)}));
   const checkpoint=parts=>request(order,`/${session.id}/checkpoint`,{multipartId:'multipart',multipartKey:'key',parts});
   for(let i=0;i<count;i+=4)assert.equal((await checkpoint(parts.slice(i,i+4))).status,200);

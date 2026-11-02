@@ -1,3 +1,4 @@
+import {roleAllowed} from '../services/authorizationService.js';
 import {createSession,readSession,contactFingerprint} from '../services/accessSessionService.js';
 import {Order} from '../models/Order.model.js';
 import jwt from 'jsonwebtoken';
@@ -72,7 +73,7 @@ export const verifyStaffToken = async (req, res, next) => {
 
 export const requireRoles = (...roles) => {
   return (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role)) {
+    if (!roleAllowed(req.user,roles)) {
       return res.status(403).json({
         success: false,
         message: `Forbidden: requires one of the following roles: ${roles.join(', ')}`,

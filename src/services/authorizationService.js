@@ -1,5 +1,6 @@
 // Every permission has an explicit role and resource policy. Unknown actions deny.
 const staff = actor => actor && actor.isActive !== false && !actor.deletedAt;
+export const roleAllowed=(actor,roles)=>Boolean(staff(actor)&&roles.includes(actor.role));
 const assigned = (actor, order) => order && String(order.assignedDesigner) === String(actor._id);
 export function permits(actor, action, order) {
   if (!staff(actor)) return false;

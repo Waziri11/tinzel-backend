@@ -1,4 +1,4 @@
-import { permits } from '../services/authorizationService.js';
+import { permits,requirePermission } from '../services/authorizationService.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import {scheduleProofPreparation,afterProofResponse} from '../services/proofPreparationService.js';
 import { enqueueProof } from '../services/proofReaderService.js';
@@ -276,7 +276,7 @@ router.get('/orders/:id/drafts/:version/download', requireRoles('manager', 'admi
   try { return res.redirect(307, `/api/security/orders/${req.params.id}/download/${req.params.version}`); } catch (error) { return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message }); }
 });
 
-router.patch('/orders/:id/returns/:requestId/items/:itemId', requireRoles('designer', 'admin'), async (req, res) => {
+router.patch('/orders/:id/returns/:requestId/items/:itemId', requirePermission('draft.upload'), async (req, res) => {
   try {
     const request = req.order.revisionRequests.id(req.params.requestId);
     const item = request?.items.id(req.params.itemId);
@@ -321,7 +321,7 @@ router.get('/orders/:id/photo-folder.zip', async (req, res) => {
 });
 
 // Start Design
-router.post('/orders/:id/start-design', requireRoles('designer', 'admin'), async (req, res) => {
+router.post('/orders/:id/start-design', requirePermission('draft.upload'), async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
     if (!order) {
@@ -350,27 +350,27 @@ const draftRoute = (handler) => async (req, res, next) => {
   res.set('Cache-Control', 'private, no-store');
   try { await handler(req, res); } catch (error) { next(error); }
 };
-router.post('/orders/:id/draft-uploads', requireRoles('designer','admin'), draftRoute(async (req,res) => {
+router.post('/orders/:id/draft-uploads', requirePermission('draft.upload'), draftRoute(async (req,res) => {
   const session = await createDraftUpload(req.order,req.user,req.body);
   res.status(201).json(await draftUploadStatus(session));
 }));
-router.get('/orders/:id/draft-uploads/:uploadId', requireRoles('designer','admin'), draftRoute(async (req,res) => {
+router.get('/orders/:id/draft-uploads/:uploadId', requirePermission('draft.upload'), draftRoute(async (req,res) => {
   res.json(await draftUploadStatus(await getDraftUpload(req.params.uploadId,req.order._id,req.user._id)));
 }));
-router.put('/orders/:id/draft-uploads/:uploadId/chunks/:n', requireRoles('designer','admin'), express.raw({type:'application/octet-stream',limit:DRAFT_CHUNK_BYTES}), draftRoute(async (req,res) => {
+router.put('/orders/:id/draft-uploads/:uploadId/chunks/:n', requirePermission('draft.upload'), express.raw({type:'application/octet-stream',limit:DRAFT_CHUNK_BYTES}), draftRoute(async (req,res) => {
   const session=await getDraftUpload(req.params.uploadId,req.order._id,req.user._id);
   await writeDraftChunk(session,Number(req.params.n),req.body,req.get('X-Chunk-SHA256'));
   res.json({success:true});
 }));
-router.post('/orders/:id/draft-uploads/:uploadId/checkpoint', requireRoles('designer','admin'), draftRoute(async (req,res)=>{
+router.post('/orders/:id/draft-uploads/:uploadId/checkpoint', requirePermission('draft.upload'), draftRoute(async (req,res)=>{
   const session=await getDraftUpload(req.params.uploadId,req.order._id,req.user._id);
   res.json(await checkpointDraftUpload(session,req.body));
 }));
-router.post('/orders/:id/draft-uploads/:uploadId/complete', requireRoles('designer','admin'), draftRoute(async (req,res) => {
+router.post('/orders/:id/draft-uploads/:uploadId/complete', requirePermission('draft.upload'), draftRoute(async (req,res) => {
   const result=await finishDraftUpload(await getDraftUpload(req.params.uploadId,req.order._id,req.user._id),req.user);
   scheduleProofPreparation(req.order._id,result.version,{startAfter:afterProofResponse(res)});res.json(result);
 }));
-router.delete('/orders/:id/draft-uploads/:uploadId', requireRoles('designer','admin'), draftRoute(async (req,res) => {
+router.delete('/orders/:id/draft-uploads/:uploadId', requirePermission('draft.upload'), draftRoute(async (req,res) => {
   const session=await getDraftUpload(req.params.uploadId,req.order._id,req.user._id);
   const result=await DraftUpload.updateOne({_id:session._id,state:'open'},{$set:{state:'cancelled',expiresAt:new Date(Date.now()+(session.provider==='blob'?3600000:0))}});
   if(!result.modifiedCount)return res.status(409).json({message:'This upload is being finalized or is already complete. Refresh the order.'});
@@ -380,7 +380,7 @@ router.delete('/orders/:id/draft-uploads/:uploadId', requireRoles('designer','ad
 // Upload Draft (PDF / Spreads)
 router.post(
   '/orders/:id/upload-draft',
-  requireRoles('designer', 'admin'),
+  requirePermission('draft.upload'),
   uploadDraft.single('draftFile'),
   async (req, res) => {
     let assetId;
@@ -459,7 +459,7 @@ router.post(
 );
 
 // Upload Final Print Document (supports durable GridFS storage, resumable uploadSessionId, or approved draft promotion)
-router.post('/orders/:id/upload-print-document', requireRoles('designer', 'admin'), uploadPrint.single('printFile'), async (req, res) => {
+router.post('/orders/:id/upload-print-document', requirePermission('draft.upload'), uploadPrint.single('printFile'), async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
     if (!order) {
@@ -530,7 +530,7 @@ router.post('/orders/:id/upload-print-document', requireRoles('designer', 'admin
 });
 
 // Flag Issue with order
-router.post('/orders/:id/flag-issue', requireRoles('designer', 'admin'), async (req, res) => {
+router.post('/orders/:id/flag-issue', requirePermission('draft.upload'), async (req, res) => {
   try {
     const { issue } = req.body;
     if (!issue) {

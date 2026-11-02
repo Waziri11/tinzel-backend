@@ -1,3 +1,4 @@
+import {permits} from '../services/authorizationService.js';
 import staffManagementRoutes from './staffManagement.routes.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import { pendingAnnotations, assertNoPendingAnnotations, submitAnnotations } from '../services/proofReaderService.js';
@@ -351,6 +352,7 @@ router.post('/orders/:id/hold', async (req, res) => {
 router.post('/orders/:id/review-draft', async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
+    if(order&&!permits(req.user,'draft.review',order))return res.sendStatus(403);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
@@ -452,6 +454,7 @@ router.post('/orders/:id/review-draft', async (req, res) => {
 router.post('/orders/:id/authorise-print', async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
+    if(order&&!permits(req.user,'print.authorize',order))return res.sendStatus(403);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
