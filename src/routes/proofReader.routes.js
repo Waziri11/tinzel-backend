@@ -1,3 +1,4 @@
+import { clientCanReadVersion } from '../services/proofAccessService.js';
 import { permits } from '../services/authorizationService.js';
 import {pageGeometry,GEOMETRY_VERSION} from '../services/proofGeometry.js';
 import {scheduleProofPreparation,afterProofResponse} from '../services/proofPreparationService.js';
@@ -26,13 +27,14 @@ async function access(req, res, next) {
     const draft = order?.draftVersions.find((d) => d.versionNumber === version);
     if (!order || !draft) return res.status(404).json({ message: 'Magazine version not found' });
     if (req.user && !permits(req.user, 'proof.view', order)) return res.status(403).json({ message: 'Order is not assigned to you' });
-    if (req.clientAuth && draft.managerReview?.status !== 'approved') return res.status(404).json({ message: 'Magazine version is not released' });
+    if (req.clientAuth && !clientCanReadVersion(order, version)) return res.status(404).json({ message: 'Magazine version is not released' });
     req.proofOrder = order; req.proofVersion = version;
     req.proofSource = req.clientAuth ? 'client' : 'manager';
     req.proofCanComment = version === order.currentDraftVersion && (req.clientAuth ? order.status === 'client_review' : ['manager', 'admin'].includes(req.user.role) && order.status === 'draft_manager_review');
-    const key = `${req.ip || 'ip'}:${req.clientAuth ? 'client:' + orderId : 'staff:' + req.user._id}`;
+    const key = `${req.clientAuth ? 'client:' + orderId : 'staff:' + req.user._id}`;
     const rate = await consumeRateLimit({ scope: 'proof-reader', key, maxAttempts: 240, windowMs: 60000 });
-    if (!rate.allowed) { res.set('Retry-After', String(rate.retryAfterSeconds)); return res.status(429).json({ message: 'Please wait before loading more pages' }); }
+    const ipRate = await consumeRateLimit({ scope: 'proof-reader-ip', key: req.ip || 'unknown', maxAttempts: 720, windowMs: 60000 });
+    if (!rate.allowed || !ipRate.allowed) { res.set('Retry-After', String(rate.retryAfterSeconds)); return res.status(429).json({ message: 'Please wait before loading more pages' }); }
     next();
   } catch (e) { next(e); }
 }
@@ -115,7 +117,8 @@ function routes() {
         },
         {
           $setOnInsert: {
-            actor: { type: req.clientAuth ? 'client' : req.user.role, name: identity },
+            actor: { type: req.clientAuth ? 'client' : req.user.role, id: String(req.user?._id || req.proofOrder._id), name: identity },
+            ipAddress: req.ip || '',
             action: 'PROOF_PAGE_VIEWED',
             orderId: req.proofOrder._id,
             details: { version: req.proofVersion, page: number, ...(view ? { view } : {}) },
