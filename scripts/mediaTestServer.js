@@ -11,6 +11,8 @@ for (const key of Object.keys(process.env)) {
   if (/^(SMTP_|TWILIO_|NEXTSMS_|BLOB_|VERCEL|MONGODB_|FRONTEND_URL|BACKEND_URL|CRON_SECRET)/.test(key)) delete process.env[key];
 }
 process.env.NODE_ENV = 'test';
+if(process.env.SECURITY_BROWSER_ORIGIN)process.env.FRONTEND_URL=process.env.SECURITY_BROWSER_ORIGIN;
+process.env.SECURITY_OTP_SINK='true';
 process.env.JWT_SECRET = 'isolated-browser-only-secret-never-production-2026';
 process.env.DOTENV_CONFIG_PATH = path.join(sandbox, 'absent.env');
 const { default: app } = await import('../src/app.js');
@@ -32,10 +34,30 @@ await MagazineForm.create({ title: 'Acceptance magazine', titleSw: 'Jarida la ma
 const passwordHash = await bcrypt.hash('Browser!2026', 10);
 for (const role of ['admin','manager','designer']) await StaffUser.create({name:`Fictional ${role}`,email:`${role}@example.test`,phone:'0712000001',role,preferredLanguage:'en',passwordHash,maxActiveWorkload:20});
 await StaffUser.create({name:'Fictional onboarding',email:'onboarding@example.test',role:'designer',preferredLanguage:'en',passwordHash,mustChangePassword:true,temporaryPasswordExpiresAt:new Date(Date.now()+86400000)});
+// Loopback-only test harness message sink; never mounted by the production app.
+const {otpSink}=await import('../src/services/accessSessionService.js');
+const {default:express}=await import('express');const testApp=express();
+testApp.get('/__test__/messages',(_req,res)=>res.type('html').send('<h1>Local test messages</h1>'+[...otpSink.values()].map(m=>`<p>${m.channel} ${m.destination}: <strong>${m.code}</strong></p>`).join('')));
+testApp.get('/__test__/otp/:id',async(req,res)=>{const {digest}=await import('../src/services/accessSessionService.js');const message=otpSink.get(digest(req.params.id));return message?res.json(message):res.sendStatus(404);});
+testApp.post('/__test__/reset-otp-limits',async(_req,res)=>{const {RateLimitBucket}=await import('../src/middlewares/rateLimiter.js');await RateLimitBucket.deleteMany({_id:{$regex:'^otp-'}});res.json({success:true});});
+const testServer=testApp.listen(Number(process.env.SECURITY_TEST_SINK_PORT||5078),'127.0.0.1');
+const {Order}=await import('../src/models/Order.model.js');
+const {saveDraftPdf}=await import('../src/services/draftFileService.js');
+const {proofPdf}=await import('../tests/fixtures/proofPdf.js');
+const {enqueueProof}=await import('../src/services/proofReaderService.js');
+const form=await MagazineForm.findOne({slug:'acceptance-magazine'});
+const designer=await StaffUser.findOne({role:'designer'});
+for(let n=1;n<=2;n++){
+ const id=new mongoose.Types.ObjectId();const assetId=await saveDraftPdf({buffer:proofPdf(),originalname:'synthetic.pdf'},id,1);
+ const order=await Order.create({_id:id,submissionId:`SUB-SECURITY-${n}`,trackingId:`TNZ-SECURITY-${n}`,clientName:`Synthetic Client ${n}`,clientWhatsApp:`071200001${n}`,formId:form._id,assignedDesigner:designer._id,status:'client_review',currentDraftVersion:1,draftVersions:[{versionNumber:1,assetId,managerReview:{status:'approved'}}]});await enqueueProof(order._id,1);
+}
+await StaffUser.create({name:'Unassigned designer',email:'unassigned@example.test',role:'designer',isEligibleForAssignment:false,passwordHash});
+const printOrder=await Order.findOne({trackingId:'TNZ-SECURITY-2'});
+printOrder.status='printing_sent';printOrder.printDocument={url:`/api/public/drafts/${printOrder.draftVersions[0].assetId}`,uploadedAt:new Date(),managerAuthorisedAt:new Date()};printOrder.printingDetails={printerPhone:'0712000099'};printOrder.workflowEvents=[{key:'synthetic-print',type:'print_dispatched'}];await printOrder.save();
 // Consume the real protected-proof queue against this disposable database as a dedicated worker.
 const {runProofJobs}=await import('../src/services/proofWorkerService.js');
 let proofRun=null;
 const worker=setInterval(()=>{if(!proofRun)proofRun=runProofJobs({maxJobs:6,budgetMs:10000}).catch(error=>console.error(error.code||error.name)).finally(()=>{proofRun=null;});},250);
-const server = app.listen(5077, '127.0.0.1');
-async function stop() { clearInterval(worker);if(proofRun)await proofRun;server.closeAllConnections(); await new Promise(r => server.close(r)); await mongoose.disconnect(); await mongo.stop(); fs.rmSync(sandbox,{recursive:true,force:true}); process.exit(0); }
+const server = app.listen(Number(process.env.SECURITY_TEST_API_PORT||5077), '127.0.0.1');
+async function stop() { testServer.close();clearInterval(worker);if(proofRun)await proofRun;server.closeAllConnections(); await new Promise(r => server.close(r)); await mongoose.disconnect(); await mongo.stop(); fs.rmSync(sandbox,{recursive:true,force:true}); process.exit(0); }
 process.on('SIGTERM', stop); process.on('SIGINT', stop);

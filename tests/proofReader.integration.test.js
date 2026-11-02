@@ -90,6 +90,8 @@ test('protected magazine review completes upload, render, manager and client cor
   const historical = await request('/api/client/order','client');
   assert.deepEqual(historical.data.order.draftVersions.map((v)=>v.versionNumber),[2]);
   assert.equal((await request(`/api/manager/orders/${order._id}/review-draft`,'manager',{action:'release_to_client',expectedVersion:3})).status,200);
+  assert.equal((await request(path('client',2),'client')).status,404);
+  assert.equal((await request(path('client',2)+'/pages/0','client')).status,404);
   assert.equal((await request('/api/client/approve-draft','client',{expectedVersion:3})).status,200);
   assert.equal((await request(path('staff',3))).data.annotations.length,0);
 });
@@ -155,3 +157,16 @@ test('detected image anchors are authoritative, tracked, private and upgraded wi
  const replacement=new FormData();replacement.append('draftFile',new Blob([imageProofPdf()],{type:'application/pdf'}),'replacement.pdf');replacement.append('expectedVersion','1');replacement.append('revisionRequestId',String(round._id));replacement.append('verifyAll','true');assert.equal((await request(`/api/designer/orders/${record._id}/upload-draft`,'designer',replacement)).status,200);
  assert.equal((await request(url+'/annotations','manager',payload)).status,403);assert.equal((await request(`/api/proofs/staff/${record._id}/2/annotations`,'manager',payload)).status,400);
 });
+
+ test('harvesting limits survive new view identifiers and forwarded IPs',async()=>{
+ const {RateLimitBucket}=await import('../src/middlewares/rateLimiter.js');
+ const {SecurityEvent}=await import('../src/models/SecurityEvent.model.js');
+ const id=`proof-reader:staff:${tokens.managerId}`;
+ await RateLimitBucket.updateOne({_id:id},{$set:{count:240,expiresAt:new Date(Date.now()+60000)}},{upsert:true});
+ for(const ip of ['192.0.2.1','192.0.2.2']){
+ const response=await fetch(base+path()+`?view=${randomUUID()}`,{headers:{Authorization:`Bearer ${tokens.manager}`,'X-Forwarded-For':ip}});
+ assert.equal(response.status,429);
+ }
+ assert.ok(await SecurityEvent.exists({action:'PREVIEW_HARVEST_ALERT',actorId:String(tokens.managerId)}));
+ await RateLimitBucket.deleteOne({_id:id});
+ });

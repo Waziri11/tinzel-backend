@@ -47,3 +47,48 @@ test('OTP permits five attempts, rejects reuse, expires, and invalidates older c
  const race=await Promise.allSettled([consumeChallenge(third.challengeId,thirdCode,'test',args.ip),consumeChallenge(third.challengeId,thirdCode,'test',args.ip)]);
  assert.equal(race.filter(r=>r.status==='fulfilled').length,1);
 });
+
+test('resend shares channel limits and replaces the previous challenge',async()=>{
+ const {issueChallenge,consumeChallenge}=await import('../src/services/accessSessionService.js');
+ const {RateLimitBucket}=await import('../src/middlewares/rateLimiter.js');
+ const args={subjectId:'resend-fixture',purpose:'test',channel:'email',destination:'fixture@example.test',ip:'resend-ip'};
+ const first=await issueChallenge(args),code=otpSink.get(digest(first.challengeId)).code;
+ await assert.rejects(issueChallenge({...args,channel:'sms'}),e=>e.status===429);
+ await RateLimitBucket.deleteOne({_id:'otp-send-minute:test:resend-fixture'});
+ const second=await issueChallenge({...args,channel:'sms'});
+ await assert.rejects(consumeChallenge(first.challengeId,code,'test',args.ip));
+ assert.equal(otpSink.has(digest(first.challengeId)),false);
+ assert.equal((await consumeChallenge(second.challengeId,otpSink.get(digest(second.challengeId)).code,'test',args.ip)).channel,'sms');
+});
+test('production rejects test delivery and delivery failures cannot issue usable challenges',async()=>{
+ const {issueChallenge,assertDeliveryConfiguration}=await import('../src/services/accessSessionService.js');
+ const originalEnv=process.env.NODE_ENV;process.env.NODE_ENV='production';
+ try{assert.throws(assertDeliveryConfiguration,/forbidden/);}finally{process.env.NODE_ENV=originalEnv;}
+ const {AccessChallenge}=await import('../src/models/AccessSession.model.js');
+ const original=AccessChallenge.updateOne;AccessChallenge.updateOne=async()=>{throw new Error('Delivery persistence failure');};
+ try{await assert.rejects(issueChallenge({subjectId:'failure-fixture',purpose:'test',channel:'email',destination:'fixture@example.test',ip:'failure-ip'}),e=>e.status===503);
+ assert.equal(await AccessChallenge.countDocuments({subjectId:'failure-fixture'}),0);
+ }finally{AccessChallenge.updateOne=original;}
+});
+test('contact replacement requires recent identity verification and new destination OTP; revokes sessions',async()=>{
+ await StaffUser.updateOne({_id:user._id},{$set:{role:'manager'}});user=await StaffUser.findById(user._id);
+ const token=await createSession('staff',user,{verifiedAt:new Date()});
+ const session=await AccessSession.findById(digest(token));const options={cookie:`tinzel_staff=${token}`,csrf:session.csrf};
+ const started=await call('/api/staff/contact',{channel:'email',destination:'verified-new@example.test'},options);assert.equal(started.status,200);
+ assert.equal((await StaffUser.findById(user._id)).email,user.email);
+ const code=otpSink.get(digest(started.data.challengeId)).code;
+ assert.equal((await call('/api/staff/contact/verify',{challengeId:started.data.challengeId,code},options)).status,200);
+ assert.equal((await StaffUser.findById(user._id)).email,'verified-new@example.test');
+ assert.equal((await call('/api/staff/me',null,options)).status,401);
+});
+
+test('SMTP provider failure fails closed without a live verification challenge',async()=>{
+ const {default:nodemailer}=await import('nodemailer');const {issueChallenge}=await import('../src/services/accessSessionService.js');
+ const keys=['SECURITY_OTP_SINK','SMTP_USER','SMTP_PASS','SMTP_HOST'];const previous=Object.fromEntries(keys.map(k=>[k,process.env[k]]));const create=nodemailer.createTransport;
+ try{
+ delete process.env.SECURITY_OTP_SINK;process.env.SMTP_USER='fixture@example.test';process.env.SMTP_PASS='synthetic';process.env.SMTP_HOST='smtp.example.test';
+ nodemailer.createTransport=()=>({sendMail:async()=>{throw new Error('Synthetic provider outage');},close(){}});
+ await assert.rejects(issueChallenge({subjectId:'provider-failure',purpose:'test',channel:'email',destination:'fixture@example.test',ip:'provider-failure-ip'}),e=>e.status===503);
+ assert.equal(await AccessChallenge.countDocuments({subjectId:'provider-failure'}),0);
+ }finally{nodemailer.createTransport=create;for(const key of keys){if(previous[key]===undefined)delete process.env[key];else process.env[key]=previous[key];}}
+});
