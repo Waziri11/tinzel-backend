@@ -12,7 +12,7 @@ if (!process.env.ADMIN_SEED_EMAIL || !process.env.ADMIN_SEED_PHONE) {
 await mongoose.connect(uri, { serverSelectionTimeoutMS: 10000 });
 try {
   const result = await provisionAdmin({ email: process.env.ADMIN_SEED_EMAIL, phone: process.env.ADMIN_SEED_PHONE,
-    name: process.env.ADMIN_SEED_NAME || 'System Admin', resetExisting: process.env.ADMIN_SEED_RESET_EXISTING === 'true' });
+    name: process.env.ADMIN_SEED_NAME || 'System Admin', resetExisting: process.env.ADMIN_SEED_RESET_EXISTING === 'true', promoteExisting: process.env.ADMIN_SEED_PROMOTE_EXISTING === 'true' });
   // This local operator output is the only plaintext delivery; never persist it in app logs or git.
   console.log(JSON.stringify({ database: mongoose.connection.name, ...result }));
 } finally {

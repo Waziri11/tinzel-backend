@@ -35,5 +35,11 @@ test('admin provisioning creates expiring setup credentials and explicitly reset
     try { await assert.rejects(provisionAdmin({ ...args, resetExisting: true }), /Audit unavailable/); }
     finally { AuditLog.create = original; }
     assert.ok(await (await StaffUser.findById(user._id)).comparePassword(second.temporaryPassword));
+    await StaffUser.updateOne({_id:user._id},{$set:{role:'manager'}});
+    await assert.rejects(provisionAdmin({...args,resetExisting:true}),/implicit privilege change/);
+    assert.equal((await StaffUser.findById(user._id)).role,'manager');
+    const promoted=await provisionAdmin({...args,resetExisting:true,promoteExisting:true});
+    assert.equal(promoted.role,'admin');assert.equal(await StaffUser.countDocuments(),1);
+    assert.ok(await AuditLog.exists({action:'ADMIN_ACCOUNT_PROMOTED','details.previousRole':'manager'}));
   } finally { await mongoose.disconnect();await db.stop(); }
 });
