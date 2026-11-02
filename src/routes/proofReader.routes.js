@@ -1,3 +1,4 @@
+import { permits } from '../services/authorizationService.js';
 import {pageGeometry,GEOMETRY_VERSION} from '../services/proofGeometry.js';
 import {scheduleProofPreparation,afterProofResponse} from '../services/proofPreparationService.js';
 import { publicProofDiagnostic } from '../services/proofDiagnostics.js';
@@ -24,7 +25,7 @@ async function access(req, res, next) {
     const version = Number(req.params.version);
     const draft = order?.draftVersions.find((d) => d.versionNumber === version);
     if (!order || !draft) return res.status(404).json({ message: 'Magazine version not found' });
-    if (req.user?.role === 'designer' && String(order.assignedDesigner) !== String(req.user._id)) return res.status(403).json({ message: 'Order is not assigned to you' });
+    if (req.user && !permits(req.user, 'proof.view', order)) return res.status(403).json({ message: 'Order is not assigned to you' });
     if (req.clientAuth && draft.managerReview?.status !== 'approved') return res.status(404).json({ message: 'Magazine version is not released' });
     req.proofOrder = order; req.proofVersion = version;
     req.proofSource = req.clientAuth ? 'client' : 'manager';

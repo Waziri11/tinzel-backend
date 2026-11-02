@@ -1,3 +1,4 @@
+import { permits } from '../services/authorizationService.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import {scheduleProofPreparation,afterProofResponse} from '../services/proofPreparationService.js';
 import { enqueueProof } from '../services/proofReaderService.js';
@@ -32,7 +33,7 @@ router.param('id', async (req, res, next, id) => {
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
-    if (req.user.role === 'designer' && String(order.assignedDesigner) !== String(req.user._id)) {
+    if (!permits(req.user, 'proof.view', order)) {
       return res.status(403).json({ success: false, message: 'This order is not assigned to you' });
     }
     req.order = order;
