@@ -25,33 +25,16 @@ export function getJwtSecret() {
     return configured;
   }
 
-  if (process.env.REQUIRE_JWT_SECRET === 'true') {
+  if (process.env.REQUIRE_JWT_SECRET === 'true' || process.env.NODE_ENV === 'production') {
     throw new Error(
       'CRITICAL: JWT_SECRET environment variable is required in production (minimum 32 characters).'
-    );
-  }
-
-  // In multi-instance or serverless environments (like Vercel) where JWT_SECRET has not yet
-  // been explicitly configured in project env vars, derive a consistent 256-bit secret
-  // from the private MONGODB_URI so all serverless cold starts share the exact same verification key.
-  const mongoUri = (process.env.MONGODB_URI || '').trim();
-  if (mongoUri) {
-    return createHmac('sha256', 'tinzel-jwt-stable-cluster-salt-2026')
-      .update(mongoUri)
-      .digest('hex');
-  }
-
-  if (process.env.NODE_ENV === 'production' && !warnedAboutMissingSecret) {
-    warnedAboutMissingSecret = true;
-    console.warn(
-      '[Security Warning] Neither JWT_SECRET nor MONGODB_URI is available. Using ephemeral secret.'
     );
   }
 
   return EPHEMERAL_SECRET;
 }
 
-if (process.env.REQUIRE_JWT_SECRET === 'true') {
+if (process.env.REQUIRE_JWT_SECRET === 'true' || process.env.NODE_ENV === 'production') {
   getJwtSecret();
 }
 

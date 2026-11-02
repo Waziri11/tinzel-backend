@@ -42,10 +42,6 @@ function isAllowedOrigin(origin) {
     return true;
   }
 
-  if (/^https:\/\/([a-z0-9-]+\.)*(stryxis\.com|vercel\.app)$/i.test(origin)) {
-    return true;
-  }
-
   return false;
 }
 

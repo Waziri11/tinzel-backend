@@ -1,12 +1,20 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { getJwtSecret } from '../middlewares/auth.middleware.js';
+import { randomBytes } from 'node:crypto';
+const developmentKey = randomBytes(32).toString('hex');
+export function getMediaSigningSecret() {
+ const key=(process.env.MEDIA_SIGNING_SECRET || '').trim();
+ if(key && (key.length<32 || key===process.env.JWT_SECRET))throw new Error('Media signing requires a separate strong secret');
+ if(!key && process.env.NODE_ENV==='production')throw new Error('MEDIA_SIGNING_SECRET is required in production');
+ return key || developmentKey;
+}
+if(process.env.NODE_ENV==='production')getMediaSigningSecret();
 
 function cleanBasePath(rawUrl) {
   return String(rawUrl || '').split('?')[0].trim();
 }
 
 export function computeMediaSignature(basePath, expiresUnix) {
-  return createHmac('sha256', getJwtSecret())
+  return createHmac('sha256', getMediaSigningSecret())
     .update(`${cleanBasePath(basePath)}:${Number(expiresUnix)}`)
     .digest('hex');
 }
