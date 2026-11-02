@@ -1,3 +1,5 @@
+import {createSession,readSession,contactFingerprint} from '../services/accessSessionService.js';
+import {Order} from '../models/Order.model.js';
 import jwt from 'jsonwebtoken';
 import { createHmac, randomBytes } from 'node:crypto';
 import { StaffUser } from '../models/StaffUser.model.js';
@@ -38,53 +40,19 @@ if (process.env.REQUIRE_JWT_SECRET === 'true' || process.env.NODE_ENV === 'produ
   getJwtSecret();
 }
 
-export const generateToken = (user) => {
-  const setup=Boolean(user.mustChangePassword);
-  const ttl=setup?Math.min(900,Math.floor((new Date(user.temporaryPasswordExpiresAt).getTime()-Date.now())/1000)):(process.env.STAFF_JWT_EXPIRES_IN || '12h');
-  if(setup && (!Number.isFinite(ttl)||ttl<1))throw Object.assign(new Error('Your initial password has expired. Ask an administrator to issue a new one.'),{status:401,code:'INITIAL_PASSWORD_EXPIRED'});
-  return jwt.sign(
-    {
-      id: user._id,
-      email: user.email,
-      role: user.role,
-      name: user.name,
-      tv: Number(user.tokenVersion || 0),
-      purpose: setup?'password_setup':'staff',
-    },
-    getJwtSecret(),
-    { expiresIn: ttl }
-  );
-};
-
-export const generateClientToken = (order) => {
-  return jwt.sign(
-    { orderId: order._id, trackingId: order.trackingId, clientWhatsApp: order.clientWhatsApp, role: 'client' },
-    getJwtSecret(),
-    { expiresIn: '24h' }
-  );
-};
+export const generateToken = (user,options) => createSession('staff',user,options);
+export const generateClientToken = order => createSession('client',order);
 
 export const verifyStaffToken = async (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, message: 'Authorization token required' });
-    }
-
-    const token = authHeader.split(' ')[1];
-    let decoded;
-    try {
-      decoded = jwt.verify(token, getJwtSecret());
-    } catch {
-      return res.status(401).json({ success: false, message: 'Invalid or expired token' });
-    }
-
+    const session = await readSession(req,'staff');
+    const decoded={id:session.subjectId,tv:session.tokenVersion,purpose:session.purpose};
     const user = await StaffUser.findById(decoded.id).select('-passwordHash');
     if (!user || !user.isActive || user.deletedAt) {
       return res.status(401).json({ success: false, message: 'Invalid or inactive user account' });
     }
 
-    if (Number(decoded.tv ?? 0) !== Number(user.tokenVersion ?? 0)) {
+    if (session.role!==user.role || session.contactFingerprint!==contactFingerprint(user) || Number(decoded.tv ?? 0) !== Number(user.tokenVersion ?? 0)) {
       return res.status(401).json({ success: false, message: 'Session has been revoked. Please sign in again.' });
     }
 
@@ -94,10 +62,11 @@ export const verifyStaffToken = async (req, res, next) => {
       const allowed=new Set(['/api/staff/me','/api/staff/preferences','/api/staff/change-password','/api/staff/logout']);
       if(!allowed.has(req.originalUrl.split('?')[0]))return res.status(403).json({errorCode:'PASSWORD_CHANGE_REQUIRED',message:'Change your initial password before continuing.'});
     }
+    if(['admin','manager'].includes(user.role) && !user.mustChangePassword && !session.verifiedAt && !req.originalUrl.startsWith('/api/staff/step-up') && !req.originalUrl.startsWith('/api/staff/me') && !req.originalUrl.startsWith('/api/staff/logout'))return res.status(403).json({errorCode:'OTP_REQUIRED',message:'Verify your identity before continuing'});
     req.user = user;
     next();
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message || 'Authentication error' });
+    return res.status(error.status || 500).json({ success: false, message: error.message || 'Authentication error' });
   }
 };
 
@@ -113,23 +82,8 @@ export const requireRoles = (...roles) => {
   };
 };
 
-export const verifyClientToken = (req, res, next) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, message: 'Client authorization token required' });
-    }
-
-    const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, getJwtSecret());
-
-    if (decoded.role !== 'client' || !decoded.orderId) {
-      return res.status(401).json({ success: false, message: 'Invalid client token' });
-    }
-
-    req.clientAuth = decoded;
-    next();
-  } catch (error) {
-    return res.status(401).json({ success: false, message: 'Invalid or expired client session' });
-  }
+export const verifyClientToken = async (req,res,next) => {
+ try{const session=await readSession(req,'client');const order=await Order.findById(session.subjectId).select('_id trackingId clientWhatsApp');
+ if(!order)throw new Error('Order unavailable');req.clientAuth={orderId:order._id,trackingId:order.trackingId,role:'client'};next();
+ }catch(error){res.status(error.status||401).json({message:error.message||'Client session expired'});}
 };

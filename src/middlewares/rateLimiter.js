@@ -14,7 +14,7 @@ export const RateLimitBucket =
 
 const memoryBuckets = new Map();
 
-export async function consumeRateLimit({ scope, key, maxAttempts, windowMs }) {
+export async function consumeRateLimit({ scope, key, maxAttempts, windowMs, failClosed = false }) {
   const now = Date.now();
   const bucketId = `${scope}:${key || 'anonymous'}`;
   const expiresAt = new Date(now + windowMs);
@@ -42,11 +42,13 @@ export async function consumeRateLimit({ scope, key, maxAttempts, windowMs }) {
         remaining: Math.max(0, maxAttempts - count),
         retryAfterSeconds,
       };
-    } catch {
+    } catch (error) {
+      if (failClosed) throw Object.assign(new Error('Verification temporarily unavailable'), {status:503});
       // Fall back to in-memory limiter if transient DB contention occurs
     }
   }
 
+  if(failClosed)throw Object.assign(new Error('Verification temporarily unavailable'),{status:503});
   for (const [id, entry] of memoryBuckets) {
     if (entry.until <= now) memoryBuckets.delete(id);
   }

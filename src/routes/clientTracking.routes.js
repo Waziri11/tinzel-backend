@@ -1,3 +1,5 @@
+import {setSessionCookie,digest} from '../services/accessSessionService.js';
+import {AccessSession} from '../models/AccessSession.model.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import { assertNoPendingAnnotations, submitAnnotations } from '../services/proofReaderService.js';
 import { Router } from 'express';
@@ -208,17 +210,20 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res) => {
     order.otp = undefined;
     await order.save();
 
-    const clientToken = generateClientToken(order);
+    const clientToken = await generateClientToken(order);
+    setSessionCookie(res,'client',clientToken,8*3600000);
 
     return res.status(200).json({
       success: true,
-      clientToken,
+      clientToken:'cookie',csrf:(await AccessSession.findById(digest(clientToken))).csrf,
       message: 'Access granted',
     });
   } catch (error) {
     return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message });
   }
 });
+
+router.post('/logout',verifyClientToken,async(req,res)=>{await AccessSession.deleteOne({_id:req.accessSession._id});setSessionCookie(res,'client','',0);res.json({success:true});});
 
 // Get sanitized order details for client portal
 router.get('/order', verifyClientToken, async (req, res) => {
@@ -232,7 +237,7 @@ router.get('/order', verifyClientToken, async (req, res) => {
     }
 
     const sanitized = sanitizeOrderForClient(order);
-    return res.status(200).json({ success: true, order: sanitized });
+    return res.status(200).json({ success: true, csrf:req.accessSession.csrf, order: sanitized });
   } catch (error) {
     return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });
   }
