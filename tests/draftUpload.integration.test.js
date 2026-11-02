@@ -144,14 +144,65 @@ test('gateway rejects a large single request and expired sessions reject further
   assert.equal((await part(order,session,0,proofPdf())).status,410);
   await cleanExpiredDraftUploads();assert.equal(await DraftUpload.findById(session.id),null);
 });
-test('correction completion is checked when creating and committing a session',async()=>{
+test('corrections never block transfer but every correction must be confirmed at submission',async()=>{
   const order=await newOrder();
-  order.status='revision_requested';order.revisionRequests.push({roundNumber:1,draftVersionNumber:0,source:'manager',requestedBy:{type:'manager',name:'Manager'},items:[{text:'Replace cover',status:'open'}]});await order.save();
-  const round=order.revisionRequests[0],metadata={...input(proofPdf().length),revisionRequestId:String(round._id),verifyAll:true};
-  assert.equal((await request(order,'',metadata)).status,409);
-  round.items[0].status='addressed';await order.save();const created=await request(order,'',metadata);assert.equal(created.status,201);
+  order.status='revision_requested';order.revisionRequests.push({roundNumber:1,draftVersionNumber:0,source:'manager',requestedBy:{type:'manager',name:'Manager'},items:[{text:'Replace cover',status:'open'},{text:'Correct date',status:'open'}]});await order.save();
+  const round=order.revisionRequests[0],metadata={...input(proofPdf().length),revisionRequestId:String(round._id)};
+  const created=await request(order,'',metadata);assert.equal(created.status,201);
+  assert.equal((await request(order,`/${created.data.id}/ready`,{})).status,409);
   assert.equal((await part(order,created.data,0,proofPdf())).status,200);
-  round.items[0].status='open';await order.save();const commit=await request(order,`/${created.data.id}/complete`,{});assert.equal(commit.status,409);assert.match(commit.data.message,/verify every/);
+  assert.equal((await request(order,`/${created.data.id}/ready`,{})).status,200);
+  assert.equal((await request(order,`/${created.data.id}`)).data.readyForReview,true);
+  let unchanged=await Order.findById(order._id);
+  assert.equal(unchanged.status,'revision_requested');assert.equal(unchanged.draftVersions.length,0);
+  assert.ok(unchanged.revisionRequests[0].items.every(item=>item.status==='open'));
+  const ids=round.items.map(item=>String(item._id));
+  for(const confirmedCorrectionIds of [undefined,[],[ids[0]],[ids[0],ids[0]],[ids[0],String(new mongoose.Types.ObjectId())]]) {
+    const commit=await request(order,`/${created.data.id}/complete`,{confirmedCorrectionIds});
+    assert.equal(commit.status,409);assert.match(commit.data.message,/confirm every correction/);
+  }
+  assert.equal((await Order.findById(order._id)).draftVersions.length,0);
+  const completed=await request(order,`/${created.data.id}/complete`,{confirmedCorrectionIds:ids});assert.equal(completed.status,200,JSON.stringify(completed.data));
+  const submitted=await Order.findById(order._id);
+  assert.equal(submitted.status,'draft_manager_review');assert.equal(submitted.draftVersions.length,1);
+  assert.equal(submitted.revisionRequests[0].status,'submitted_for_review');
+  assert.ok(submitted.revisionRequests[0].items.every(item=>item.status==='addressed' && String(item.addressedBy)===String(designer._id)));
+  assert.equal((await request(order,`/${created.data.id}/complete`,{confirmedCorrectionIds:ids})).status,200);
+  assert.equal((await Order.findById(order._id)).draftVersions.length,1);
+});
+
+test('private Blob correction upload is staged without submission until confirmations arrive',async()=>{
+  const oldProvider=process.env.DRAFT_UPLOAD_PROVIDER,oldToken=process.env.DRAFT_BLOB_READ_WRITE_TOKEN;
+  process.env.DRAFT_UPLOAD_PROVIDER='blob';process.env.DRAFT_BLOB_READ_WRITE_TOKEN='test-only';
+  const mocks=[mock.method(privateDraftStorage,'authorize',async()=>({token:'scoped-test',validUntil:Date.now()+3600000})),mock.method(privateDraftStorage,'inspect',async()=>({size:proofPdf().length,contentType:'application/pdf'})),mock.method(privateDraftStorage,'range',async()=>Readable.from(Buffer.from('%PDF-')))];
+  try {
+    const order=await newOrder();
+    order.status='revision_requested';order.revisionRequests.push({roundNumber:1,draftVersionNumber:0,source:'manager',requestedBy:{type:'manager',name:'Manager'},items:[{text:'Replace cover',status:'open'}]});await order.save();
+    const round=order.revisionRequests[0];
+    const created=await request(order,'',{...input(proofPdf().length),revisionRequestId:String(round._id)});assert.equal(created.status,201);
+    const session=created.data;
+    assert.equal((await request(order,`/${session.id}/checkpoint`,{multipartId:'multipart',multipartKey:'key',parts:[{partNumber:1,etag:'etag-1',sha256:'a'.repeat(64)}]})).status,200);
+    assert.equal((await request(order,`/${session.id}/ready`,{})).status,200);
+    assert.equal((await request(order,`/${session.id}`)).data.readyForReview,true);
+    assert.equal((await Order.findById(order._id)).status,'revision_requested');
+    assert.equal((await request(order,`/${session.id}/complete`,{})).status,409);
+    assert.equal((await request(order,`/${session.id}/complete`,{confirmedCorrectionIds:round.items.map(item=>String(item._id))})).status,200);
+    assert.equal((await Order.findById(order._id)).status,'draft_manager_review');
+  } finally {
+    mocks.forEach(m=>m.mock.restore());
+    if(oldProvider===undefined)delete process.env.DRAFT_UPLOAD_PROVIDER;else process.env.DRAFT_UPLOAD_PROVIDER=oldProvider;
+    if(oldToken===undefined)delete process.env.DRAFT_BLOB_READ_WRITE_TOKEN;else process.env.DRAFT_BLOB_READ_WRITE_TOKEN=oldToken;
+  }
+});
+
+test('a changed correction round invalidates a previously transferred PDF',async()=>{
+  const order=await newOrder();
+  order.status='revision_requested';order.revisionRequests.push({roundNumber:1,draftVersionNumber:0,source:'manager',requestedBy:{type:'manager',name:'Manager'},items:[{text:'Replace cover'}]});await order.save();
+  const oldRound=order.revisionRequests[0];
+  const session=(await request(order,'',{...input(proofPdf().length),revisionRequestId:String(oldRound._id)})).data;
+  await part(order,session,0,proofPdf());
+  oldRound.status='resolved';order.revisionRequests.push({roundNumber:2,draftVersionNumber:0,source:'manager',requestedBy:{type:'manager',name:'Manager'},items:[{text:'New request'}]});await order.save();
+  assert.equal((await request(order,`/${session.id}/complete`,{confirmedCorrectionIds:oldRound.items.map(item=>String(item._id))})).status,409);
   assert.equal((await Order.findById(order._id)).draftVersions.length,0);
 });
 

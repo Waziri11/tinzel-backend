@@ -33,7 +33,7 @@ export function validateDraftGate(order, input) {
   assertExpectedVersion(order, input.expectedVersion);
   const active = activeRevisionRequest(order);
   if (active?.status === 'submitted_for_review') throw draftError(409, 'This return is already awaiting manager review');
-  if (active && (String(input.revisionRequestId || '') !== String(active._id) || input.verifyAll !== true || active.items.some((item) => item.status !== 'addressed'))) throw draftError(409, 'Address and verify every requested fix before uploading');
+  if (active && String(input.revisionRequestId || '') !== String(active._id)) throw draftError(409, 'Refresh and use the current return checklist');
   return active;
 }
 export async function createDraftUpload(order, user, input) {
@@ -57,12 +57,12 @@ export async function getDraftUpload(id, orderId, staffId, allowClosed = false) 
 }
 export async function draftUploadStatus(session) {
   if (session.provider === 'blob') {
-    return { id: session._id, provider: 'blob', state: session.state, name: session.name, size: session.size, fingerprint: session.fingerprint,
+    return { id: session._id, provider: 'blob', state: session.state, name: session.name, size: session.size, fingerprint: session.fingerprint, readyForReview: session.readyForReview,
       expiresAt: session.expiresAt, chunkBytes: BLOB_PART_BYTES, concurrency: 4, receipts: session.receipts, multipartId: session.multipartId, multipartKey: session.multipartKey,
       pathname: session.blobPath, ...(session.state === 'open' ? { authorization: await privateDraftStorage.authorize(session) } : {}), version: session.version };
   }
   const chunks = await collection('chunks').find({ files_id: session.assetId }, { projection: { n:1, length:1, sha256:1, _id:0 } }).sort({ n:1 }).toArray();
-  return { id: session._id, state:session.state, name:session.name, size:session.size, fingerprint:session.fingerprint,
+  return { id: session._id, state:session.state, name:session.name, size:session.size, fingerprint:session.fingerprint, readyForReview:session.readyForReview,
     expiresAt:session.expiresAt, chunkBytes:DRAFT_CHUNK_BYTES, chunks, version:session.version };
 }
 export async function writeDraftChunk(session, n, bytes, suppliedHash) {
@@ -80,7 +80,48 @@ export async function writeDraftChunk(session, n, bytes, suppliedHash) {
   if(stored.sha256!==sha256)throw draftError(409,'This part differs from the original upload. Select the same file or start again.');
   await DraftUpload.updateOne({_id:session._id,state:'open'},{$set:{expiresAt:new Date(Date.now()+86400000)}});
 }
-export async function finishDraftUpload(session, user) {
+// Verifying transferred bytes does not submit the draft or change the correction round.
+async function verifyDraftFile(session) {
+    if (session.provider === 'blob') {
+      const count = Math.ceil(session.size / BLOB_PART_BYTES);
+      const parts = [...session.receipts].sort((a,b)=>a.partNumber-b.partNumber);
+      if (parts.length !== count || parts.some((p,i)=>p.partNumber!==i+1)) throw draftError(409,'Upload is incomplete. Resume the missing parts.');
+      const info = await privateDraftStorage.inspect(session.blobPath);
+      if (info.size !== session.size || info.contentType !== 'application/pdf') throw draftError(409,'Stored PDF metadata does not match the upload');
+      const stream = await privateDraftStorage.range(session.blobPath,0,5);
+      const chunks = []; for await (const chunk of stream) chunks.push(chunk);
+      if (Buffer.concat(chunks).toString() !== '%PDF-') throw draftError(400,'The uploaded file is not a PDF');
+    } else {
+      const parts=await collection('chunks').find({files_id:session.assetId},{projection:{n:1,length:1,_id:0}}).sort({n:1}).toArray();
+      if(parts.length!==Math.ceil(session.size/DRAFT_CHUNK_BYTES)||parts.some((p,n)=>p.n!==n||p.length!==Math.min(DRAFT_CHUNK_BYTES,session.size-n*DRAFT_CHUNK_BYTES)))throw draftError(409,'Upload is incomplete. Resume the missing parts.');
+      const first=await collection('chunks').findOne({files_id:session.assetId,n:0});
+      if(Buffer.from(first.data.buffer).subarray(0,5).toString()!=='%PDF-')throw draftError(400,'The uploaded file is not a PDF');
+      await collection('files').updateOne({_id:session.assetId},{$setOnInsert:{length:session.size,chunkSize:DRAFT_CHUNK_BYTES,uploadDate:new Date(),filename:session.name,contentType:'application/pdf',metadata:{orderId:String(session.orderId),versionNumber:session.expectedVersion+1}}},{upsert:true});
+    }
+}
+export async function prepareDraftUpload(session) {
+  const order = await Order.findById(session.orderId);
+  validateDraftGate(order, session);
+  if (session.state !== 'open') throw draftError(409, 'Upload is not ready for correction review');
+  await verifyDraftFile(session);
+  await DraftUpload.updateOne({ _id: session._id, state: 'open' }, { $set: { readyForReview: true } });
+  return { success: true, readyForReview: true };
+}
+export function confirmDraftCorrections(active, confirmedCorrectionIds, user) {
+  if (!active) return;
+  const ids = Array.isArray(confirmedCorrectionIds) ? confirmedCorrectionIds : [];
+  const expected = active.items.map(item => String(item._id));
+  if (ids.length !== expected.length || new Set(ids).size !== expected.length || expected.some(id => !ids.includes(id))) {
+    throw draftError(409, 'Preview and confirm every correction before submitting');
+  }
+  for (const item of active.items) {
+    item.status = 'addressed';
+    item.designerResponse ||= 'Confirmed in the correction preview before submission';
+    item.addressedBy = user._id;
+    item.addressedAt = new Date();
+  }
+}
+export async function finishDraftUpload(session, user, confirmation = {}) {
   const started=performance.now();
   // The order is the durable receipt if the final response/session update was interrupted.
   let order=await Order.findById(session.orderId);
@@ -90,23 +131,9 @@ export async function finishDraftUpload(session, user) {
   if(!claimed)throw draftError(409,'Upload is being finalized. Retry shortly to retrieve its result.');
   try {
     const active=validateDraftGate(order,claimed);
+    confirmDraftCorrections(active, confirmation.confirmedCorrectionIds, user);
     const version=(order.currentDraftVersion||0)+1;
-    if (claimed.provider === 'blob') {
-      const count = Math.ceil(claimed.size / BLOB_PART_BYTES);
-      const parts = [...claimed.receipts].sort((a,b)=>a.partNumber-b.partNumber);
-      if (parts.length !== count || parts.some((p,i)=>p.partNumber!==i+1)) throw draftError(409,'Upload is incomplete. Resume the missing parts.');
-      const info = await privateDraftStorage.inspect(claimed.blobPath);
-      if (info.size !== claimed.size || info.contentType !== 'application/pdf') throw draftError(409,'Stored PDF metadata does not match the upload');
-      const stream = await privateDraftStorage.range(claimed.blobPath,0,5);
-      const chunks = []; for await (const chunk of stream) chunks.push(chunk);
-      if (Buffer.concat(chunks).toString() !== '%PDF-') throw draftError(400,'The uploaded file is not a PDF');
-    } else {
-      const parts=await collection('chunks').find({files_id:claimed.assetId},{projection:{n:1,length:1,_id:0}}).sort({n:1}).toArray();
-      if(parts.length!==Math.ceil(claimed.size/DRAFT_CHUNK_BYTES)||parts.some((p,n)=>p.n!==n||p.length!==Math.min(DRAFT_CHUNK_BYTES,claimed.size-n*DRAFT_CHUNK_BYTES)))throw draftError(409,'Upload is incomplete. Resume the missing parts.');
-      const first=await collection('chunks').findOne({files_id:claimed.assetId,n:0});
-      if(Buffer.from(first.data.buffer).subarray(0,5).toString()!=='%PDF-')throw draftError(400,'The uploaded file is not a PDF');
-      await collection('files').updateOne({_id:claimed.assetId},{$setOnInsert:{length:claimed.size,chunkSize:DRAFT_CHUNK_BYTES,uploadDate:new Date(),filename:claimed.name,contentType:'application/pdf',metadata:{orderId:String(order._id),versionNumber:version}}},{upsert:true});
-    }
+    await verifyDraftFile(claimed);
     order.draftVersions.push({versionNumber:version,...(claimed.provider === 'blob' ? { storageProvider: 'blob', blobPath: claimed.blobPath } : { assetId: claimed.assetId }),uploadSessionId:claimed._id,originalName:claimed.name,mimeType:'application/pdf',size:claimed.size,revisionRequestId:active?._id,uploadedBy:user._id,uploadedAt:new Date(),designerNotes:claimed.designerNotes,managerReview:{status:'pending'}});
     if(active){active.status='submitted_for_review';active.submittedVersionNumber=version;active.submittedAt=new Date();}
     order.currentDraftVersion=version;order.status='draft_manager_review';

@@ -4,7 +4,7 @@ import {scheduleProofPreparation,afterProofResponse} from '../services/proofPrep
 import { enqueueProof } from '../services/proofReaderService.js';
 import express, { Router } from 'express';
 import { DraftUpload } from '../models/DraftUpload.model.js';
-import { DRAFT_CHUNK_BYTES, createDraftUpload, getDraftUpload, draftUploadStatus, writeDraftChunk, finishDraftUpload, checkpointDraftUpload } from '../services/draftUploadService.js';
+import { DRAFT_CHUNK_BYTES, createDraftUpload, getDraftUpload, draftUploadStatus, writeDraftChunk, finishDraftUpload, prepareDraftUpload, checkpointDraftUpload } from '../services/draftUploadService.js';
 import mongoose from 'mongoose';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
@@ -366,8 +366,11 @@ router.post('/orders/:id/draft-uploads/:uploadId/checkpoint', requirePermission(
   const session=await getDraftUpload(req.params.uploadId,req.order._id,req.user._id);
   res.json(await checkpointDraftUpload(session,req.body));
 }));
+router.post('/orders/:id/draft-uploads/:uploadId/ready', requirePermission('draft.upload'), draftRoute(async (req,res) => {
+  res.json(await prepareDraftUpload(await getDraftUpload(req.params.uploadId,req.order._id,req.user._id)));
+}));
 router.post('/orders/:id/draft-uploads/:uploadId/complete', requirePermission('draft.upload'), draftRoute(async (req,res) => {
-  const result=await finishDraftUpload(await getDraftUpload(req.params.uploadId,req.order._id,req.user._id),req.user);
+  const result=await finishDraftUpload(await getDraftUpload(req.params.uploadId,req.order._id,req.user._id),req.user,req.body);
   scheduleProofPreparation(req.order._id,result.version,{startAfter:afterProofResponse(res)});res.json(result);
 }));
 router.delete('/orders/:id/draft-uploads/:uploadId', requirePermission('draft.upload'), draftRoute(async (req,res) => {
