@@ -1,3 +1,4 @@
+import { exportSecurityEvents } from '../services/securityAuditService.js';
 import { runStaffCredentials } from '../services/staffCredentialService.js';
 import mongoose from 'mongoose';
 import { pipeline } from 'node:stream/promises';
@@ -8,6 +9,11 @@ import { Router } from 'express';
 import { timingSafeEqual } from 'node:crypto';
 import { runWorkflowNotifications } from '../services/workflowNotificationService.js';
 const router=Router();
+router.get('/internal/security-audit-export',async(req,res)=>{
+ const expected=Buffer.from(`Bearer ${process.env.CRON_SECRET || ''}`), actual=Buffer.from(String(req.headers.authorization || ''));
+ if(!process.env.CRON_SECRET || expected.length!==actual.length || !timingSafeEqual(expected,actual))return res.sendStatus(401);
+ try{res.json(await exportSecurityEvents());}catch{res.status(503).json({message:'Audit export unavailable'});}
+});
 router.get('/internal/notification-jobs',async(req,res)=>{
   const expected=Buffer.from(`Bearer ${process.env.CRON_SECRET || ''}`),actual=Buffer.from(String(req.headers.authorization || ''));
   if(!process.env.CRON_SECRET || expected.length!==actual.length || !timingSafeEqual(expected,actual)) return res.sendStatus(401);
