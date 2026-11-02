@@ -1,3 +1,4 @@
+import {authorizePrivatePhoto} from '../services/privateMediaAccessService.js';
 import express from 'express';
 import { pipeline } from 'node:stream/promises';
 import mongoose from 'mongoose';
@@ -86,8 +87,7 @@ router.post('/blob', route(async (req, res) => {
 }));
 
 async function serveAsset(req, res, thumbnail) {
-  const access = verifySignedMediaRequest(req);
-  if (!access.valid) throw mediaError(401, 'Scoped photo access required');
+  await authorizePrivatePhoto(req,req.params.assetId);
   const asset = await MediaAsset.findById(req.params.assetId).lean();
   if (!asset) throw mediaError(404, 'Photo not found');
   if (thumbnail && !asset.thumbnailId) {

@@ -1,3 +1,4 @@
+import {verifyStaffToken} from '../middlewares/auth.middleware.js';
 import { Router } from 'express';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import mongoose from 'mongoose';
@@ -35,13 +36,14 @@ router.get('/internal/media-jobs', async (req, res) => {
     res.json(result);
   } catch { res.status(503).json({ message: 'Media worker temporarily unavailable' }); }
 });
-router.get('/media-download/:token', async (req, res) => {
+router.get('/media-download/:token', verifyStaffToken, async (req, res) => {
   try {
     const ticket = await MediaDownloadTicket.findOneAndDelete({
       _id: digest(req.params.token),
       expiresAt: { $gt: new Date() },
     }).lean();
     if (!ticket) return res.sendStatus(404);
+    if(String(ticket.staffId)!==String(req.user._id))return res.sendStatus(403);
     const [user, order, job] = await Promise.all([StaffUser.findById(ticket.staffId).lean(), Order.findById(ticket.orderId).lean(), MediaJob.findById(ticket.jobId).lean()]);
     if (!user?.isActive || user.deletedAt || !order || !['admin', 'manager', 'designer'].includes(user.role) || (user.role === 'designer' && String(order.assignedDesigner) !== String(user._id))) return res.sendStatus(403);
     if (job?.state !== 'ready') return res.sendStatus(409);

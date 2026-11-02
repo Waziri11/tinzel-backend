@@ -1,3 +1,4 @@
+import {createPrinterInvitation} from './printerAccessService.js';
 import { notificationFrontendUrl, notificationBackendUrl } from './notificationUrls.js';
 import { randomUUID } from 'node:crypto';
 import mongoose from 'mongoose';
@@ -62,13 +63,14 @@ async function currentRecipient(order, task) {
   if (task.role === 'client') return {...task,language:language(order.clientPreferredLanguage),phone:order.clientWhatsApp,email:order.clientEmail};
   return task;
 }
-function actionUrl(order, event, role, channel) {
+async function actionUrl(order, event, role, channel) {
   const frontend = notificationFrontendUrl();
   if (role === 'client') return `${frontend}/track`;
   if (role === 'printer') {
     if (channel !== 'whatsapp') return '';
     const base = notificationBackendUrl(event.baseUrl);
-    return `${base.replace(/\/$/,'')}${signMediaPath(`/api/print-jobs/${order._id}/${event.key}/file`,7*24*3600)}`;
+    const invitation=await createPrinterInvitation(order,event.key);
+    return `${frontend}/printer/${invitation._id}`;
   }
   if (['order_submitted','assignment_queued','payment_verified'].includes(typeOf(event))) return `${frontend}/staff/pre-design?orderId=${order._id}`;
   if(['manager','admin'].includes(role)) {
@@ -88,7 +90,7 @@ async function deliver(order, event, task, { send, now }) {
   if (row && !(row.status === 'failed' && row.retryable && row.attempts < 5)) return null;
   if (row?.nextAttemptAt > now) return row.nextAttemptAt;
   const person = await currentRecipient(order,task), type = typeOf(event);
-  const url = actionUrl(order,event,task.role,task.channel);
+  const url = await actionUrl(order,event,task.role,task.channel);
   const content = workflowMessage(type,order,event,person || task,person?.language || task.language,url);
   const metadata = { workflow:true, language:person?.language || task.language, actionUrl:url, versionNumber:event.version, trackingId:order.trackingId, submissionId:order.submissionId, phase:event.status };
   if (!row) {
@@ -116,7 +118,7 @@ async function deliver(order, event, task, { send, now }) {
   let result;
   try {
     result = await send({to:recipient,recipientName:person.name,recipientRole:person.role,recipientUser:row.recipientUser,eventGroupId:row.eventGroupId,
-      channel:task.channel,template:type,...content,orderId:order._id,metadata,skipPersistence:true,fallbackToSms:false,mediaUrl:task.channel === 'whatsapp'?url:null});
+      channel:task.channel,template:type,...content,orderId:order._id,metadata,skipPersistence:true,fallbackToSms:false,mediaUrl:null});
   } catch { result = {status:'unconfirmed',error:'Provider acceptance is unconfirmed.'}; }
   const status = result.status === 'skipped' ? 'skipped' : result.status;
   const retryable = status === 'failed' && result.retryable === true && attempt < 5;

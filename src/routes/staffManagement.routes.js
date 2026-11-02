@@ -1,3 +1,4 @@
+import {requireRecentVerification} from '../services/accessSessionService.js';
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import {
@@ -20,6 +21,7 @@ import {
 
 const router = Router();
 router.use(verifyStaffToken, requireRoles('admin', 'manager'));
+router.use('/staff', (req,res,next)=>['GET','HEAD'].includes(req.method)?next():requireRecentVerification(req,res,next));
 router.use('/staff', (req, res, next) => {
   if (
     ['POST', 'PUT'].includes(req.method) &&
@@ -286,6 +288,8 @@ router.put('/staff/:id', async (req, res) => {
           .json({ success: false, message: 'Name is required' });
       user.name = name.trim();
     }
+    if(email!==undefined && email.trim().toLowerCase()!==user.email)return res.status(403).json({message:'The account holder must verify contact changes through Account security.'});
+    if(phone!==undefined && phone!==user.phone)return res.status(403).json({message:'The account holder must verify contact changes through Account security.'});
     if (email !== undefined) {
       if (typeof email !== 'string' || !emailPattern.test(email.trim()))
         return res

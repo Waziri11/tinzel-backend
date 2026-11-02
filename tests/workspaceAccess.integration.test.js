@@ -35,7 +35,7 @@ before(async () => {
       passwordHash: 'unused',
       phone: '0712000011',
     });
-    tokens[role] = generateToken(users[role]);
+    tokens[role] = await generateToken(users[role],{verifiedAt:new Date()});
   }
   server = app.listen(0);
   await new Promise((r) => server.once('listening', r));
@@ -133,7 +133,7 @@ test('manager creates designer through onboarding and can edit capacity', async 
 test('profile updates cannot alter email or role', async () => {
   const r = await req('/staff/profile', 'manager', 'PATCH', {
     name: 'Manager Updated',
-    phone: '0712000013',
+    phone: '0712000011',
   });
   assert.equal(r.status, 200);
   assert.equal(r.data.user.name, 'Manager Updated');
@@ -141,7 +141,7 @@ test('profile updates cannot alter email or role', async () => {
     (
       await req('/staff/profile', 'manager', 'PATCH', {
         name: 'x',
-        phone: '0712000013',
+        phone: '0712000011',
         role: 'admin',
       })
     ).status,
@@ -156,7 +156,7 @@ test('profile updates cannot alter email or role', async () => {
     ).status,
     400,
   );
-  assert.equal((await req('/staff/me')).data.user.phone, '0712000013');
+  assert.equal((await req('/staff/me')).data.user.phone, '0712000011');
 });
 test('system summaries are restricted, available independently and never invent quotas', async () => {
   for (const section of ['runtime', 'storage', 'messaging']) {

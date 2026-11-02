@@ -273,7 +273,7 @@ router.get('/orders/:id/drafts/:version/view', async (req, res) => {
 router.get('/orders/:id/drafts/:version/download', requireRoles('manager', 'admin'), async (req, res) => {
   const draft = req.order.draftVersions.find((item) => item.versionNumber === Number(req.params.version));
   if (!draft) return res.status(404).json({ success: false, message: 'Draft version not found' });
-  try { return streamDraftPdf(res, draft, { download: true }); } catch (error) { return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message }); }
+  try { return res.redirect(307, `/api/security/orders/${req.params.id}/download/${req.params.version}`); } catch (error) { return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message }); }
 });
 
 router.patch('/orders/:id/returns/:requestId/items/:itemId', requireRoles('designer', 'admin'), async (req, res) => {

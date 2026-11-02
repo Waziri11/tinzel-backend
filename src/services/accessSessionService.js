@@ -15,7 +15,7 @@ export function setSessionCookie(res,kind,value,maxAge){res.cookie(cookieName(ki
 export async function createSession(kind,subject,{verifiedAt,scope,purpose}={}){
  const token=randomBytes(32).toString('hex'), now=Date.now();
  const duration=kind==='printer'?600000:kind==='client'?8*3600000:12*3600000;
- const expiresAt=new Date(Math.min(now+duration,subject.mustChangePassword?+new Date(subject.temporaryPasswordExpiresAt):Infinity));
+ const expiresAt=new Date(Math.min(now+(subject.mustChangePassword?900000:duration),subject.mustChangePassword?+new Date(subject.temporaryPasswordExpiresAt):Infinity));
  if(+expiresAt<=now)throw Object.assign(new Error('Initial password expired'),{status:401});
  await AccessSession.create({_id:digest(token),kind,subjectId:String(subject._id),role:subject.role,tokenVersion:subject.tokenVersion||0,
   contactFingerprint:kind==='staff'?contactFingerprint(subject):undefined,verifiedAt,scope,purpose:purpose||(subject.mustChangePassword?'password_setup':kind),

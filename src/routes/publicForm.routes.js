@@ -1,3 +1,4 @@
+import {authorizePrivatePhoto} from '../services/privateMediaAccessService.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import { Router } from 'express';
 import { MagazineForm } from '../models/MagazineForm.model.js';
@@ -42,11 +43,11 @@ router.get('/covers/:id', async (req, res) => {
         .resize(requestedWidth, Math.round(requestedWidth * 1.35), { fit: 'inside', withoutEnlargement: true })
         .webp({ quality: 80 });
       stream.on('error', (error) => {
-        if (!res.headersSent) res.status(500).json({ success: false, message: error.message });
+        if (!res.headersSent) res.status(error.status || 500).json({ success: false, message: error.message });
         else res.destroy(error);
       });
       transformer.on('error', (error) => {
-        if (!res.headersSent) res.status(500).json({ success: false, message: error.message });
+        if (!res.headersSent) res.status(error.status || 500).json({ success: false, message: error.message });
         else res.destroy(error);
       });
       return stream.pipe(transformer).pipe(res);
@@ -55,21 +56,18 @@ router.get('/covers/:id', async (req, res) => {
     res.setHeader('Content-Type', file.contentType || file.metadata?.contentType || 'application/octet-stream');
     res.setHeader('Content-Length', file.length);
     stream.on('error', (error) => {
-      if (!res.headersSent) res.status(500).json({ success: false, message: error.message });
+      if (!res.headersSent) res.status(error.status || 500).json({ success: false, message: error.message });
       else res.destroy(error);
     });
     return stream.pipe(res);
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
 router.get('/photos/:id', async (req, res) => {
   try {
-    const access = verifySignedMediaRequest(req);
-    if (!access.valid) {
-      return res.status(401).json({ success: false, message: 'Scoped photo access required' });
-    }
+    await authorizePrivatePhoto(req,req.params.id);
     const file = await findOrderPhoto(req.params.id);
     if (!file) return res.status(404).json({ success: false, message: 'Photo not found' });
 
@@ -80,12 +78,12 @@ router.get('/photos/:id', async (req, res) => {
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
     const stream = openOrderPhotoStream(req.params.id);
     stream.on('error', (error) => {
-      if (!res.headersSent) res.status(500).json({ success: false, message: error.message });
+      if (!res.headersSent) res.status(error.status || 500).json({ success: false, message: error.message });
       else res.destroy(error);
     });
     return stream.pipe(res);
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
@@ -98,7 +96,7 @@ router.get('/forms', async (req, res) => {
 
     return res.status(200).json({ success: true, forms });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
@@ -117,7 +115,7 @@ router.get('/forms/:slug', async (req, res) => {
 
     return res.status(200).json({ success: true, form });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 
@@ -357,7 +355,7 @@ router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos
       lipaNambaInstructions: form.lipaNambaInstructions,
     });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 });
 

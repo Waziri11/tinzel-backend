@@ -39,7 +39,7 @@ async function drain(order,options={}) {return runWorkflowNotifications({orderId
 const notices=(order,type)=>Notification.find({orderId:order._id,template:type}).lean();
 
 test('complete HTTP workflow notifies each next recipient, including correction rounds, both languages and printer channels',async()=>{
- const auth=generateToken(admin),designAuth=generateToken(designer);
+ const auth=await generateToken(admin,{verifiedAt:new Date()}),designAuth=await generateToken(designer,{verifiedAt:new Date()});
  const submitted=await request('/public/forms/handoff-magazine/submit',{clientName:'Asha',clientWhatsApp:'0712000010',clientEmail:'asha@example.test',clientPreferredLanguage:'en',answers:{}});
  assert.equal(submitted.status,201,JSON.stringify(submitted.data));
  let order=await Order.findOne({submissionId:submitted.data.order.submissionId});const id=order._id;
@@ -50,7 +50,7 @@ test('complete HTTP workflow notifies each next recipient, including correction 
  order=await Order.findById(id);assert.equal(order.status,'assigned');
  assert.equal((await notices(order,'order_assigned')).filter(row=>row.channel==='sms').length,1);
  const count=await Notification.countDocuments({orderId:id});await request(`/manager/orders/${id}/verify-payment`,{lipaNambaReference:'PAY-123',amountPaid:50000},auth);assert.equal(await Notification.countDocuments({orderId:id}),count);
- const clientAuth=generateClientToken(order);
+ const clientAuth=await generateClientToken(order);
  const upload=async(version)=>{const body=new FormData();body.append('draftFile',new Blob([proofPdf(2)],{type:'application/pdf'}),'magazine.pdf');body.append('expectedVersion',String(version-1));
   const saved=await Order.findById(id),revision=saved.revisionRequests.at(-1);if(revision?.status==='open'){body.append('revisionRequestId',String(revision._id));body.append('verifyAll','true');}
   const res=await request(`/designer/orders/${id}/upload-draft`,body,designAuth);assert.equal(res.status,200,JSON.stringify(res.data));};
@@ -73,27 +73,26 @@ test('complete HTTP workflow notifies each next recipient, including correction 
  assert.ok(rows.find(row=>row.channel==='sms').message.includes('WhatsApp'));
  const assigned=(await notices(order,'order_assigned')).find(row=>row.channel==='sms');assert.ok(assigned.message.includes(designer.name));assert.match(assigned.message,/Role: Designer/);assert.ok(assigned.metadata.actionUrl.startsWith('https://tinzel.stryxis.com/staff/'));
  const paid=(await notices(order,'payment_verified')).find(row=>row.channel==='sms');assert.match(paid.message,/PAY-123/);assert.match(paid.message,/50,000/);
- assert.ok(signed.includes('/api/print-jobs/'));
- let file=await fetch(signed);assert.equal(file.status,200);assert.equal(file.headers.get('cache-control'),'private, no-store');assert.equal(Buffer.from(await file.arrayBuffer()).subarray(0,5).toString(),'%PDF-');
- file=await fetch(signed.split('?')[0]);assert.equal(file.status,403);
- file=await fetch(signed.replace('sig=','sig=0'));assert.equal(file.status,403);
+ assert.ok(signed.includes('/printer/'));
+ const invitationId=new URL(signed).pathname.split('/').pop();
+ const file=await fetch(base+`/api/printer/invitations/${invitationId}/file`);assert.equal(file.status,401);
  assert.equal((await notices(order,'draft_uploaded')).filter(row=>row.recipientRole==='admin'&&row.channel==='sms').length,3);
  assert.equal(await Notification.countDocuments({orderId:id,recipientUser:outsider._id}),0);
  assert.equal((await getNotificationHistory({user:outsider})).length,0);
  assert.equal((await request('/client/order',undefined,clientAuth)).data.order.workflowEvents,undefined);
  const inbox=await request('/client/notifications',undefined,clientAuth);assert.equal(inbox.status,200);assert.ok(inbox.data.notifications.length);assert.ok(inbox.data.notifications.every(row=>row.recipient===undefined));
  const row=inbox.data.notifications[0];assert.equal((await request(`/client/notifications/${row._id}/read`,{},clientAuth,'PATCH')).status,200);
- const other=await fresh();assert.equal((await request(`/client/notifications/${row._id}/read`,{},generateClientToken(other),'PATCH')).status,404);
+ const other=await fresh();assert.equal((await request(`/client/notifications/${row._id}/read`,{},await generateClientToken(other),'PATCH')).status,404);
  assert.equal((await request('/client/notifications',undefined,auth)).status,401);
 });
 
 test('queued assignment alerts managers; contact failures are visible and language preferences are authenticated',async()=>{
  const order=await fresh();order.status='queued_for_assignment';await order.save();await drain(order);
  const rows=await notices(order,'assignment_queued');assert.equal(rows.filter(row=>row.channel==='sms').length,2);
- const auth=generateToken(designer);assert.equal((await request('/staff/preferences',{preferredLanguage:'sw'},auth,'PATCH')).status,200);
+ const auth=await generateToken(designer,{verifiedAt:new Date()});assert.equal((await request('/staff/preferences',{preferredLanguage:'sw'},auth,'PATCH')).status,200);
  assert.equal((await StaffUser.findById(designer._id)).preferredLanguage,'sw');
  assert.equal((await request('/staff/preferences',{preferredLanguage:'fr'},auth,'PATCH')).status,400);
- const clientAuth=generateClientToken(order);assert.equal((await request('/client/preferences',{preferredLanguage:'sw'},clientAuth,'PATCH')).status,200);
+ const clientAuth=await generateClientToken(order);assert.equal((await request('/client/preferences',{preferredLanguage:'sw'},clientAuth,'PATCH')).status,200);
  assert.equal((await request('/client/order',undefined,clientAuth)).data.order.clientPreferredLanguage,'sw');
  await StaffUser.updateOne({_id:designer._id},{$set:{phone:''}});
  order.status='assigned';await order.save();await drain(order);
@@ -190,7 +189,7 @@ test('SMS timeouts remain unconfirmed while explicit rate-limit rejection is ret
 
 test('existing orders acknowledge printing once and assigning the same designer sends no handoff',async()=>{
  const legacy=await fresh('printing_sent');legacy.printingDetails={printerPhone:'+255712000099',sentAt:new Date()};await legacy.save();
- const response=await request(`/manager/orders/${legacy._id}/printer-update`,{stage:'in_progress',notes:'Printer confirmed receipt'},generateToken(admin));assert.equal(response.status,200);
+ const response=await request(`/manager/orders/${legacy._id}/printer-update`,{stage:'in_progress',notes:'Printer confirmed receipt'},await generateToken(admin,{verifiedAt:new Date()}));assert.equal(response.status,200);
  const rows=await notices(legacy,'printing_in_progress');assert.equal(rows.filter(row=>row.channel==='sms').length,3);assert.equal(rows.filter(row=>row.channel==='in_system').length,3);
  const unchanged=await fresh('assigned');
  const {manualAssignOrder}=await import('../src/services/assignmentService.js');await manualAssignOrder(unchanged,designer._id,'Same designer',admin);

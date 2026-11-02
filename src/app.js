@@ -1,3 +1,6 @@
+import {authorizePrivatePhoto} from './services/privateMediaAccessService.js';
+import printerRoutes from './routes/printer.routes.js';
+import securityRoutes from './routes/security.routes.js';
 import providerConfigRoutes from './routes/providerConfig.routes.js';
 import systemRoutes from './routes/system.routes.js';
 import workflowNotificationRoutes from './routes/workflowNotification.routes.js';
@@ -113,18 +116,15 @@ app.use('/api', async (req, res, next) => {
 
 // Drafts and customer/print uploads are private and require scoped/signed access.
 app.use('/uploads/drafts', (_req, res) => res.status(404).json({ success: false, message: 'Not found' }));
-app.use('/uploads', (req, res, next) => {
+app.use('/uploads', async (req, res, next) => {
   try {
     const normalized = path.posix.normalize(decodeURIComponent(req.path).replaceAll('\\', '/')).toLowerCase();
     if (normalized === '/drafts' || normalized.startsWith('/drafts/') || normalized === '/print' || normalized.startsWith('/print/')) {
       return res.status(404).json({ message: 'Not found' });
     }
     if (normalized.startsWith('/print') || normalized.startsWith('/photos')) {
-      const check = verifySignedMediaRequest(req);
-      if (!check.valid) {
-        return res.status(401).json({ success: false, message: 'Scoped access required' });
-      }
-      res.setHeader('Cache-Control', 'private, max-age=3600');
+      await authorizePrivatePhoto(req,null,`/uploads${req.path}`);
+      res.setHeader('Cache-Control', 'private, no-store');
       res.setHeader('X-Content-Type-Options', 'nosniff');
     }
     next();
@@ -198,7 +198,7 @@ function sanitizeResponseNode(node) {
   }
   if (raw.printDocument && typeof raw.printDocument === 'object' && raw.printDocument.url) {
     const pd = typeof raw.printDocument.toObject === 'function' ? raw.printDocument.toObject() : { ...raw.printDocument };
-    pd.url = signMediaPath(pd.url);
+    delete pd.url;
     ensureClone().printDocument = pd;
   }
   if (Array.isArray(raw.draftVersions)) {
@@ -239,6 +239,8 @@ app.use((req, res, next) => {
   };
   next();
 });
+app.use('/api/printer',printerRoutes);
+app.use('/api/security',securityRoutes);
 app.use('/api/proofs', proofReaderRoutes);
 // Route Mounts
 app.use('/api/health', healthRoutes);

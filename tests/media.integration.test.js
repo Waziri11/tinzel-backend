@@ -13,7 +13,7 @@ import { CHUNK_BYTES } from '../src/services/mediaSessionService.js';
 import sharp from 'sharp';
 import { MediaJob } from '../src/models/Media.model.js';
 import { StaffUser } from '../src/models/StaffUser.model.js';
-import { generateToken } from '../src/middlewares/auth.middleware.js';
+import { generateToken, generateClientToken } from '../src/middlewares/auth.middleware.js';
 import { runMediaJobs, enqueueArchive, cleanExpiredUploads, cleanDerivedMedia } from '../src/services/mediaJobService.js';
 
 let mongo, server, base, form;
@@ -62,7 +62,7 @@ test('large originals resume in parts, reject changed parts, retain exact bytes 
   assert.equal(completed.status, 200, JSON.stringify(completed.data));
   assert.deepEqual((await request(`${path}/complete`, s, {})).data.photo, completed.data.photo);
   const downloaded = await fetch(base + signMediaPath(`/api/public/media/assets/${entry._id}`).replace('/api/public/media', ''));
-  assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), bytes);
+  assert.equal(downloaded.status,404); // Unsubmitted originals have no authorized order owner.
   const body = { clientName: 'Test Client', clientWhatsApp: '0712345678', answers: {}, assetIds: [entry._id] };
   const results = await Promise.all([request(`/sessions/${s.id}/submit`, s, body), request(`/sessions/${s.id}/submit`, s, body)]);
   assert.equal(results[0].status, 201, JSON.stringify(results));
@@ -72,6 +72,7 @@ test('large originals resume in parts, reject changed parts, retain exact bytes 
   const order = await Order.findOne({ mediaSessionId: s.id });
   assert.equal(await AuditLog.countDocuments({ orderId: order._id, action: 'ORDER_SUBMITTED' }), 1);
   assert.equal(order.uploadedPhotos[0].folderName, 'Birthday photos');
+  const retrieved=await fetch(base+`/assets/${entry._id}`,{headers:{Cookie:`tinzel_client=${await generateClientToken(order)}`}});assert.equal(retrieved.status,200);assert.deepEqual(Buffer.from(await retrieved.arrayBuffer()),bytes);
 });
 
 test('cancelled selections cannot be resurrected by a late reservation', async () => {
@@ -105,7 +106,7 @@ test('durable worker generates a small preview and cached downloadable ZIP; clea
   const workers = await Promise.all([runMediaJobs({ maxJobs: 10 }), runMediaJobs({ maxJobs: 10 })]);
   assert.ok(workers.some((r) => r.processed === 0));
   assert.equal((await MediaJob.findById(job._id)).state, 'ready');
-  const preview = await fetch(base + signMediaPath(`/api/public/media/assets/${entry._id}/thumbnail`).replace('/api/public/media', ''));
+  const preview = await fetch(base + `/assets/${entry._id}/thumbnail`,{headers:{Cookie:`tinzel_client=${await generateClientToken(order)}`}});
   assert.equal(preview.status, 200);
   const previewBytes = Buffer.from(await preview.arrayBuffer());
   const meta = await sharp(previewBytes).metadata();
@@ -113,11 +114,11 @@ test('durable worker generates a small preview and cached downloadable ZIP; clea
   assert.equal((await MediaAsset.findById(entry._id)).sha256.length, 64);
   const staff = await StaffUser.create({ name: 'Media Test Manager', email: 'media-test@example.test', passwordHash: 'not-a-login', role: 'manager', isActive: true });
   const response = await fetch(base.replace('/public/media', '') + `/designer/orders/${order._id}/photo-folder-download`, {
-    method: 'POST', headers: { Authorization: `Bearer ${generateToken(staff)}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: 'Birthday photos' }),
+    method: 'POST', headers: { Authorization: `Bearer ${await generateToken(staff,{verifiedAt:new Date()})}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: 'Birthday photos' }),
   });
   assert.equal(response.status, 200);
   const { url } = await response.json();
-  const download = await fetch(base.split('/api/')[0] + url);
+  const download = await fetch(base.split('/api/')[0] + url,{headers:{Authorization:`Bearer ${await generateToken(staff,{verifiedAt:new Date()})}`}});
   assert.equal(download.status, 200);
   assert.match(download.headers.get('content-disposition'), /attachment/);
   const zip = Buffer.from(await download.arrayBuffer());

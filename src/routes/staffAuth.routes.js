@@ -129,9 +129,9 @@ router.get('/me', verifyStaffToken, async (req, res) => {
 
 router.patch('/profile', verifyStaffToken, async (req, res) => {
   const { name, phone } = req.body || {};
-  if(phone!==req.user.phone)return res.status(403).json({message:'Verify a new phone through the security contact workflow.'});
   if (Object.keys(req.body || {}).some(key => !['name', 'phone'].includes(key))) return res.status(400).json({message:'Only name and phone may be changed.'});
   if (typeof name !== 'string' || !name.trim() || name.trim().length > 120 || !validStaffPhone(phone)) return res.status(400).json({message:'Provide a name and valid phone number.'});
+  if(phone!==req.user.phone)return res.status(403).json({message:'Verify a new phone through the security contact workflow.'});
   try {
     const user = await StaffUser.findOneAndUpdate({_id:req.user._id,isActive:true,deletedAt:null}, {$set:{name:name.trim(),phone:phone.trim()}}, {new:true});
     if (!user) return res.status(401).json({message:'Account unavailable.'});
