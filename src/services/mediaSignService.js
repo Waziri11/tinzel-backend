@@ -1,4 +1,3 @@
-import jwt from 'jsonwebtoken';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { getJwtSecret } from '../middlewares/auth.middleware.js';
 
@@ -32,7 +31,7 @@ export function signMediaPath(rawUrl, ttlSeconds = 3600) {
 export function verifySignedMediaRequest(req) {
   const { exp, sig } = req.query || {};
   if (exp !== undefined || sig !== undefined) {
-    const expNum = Number.parseInt(String(exp || ''), 10);
+    const expNum = Number(String(exp || ''));
     const sigStr = String(sig || '').trim();
     if (!Number.isInteger(expNum) || expNum < Math.floor(Date.now() / 1000) || !/^[a-f0-9]{64}$/i.test(sigStr)) {
       return { valid: false, explicit: true };
@@ -45,21 +44,6 @@ export function verifySignedMediaRequest(req) {
     return { valid: ok, explicit: true };
   }
 
-  const authHeader = String(req.headers?.authorization || '');
-  if (authHeader.startsWith('Bearer ')) {
-    try {
-      jwt.verify(authHeader.slice(7).trim(), getJwtSecret());
-      return { valid: true, explicit: true };
-    } catch {
-      return { valid: false, explicit: true };
-    }
-  }
-
-  if (req.headers?.['x-upload-token']) {
-    return { valid: true, explicit: true };
-  }
-
-  const enforceStrict =
-    process.env.NODE_ENV === 'production' || process.env.REQUIRE_SCOPED_MEDIA_ACCESS === 'true';
-  return { valid: !enforceStrict, explicit: false };
+  // Authentication and upload credentials are not path-scoped read capabilities.
+  return { valid: false, explicit: Boolean(req.headers?.authorization || req.headers?.['x-upload-token']) };
 }

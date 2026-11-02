@@ -1,3 +1,4 @@
+import {signMediaPath} from '../src/services/mediaSignService.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -60,7 +61,7 @@ test('large originals resume in parts, reject changed parts, retain exact bytes 
   const completed = await request(`${path}/complete`, s, {});
   assert.equal(completed.status, 200, JSON.stringify(completed.data));
   assert.deepEqual((await request(`${path}/complete`, s, {})).data.photo, completed.data.photo);
-  const downloaded = await fetch(base + `/assets/${entry._id}`);
+  const downloaded = await fetch(base + signMediaPath(`/api/public/media/assets/${entry._id}`).replace('/api/public/media', ''));
   assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), bytes);
   const body = { clientName: 'Test Client', clientWhatsApp: '0712345678', answers: {}, assetIds: [entry._id] };
   const results = await Promise.all([request(`/sessions/${s.id}/submit`, s, body), request(`/sessions/${s.id}/submit`, s, body)]);
@@ -104,7 +105,7 @@ test('durable worker generates a small preview and cached downloadable ZIP; clea
   const workers = await Promise.all([runMediaJobs({ maxJobs: 10 }), runMediaJobs({ maxJobs: 10 })]);
   assert.ok(workers.some((r) => r.processed === 0));
   assert.equal((await MediaJob.findById(job._id)).state, 'ready');
-  const preview = await fetch(base + `/assets/${entry._id}/thumbnail`);
+  const preview = await fetch(base + signMediaPath(`/api/public/media/assets/${entry._id}/thumbnail`).replace('/api/public/media', ''));
   assert.equal(preview.status, 200);
   const previewBytes = Buffer.from(await preview.arrayBuffer());
   const meta = await sharp(previewBytes).metadata();

@@ -120,7 +120,7 @@ app.use('/uploads/drafts', (_req, res) => res.status(404).json({ success: false,
 app.use('/uploads', (req, res, next) => {
   try {
     const normalized = path.posix.normalize(decodeURIComponent(req.path).replaceAll('\\', '/')).toLowerCase();
-    if (normalized === '/drafts' || normalized.startsWith('/drafts/')) {
+    if (normalized === '/drafts' || normalized.startsWith('/drafts/') || normalized === '/print' || normalized.startsWith('/print/')) {
       return res.status(404).json({ message: 'Not found' });
     }
     if (normalized.startsWith('/print') || normalized.startsWith('/photos')) {
