@@ -46,30 +46,34 @@ export const generateToken = (user,options) => createSession('staff',user,option
 export const generateClientToken = order => createSession('client',order);
 
 export const verifyStaffToken = async (req, res, next) => {
+  const deny=async(status,body)=>{
+    if(/\/download\//.test(req.path))await recordSecurityEvent(req,{action:'DOWNLOAD_DENIED',outcome:'denied'});
+    return res.status(status).json(body);
+  };
   try {
     const session = await readSession(req,'staff');
     const decoded={id:session.subjectId,tv:session.tokenVersion,purpose:session.purpose};
     const user = await StaffUser.findById(decoded.id).select('-passwordHash');
+    req.auditActor=user;
     if (!user || !user.isActive || user.deletedAt) {
-      return res.status(401).json({ success: false, message: 'Invalid or inactive user account' });
+      return await deny(401,{ success: false, message: 'Invalid or inactive user account' });
     }
 
     if (session.role!==user.role || session.contactFingerprint!==contactFingerprint(user) || Number(decoded.tv ?? 0) !== Number(user.tokenVersion ?? 0)) {
-      return res.status(401).json({ success: false, message: 'Session has been revoked. Please sign in again.' });
+      return await deny(401,{ success: false, message: 'Session has been revoked. Please sign in again.' });
     }
 
-    if(decoded.purpose==='password_setup' && !user.mustChangePassword)return res.status(401).json({message:'Your setup session has ended. Please sign in again.'});
+    if(decoded.purpose==='password_setup' && !user.mustChangePassword)return await deny(401,{message:'Your setup session has ended. Please sign in again.'});
     if(user.mustChangePassword) {
-      if(!user.temporaryPasswordExpiresAt || new Date(user.temporaryPasswordExpiresAt)<=new Date())return res.status(401).json({errorCode:'INITIAL_PASSWORD_EXPIRED',message:'Your initial password has expired. Ask an administrator to issue a new one.'});
+      if(!user.temporaryPasswordExpiresAt || new Date(user.temporaryPasswordExpiresAt)<=new Date())return await deny(401,{errorCode:'INITIAL_PASSWORD_EXPIRED',message:'Your initial password has expired. Ask an administrator to issue a new one.'});
       const allowed=new Set(['/api/staff/me','/api/staff/preferences','/api/staff/change-password','/api/staff/logout']);
-      if(!allowed.has(req.originalUrl.split('?')[0]))return res.status(403).json({errorCode:'PASSWORD_CHANGE_REQUIRED',message:'Change your initial password before continuing.'});
+      if(!allowed.has(req.originalUrl.split('?')[0]))return await deny(403,{errorCode:'PASSWORD_CHANGE_REQUIRED',message:'Change your initial password before continuing.'});
     }
-    if(['admin','manager'].includes(user.role) && !user.mustChangePassword && !session.verifiedAt && !req.originalUrl.startsWith('/api/staff/step-up') && !req.originalUrl.startsWith('/api/staff/me') && !req.originalUrl.startsWith('/api/staff/logout'))return res.status(403).json({errorCode:'OTP_REQUIRED',message:'Verify your identity before continuing'});
+    if(['admin','manager'].includes(user.role) && !user.mustChangePassword && !session.verifiedAt && !req.originalUrl.startsWith('/api/staff/step-up') && !req.originalUrl.startsWith('/api/staff/me') && !req.originalUrl.startsWith('/api/staff/logout'))return await deny(403,{errorCode:'OTP_REQUIRED',message:'Verify your identity before continuing'});
     req.user = user;
     next();
   } catch (error) {
-    if(/\/download\//.test(req.path))await recordSecurityEvent(req,{action:'DOWNLOAD_DENIED',outcome:'unauthenticated'});
-    return res.status(error.status || 500).json({ success: false, message: error.message || 'Authentication error' });
+    return await deny(error.status || 500,{ success: false, message: error.message || 'Authentication error' });
   }
 };
 

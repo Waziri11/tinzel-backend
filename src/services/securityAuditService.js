@@ -7,7 +7,8 @@ export function securityEventData(input) {
   return result;
 }
 export async function recordSecurityEvent(req, details) {
-  const event=await SecurityEvent.create(securityEventData({actorName:req.user?.name || (req.user?.role==='printer'?'Designated printer':undefined),actorId:String(req.user?._id || req.clientAuth?.orderId || ''),role:req.user?.role || (req.clientAuth?'client':'anonymous'),requestId:req.requestId,ipAddress:req.ip,...details}));
+  const actor=req.user || req.auditActor;
+  const event=await SecurityEvent.create(securityEventData({actorName:actor?.name || (actor?.role==='printer'?'Designated printer':undefined),actorId:String(actor?._id || req.clientAuth?.orderId || ''),role:actor?.role || (req.clientAuth?'client':'anonymous'),requestId:req.requestId,ipAddress:req.ip,...details}));
   // The immutable event itself is the durable outbox; missing delivery records are recreated by the worker.
   return event;
 }

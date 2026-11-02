@@ -56,6 +56,7 @@ test('recent verification and account revocation are enforced on every original 
  const response=await get(`/api/security/orders/${order._id}/download/1`);assert.equal(response.status,403);assert.equal((await response.json()).errorCode,'OTP_REQUIRED');
  await StaffUser.updateOne({role:'admin'},{$set:{isActive:false}});
  assert.equal((await get(`/api/security/orders/${order._id}/download/1`,'admin')).status,401);
+ assert.ok(await SecurityEvent.exists({action:'DOWNLOAD_DENIED',actorId:String((await StaffUser.findOne({role:'admin'}))._id)}));
 });
 
 test('printer authorization rejects replacement, recipient change, cancellation, invitation and session expiry',async()=>{
