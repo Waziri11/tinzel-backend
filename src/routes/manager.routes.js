@@ -363,7 +363,7 @@ router.post('/orders/:id/review-draft', async (req, res) => {
         message: `Order must be in 'draft_manager_review' status. Current: ${order.status}`,
       });
     }
-    if (!Number.isInteger(Number(req.body.expectedVersion)) || Number(req.body.expectedVersion) < 1) return res.status(400).json({message:'Choose the draft version being reviewed.'});
+    if (!['number','string'].includes(typeof req.body.expectedVersion) || !Number.isInteger(Number(req.body.expectedVersion)) || Number(req.body.expectedVersion) < 1) return res.status(400).json({message:'Choose the draft version being reviewed.'});
     assertExpectedVersion(order, req.body.expectedVersion);
 
     const currentDraft = order.draftVersions.find((v) => v.versionNumber === order.currentDraftVersion);
