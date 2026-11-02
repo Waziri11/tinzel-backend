@@ -43,8 +43,8 @@ router.post('/login', loginRateLimiter, async (req, res) => {
 
     if(user.mustChangePassword && (!user.temporaryPasswordExpiresAt || user.temporaryPasswordExpiresAt<=new Date()))return res.status(401).json({errorCode:'INITIAL_PASSWORD_EXPIRED',message:'Your initial password has expired. Ask an administrator to issue a new one.'});
     if(['admin','manager'].includes(user.role) && !user.mustChangePassword){
-      const channel=req.body.channel==='sms'?'sms':'email';
-      return res.json({...await issueChallenge({subjectId:String(user._id),purpose:'login',channel,destination:channel==='sms'?user.phone:user.email,ip:req.ip,scope:{tokenVersion:user.tokenVersion||0,contactFingerprint:contactFingerprint(user)}}),otpRequired:true});
+      const channel='sms';
+      return res.json({...await issueChallenge({subjectId:String(user._id),purpose:'login',channel,destination:user.phone,ip:req.ip,scope:{tokenVersion:user.tokenVersion||0,contactFingerprint:contactFingerprint(user)}}),otpRequired:true});
     }
     const token = await generateToken(user);
     setSessionCookie(res,'staff',token,12*3600000);
@@ -76,33 +76,33 @@ router.post('/login', loginRateLimiter, async (req, res) => {
 router.post('/otp/verify',async(req,res,next)=>{try{
  const challenge=await consumeChallenge(req.body.challengeId,req.body.code,'login',req.ip);
  const user=await StaffUser.findById(challenge.subjectId);
- if(!user?.isActive || user.deletedAt || user.mustChangePassword || (user.tokenVersion||0)!==challenge.scope.tokenVersion || contactFingerprint(user)!==challenge.scope.contactFingerprint)return res.sendStatus(401);
+ if(challenge.channel!=='sms' || !user?.isActive || user.deletedAt || user.mustChangePassword || (user.tokenVersion||0)!==challenge.scope.tokenVersion || contactFingerprint(user)!==challenge.scope.contactFingerprint)return res.sendStatus(401);
  const token=await createSession('staff',user,{verifiedAt:new Date()});setSessionCookie(res,'staff',token,12*3600000);
  res.json({success:true,token:'cookie',csrf:(await AccessSession.findById(digest(token))).csrf,user:{...user.toObject(),id:user._id}});
 }catch(e){next(e);}});
 router.post('/otp/resend',async(req,res,next)=>{try{
  const old=await AccessChallenge.findOne({_id:digest(req.body.challengeId),purpose:'login',expiresAt:{$gt:new Date()},consumedAt:null});
  if(!old)return res.sendStatus(401);const user=await StaffUser.findById(old.subjectId);if(!user?.isActive || user.deletedAt)return res.sendStatus(401);
- const channel=req.body.channel==='sms'?'sms':'email';
- res.json(await issueChallenge({subjectId:old.subjectId,purpose:'login',channel,destination:channel==='sms'?user.phone:user.email,ip:req.ip,scope:old.scope}));
+ const channel='sms';
+ res.json(await issueChallenge({subjectId:old.subjectId,purpose:'login',channel,destination:user.phone,ip:req.ip,scope:old.scope}));
 }catch(e){next(e);}});
 router.post('/step-up',verifyStaffToken,async(req,res,next)=>{try{
- const channel=req.body.channel==='sms'?'sms':'email';res.json(await issueChallenge({subjectId:String(req.user._id),purpose:'step-up',channel,destination:channel==='sms'?req.user.phone:req.user.email,ip:req.ip,scope:{sessionId:req.accessSession._id}}));
+ const channel='sms';res.json(await issueChallenge({subjectId:String(req.user._id),purpose:'step-up',channel,destination:req.user.phone,ip:req.ip,scope:{sessionId:req.accessSession._id}}));
 }catch(e){next(e);}});
 router.post('/step-up/verify',verifyStaffToken,async(req,res,next)=>{try{
  const challenge=await consumeChallenge(req.body.challengeId,req.body.code,'step-up',req.ip);
- if(challenge.scope.sessionId!==req.accessSession._id)return res.sendStatus(403);
+ if(challenge.channel!=='sms' || challenge.scope.sessionId!==req.accessSession._id)return res.sendStatus(403);
  await AccessSession.updateOne({_id:req.accessSession._id},{$set:{verifiedAt:new Date()}});res.json({success:true});
 }catch(e){next(e);}});
 router.post('/contact',verifyStaffToken,requireRecentVerification,async(req,res,next)=>{try{
  const channel=req.body.channel;const destination=String(req.body.destination||'').trim();
- if(channel==='sms'?!validStaffPhone(destination):channel!=='email'||!/^\S+@\S+\.\S+$/.test(destination))return res.status(400).json({message:'Provide a valid destination'});
+ if(channel!=='sms'||!validStaffPhone(destination))return res.status(400).json({message:'SMS verification requires a valid phone number'});
  res.json(await issueChallenge({subjectId:String(req.user._id),purpose:'contact',channel,destination,ip:req.ip,scope:{sessionId:req.accessSession._id}}));
 }catch(e){next(e);}});
 router.post('/contact/verify',verifyStaffToken,requireRecentVerification,async(req,res,next)=>{try{
  const challenge=await consumeChallenge(req.body.challengeId,req.body.code,'contact',req.ip);
- if(challenge.scope.sessionId!==req.accessSession._id)return res.sendStatus(403);
- await StaffUser.updateOne({_id:req.user._id},{$set:{[challenge.channel==='sms'?'phone':'email']:challenge.destination},$inc:{tokenVersion:1}});
+ if(challenge.channel!=='sms' || challenge.scope.sessionId!==req.accessSession._id)return res.sendStatus(403);
+ await StaffUser.updateOne({_id:req.user._id},{$set:{phone:challenge.destination},$inc:{tokenVersion:1}});
  await AccessSession.deleteMany({kind:'staff',subjectId:String(req.user._id)});setSessionCookie(res,'staff','',0);res.json({success:true,message:'Contact verified. Sign in again.'});
 }catch(e){next(e);}});
 
