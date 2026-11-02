@@ -363,6 +363,7 @@ router.post('/orders/:id/review-draft', async (req, res) => {
         message: `Order must be in 'draft_manager_review' status. Current: ${order.status}`,
       });
     }
+    if (!Number.isInteger(Number(req.body.expectedVersion)) || Number(req.body.expectedVersion) < 1) return res.status(400).json({message:'Choose the draft version being reviewed.'});
     assertExpectedVersion(order, req.body.expectedVersion);
 
     const currentDraft = order.draftVersions.find((v) => v.versionNumber === order.currentDraftVersion);
@@ -412,7 +413,9 @@ router.post('/orders/:id/review-draft', async (req, res) => {
       };
 
       closeActiveRevision(order, 'returned');
-      const correctionItems = normalizeCorrectionItems({ items: submitAnnotations(order, 'manager', (Array.isArray(req.body.items) ? req.body.items : []).filter((i) => String(i?.text || '').trim()).map((i) => ({ text: i.text, pageReference: i.pageReference }))), feedback });
+      const submittedItems = submitAnnotations(order, 'manager', (Array.isArray(req.body.items) ? req.body.items : []).filter((i) => String(i?.text || '').trim()).map((i) => ({ text: i.text, pageReference: i.pageReference })));
+      if (feedback) submittedItems.push({text:feedback, pageReference:''});
+      const correctionItems = normalizeCorrectionItems({items:submittedItems});
       const revisionRequest = createRevisionRequest(order, {
         source: 'manager',
         actor: { type: req.user.role, id: String(req.user._id), name: req.user.name },
