@@ -1,3 +1,8 @@
+import { requestProofOcr, OCR_VERSION } from '../services/proofOcrService.js';
+import express from 'express';
+import { pipeline } from 'node:stream/promises';
+import { ProofAttachment } from '../models/ProofAttachment.model.js';
+import { reserveAttachment, putAttachmentChunk, completeAttachment, removeAttachment, readAttachment, claimAttachments, releaseAttachmentClaims, ATTACHMENT_CHUNK_BYTES } from '../services/proofAttachmentService.js';
 import {recordSecurityEvent} from '../services/securityAuditService.js';
 import { clientCanReadVersion } from '../services/proofAccessService.js';
 import { permits } from '../services/authorizationService.js';
@@ -55,14 +60,16 @@ function routes() {
   const r = Router({ mergeParams: true });
   const describe = async (req) => {
     const orderId=req.proofOrder._id, version=req.proofVersion;
-    const [job,metadata,pages,failed,geometryJobs]=await Promise.all([
+    const [job,metadata,pages,failed,geometryJobs,ocrJobs]=await Promise.all([
       MediaJob.findById(proofJobId(orderId,version)).select('state').lean(),
       ProofPage.findOne({orderId,version,page:0}).select('text').lean(),
-      ProofPage.find({orderId,version,page:{$gt:0}}).select('page width height geometryVersion -_id').lean(),
-      MediaJob.find({orderId,version,kind:'proof',geometryOnly:{$ne:true},requested:true,state:'failed'}).select('page errorCode errorReference attempts retryable _id').lean(),
+      ProofPage.find({orderId,version,page:{$gt:0}}).select('page width height geometryVersion ocrVersion -_id').lean(),
+      MediaJob.find({orderId,version,kind:'proof',geometryOnly:{$ne:true},ocrOnly:{$ne:true},requested:true,state:'failed'}).select('page errorCode errorReference attempts retryable _id').lean(),
       MediaJob.find({orderId,version,kind:'proof',geometryOnly:true}).select('page state errorCode errorReference').lean(),
+      MediaJob.find({orderId,version,kind:'proof',ocrOnly:true}).select('page state errorCode errorReference').lean(),
     ]);
     for(const page of pages){const g=geometryJobs.find(j=>j.page===page.page);page.geometryState=page.geometryVersion>=GEOMETRY_VERSION?'ready':g?.state||'missing';if(g?.state==='failed')page.geometryError=publicProofDiagnostic(g);}
+    for (const page of pages) { const job = ocrJobs.find(j => j.page === page.page); page.ocrState = page.ocrVersion >= OCR_VERSION ? 'ready' : job?.state || 'missing'; if (job?.state === 'failed') page.ocrError = publicProofDiagnostic(job); }
     const pageCount=metadata?.text?.pageCount||0;
     const total=Math.min(5,pageCount);
     const coverReady=pages.some((p)=>p.page===1);
@@ -79,8 +86,10 @@ function routes() {
       const pages=req.body.pages||[1];
       const metadata=await ProofPage.findOne({orderId:req.proofOrder._id,version:req.proofVersion,page:0}).lean();
       if(!Array.isArray(pages)||!pages.length||pages.length>2||pages.some((n)=>!Number.isInteger(n)||n<1||n>(metadata?.text?.pageCount||500)))return res.status(400).json({message:'Choose up to two valid pages to prepare'});
-      if(req.body.geometryOnly===true)await requestProofGeometry(req.proofOrder._id,req.proofVersion,pages,req.body.retry===true);
+      if ((req.body.geometryOnly || req.body.ocr) && !req.proofCanComment) return res.status(403).json({message:'Selection is available during active review only'});
+      if(req.body.geometryOnly===true || req.body.ocr===true)await requestProofGeometry(req.proofOrder._id,req.proofVersion,pages,req.body.retry===true);
       else await requestProofBatch(req.proofOrder._id,req.proofVersion,pages);
+      if (req.body.ocr === true) await requestProofOcr(req.proofOrder._id, req.proofVersion, pages, req.body.retry === true);
       scheduleProofPreparation(req.proofOrder._id,req.proofVersion,{startAfter:afterProofResponse(res)});
       // Dedicated workers or the bounded Vercel continuation consume the queue after response.
       res.json(await describe(req));
@@ -132,28 +141,46 @@ function routes() {
       res.json({jobs});
     }catch(e){next(e);}
   });
+  const attachmentRoute = fn => async (req, res, next) => { try { res.json(await fn(req)); } catch (e) { next(e); } };
+  r.post('/attachments', attachmentRoute(reserveAttachment));
+  r.put('/attachments/:attachmentId/chunks/:n', express.raw({ type: 'application/octet-stream', limit: ATTACHMENT_CHUNK_BYTES }), attachmentRoute(putAttachmentChunk));
+  r.post('/attachments/:attachmentId/complete', attachmentRoute(completeAttachment));
+  r.delete('/attachments/:attachmentId', attachmentRoute(async req => { await removeAttachment(req); return { success: true }; }));
+  r.get('/attachments/:attachmentId', async (req, res, next) => {
+    try {
+      const stream = await readAttachment(req, visibleAnnotations(req));
+      res.type('image/webp');
+      res.on('close', () => stream.destroy());
+      await pipeline(stream, res);
+    } catch (error) { if (res.headersSent) res.destroy(error); else next(error); }
+  });
   r.post('/annotations', async (req, res, next) => {
     try {
       if (!req.proofCanComment) return res.status(403).json({ message: 'This version is not open for your review' });
       const { page, kind } = req.body;let rects=req.body.rects;let imageRegion;
       if(kind==='image'){if(!Number.isInteger(page)||page<1||typeof req.body.imageRegionId!=='string')return res.status(400).json({message:'Choose a detected image on a valid page'});const geometry=await ProofPage.findOne({orderId:req.proofOrder._id,version:req.proofVersion,page}).select('imageRegions').lean();imageRegion=geometry?.imageRegions?.find(r=>r.id===req.body.imageRegionId);if(!imageRegion)return res.status(400).json({message:'Choose a detected image on this magazine page'});rects=[imageRegion.rect];}
       const text = String(req.body.text || '').trim();
+      const attachmentIds = req.body.attachmentIds ?? [];
+      if (!Array.isArray(attachmentIds) || attachmentIds.length > 5 || new Set(attachmentIds).size !== attachmentIds.length || attachmentIds.some(id => typeof id !== 'string' || !mongoose.isValidObjectId(id))) return res.status(400).json({ message: 'Choose up to five uploaded images' });
       const clientMutationId=req.body.clientMutationId;
       if(clientMutationId!==undefined&&!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(clientMutationId))return res.status(400).json({message:'Invalid comment save reference'});
       const authorId=String(req.user?._id||req.proofOrder._id);
       const existing=clientMutationId&&req.proofOrder.proofAnnotations.find(a=>a.clientMutationId===clientMutationId&&a.authorId===authorId&&a.source===req.proofSource&&a.version===req.proofVersion);
       if(existing){
         const clean=items=>items.map(rect=>rect&&typeof rect==='object'?{x:rect.x,y:rect.y,width:rect.width,height:rect.height}:null);
-        if(existing.page!==page||existing.kind!==kind||(kind==='image'&&existing.imageRegionId!==req.body.imageRegionId)||existing.text!==text||existing.selectedText!==String(req.body.selectedText||'').slice(0,8000)||!Array.isArray(rects)||JSON.stringify(clean(existing.rects))!==JSON.stringify(clean(rects)))return res.status(409).json({message:'This save reference was already used for a different comment'});
+        if(JSON.stringify((existing.attachments || []).map(a=>a.id))!==JSON.stringify(attachmentIds)||existing.page!==page||existing.kind!==kind||(kind==='image'&&existing.imageRegionId!==req.body.imageRegionId)||existing.text!==text||existing.selectedText!==String(req.body.selectedText||'').slice(0,8000)||!Array.isArray(rects)||JSON.stringify(clean(existing.rects))!==JSON.stringify(clean(rects)))return res.status(409).json({message:'This save reference was already used for a different comment'});
         return res.json({annotations:visibleAnnotations(req)});
       }
 
       const metadata = await ProofPage.findOne({ orderId: req.proofOrder._id, version: req.proofVersion, page: 0 });
-      if (!Number.isInteger(page) || page < 1 || page > (metadata?.text?.pageCount || 0) || !['text', 'area','image'].includes(kind) || !text || text.length > 4000 || !Array.isArray(rects) || !rects.length || rects.length > 200 || rects.some((r) => !r||!['x','y','width','height'].every((k) => Number.isFinite(r[k]) && r[k] >= 0 && r[k] <= 1) || !r.width || !r.height || r.x + r.width > 1.002 || r.y + r.height > 1.002)) return res.status(400).json({ message: 'Choose a valid page selection and a comment of up to 4000 characters' });
+      if (!Number.isInteger(page) || page < 1 || page > (metadata?.text?.pageCount || 0) || !['text', 'area','image'].includes(kind) || (!text && !attachmentIds.length) || text.length > 4000 || !Array.isArray(rects) || !rects.length || rects.length > 200 || rects.some((r) => !r||!['x','y','width','height'].every((k) => Number.isFinite(r[k]) && r[k] >= 0 && r[k] <= 1) || !r.width || !r.height || r.x + r.width > 1.002 || r.y + r.height > 1.002)) return res.status(400).json({ message: 'Choose a valid page selection and a comment of up to 4000 characters' });
       if (req.proofOrder.proofAnnotations.length >= 2000) return res.status(400).json({ message: 'This magazine has reached its comment limit' });
-      req.proofOrder.proofAnnotations.push({ clientMutationId,...(imageRegion?{imageRegionId:imageRegion.id,imageQuad:imageRegion.quad}:{}), version: req.proofVersion, page, rects, kind, text, selectedText: String(req.body.selectedText || '').slice(0, 8000), source: req.proofSource,
+      const annotationId = new mongoose.Types.ObjectId();
+      const attachments = await claimAttachments(req, attachmentIds, annotationId);
+      req.proofOrder.proofAnnotations.push({ _id: annotationId, attachments, clientMutationId,...(imageRegion?{imageRegionId:imageRegion.id,imageQuad:imageRegion.quad}:{}), version: req.proofVersion, page, rects, kind, text, selectedText: String(req.body.selectedText || '').slice(0, 8000), source: req.proofSource,
         authorId, authorName: req.user?.name || req.proofOrder.clientName });
-      await req.proofOrder.save(); res.json({ annotations: visibleAnnotations(req) });
+      try { await req.proofOrder.save(); } catch (error) { await releaseAttachmentClaims(annotationId); throw error; }
+      res.json({ annotations: visibleAnnotations(req) });
     } catch (e) { next(e); }
   });
   r.delete('/annotations/:annotationId', async (req, res, next) => {
@@ -161,7 +188,10 @@ function routes() {
       if (!mongoose.isValidObjectId(req.params.annotationId)) return res.status(400).json({ message: 'Invalid comment reference' });
       const annotation = req.proofOrder.proofAnnotations.id(req.params.annotationId);
       if (!req.proofCanComment || !annotation || annotation.version !== req.proofVersion || annotation.source !== req.proofSource || annotation.submittedAt) return res.status(403).json({ message: 'Comment cannot be discarded' });
-      annotation.deleteOne(); await req.proofOrder.save(); res.json({ annotations: visibleAnnotations(req) });
+      const attachmentIds = (annotation.attachments || []).map(a => a.id);
+      annotation.deleteOne(); await req.proofOrder.save();
+      await ProofAttachment.updateMany({ _id: { $in: attachmentIds } }, { $set: { expiresAt: new Date(0) } });
+      res.json({ annotations: visibleAnnotations(req) });
     } catch (e) { next(e); }
   });
   return r;

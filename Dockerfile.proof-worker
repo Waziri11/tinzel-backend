@@ -3,9 +3,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-co
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
+COPY --chown=node:node assets ./assets
 COPY --chown=node:node src ./src
 COPY --chown=node:node scripts ./scripts
 ENV NODE_ENV=production PROOF_WORKER_MODE=dedicated PROOF_PROCESS_COUNT=2
 USER node
-RUN node scripts/proofSmoke.js
+RUN node scripts/proofSmoke.js && node scripts/proofOcrSmoke.js
 CMD ["node", "scripts/proofWorker.js"]

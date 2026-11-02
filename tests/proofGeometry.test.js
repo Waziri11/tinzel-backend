@@ -7,3 +7,11 @@ test('image geometry clips to page coordinates, preserves rotated quads and dedu
  for(const r of found)for(const p of r.quad)assert.ok(p.x>=0&&p.x<=1&&p.y>=0&&p.y<=1);
  assert.deepEqual(imageRegions(null),[]);assert.deepEqual(imageRegions([NaN,0,0,1,1,0]),[]);
 });
+
+test('rotated images crossing page edges retain the clipped polygon instead of distorted corners', () => {
+ const [region] = imageRegions([-.2,.2,.2,.8,.4,-.2]);
+ assert.equal(region.quad.length,6);
+ assert.ok(region.quad.some(p=>p.x===0 && Math.abs(p.y-.5)<.00001));
+ assert.ok(region.quad.every(p=>p.x>=0&&p.x<=1&&p.y>=0&&p.y<=1));
+ assert.equal(imageRegions([-2,-2,-2,-1,-1,-2]).length,0);
+});

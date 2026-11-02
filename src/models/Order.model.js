@@ -83,6 +83,7 @@ const proofAnnotationSchema = new mongoose.Schema({
   version: Number, page: Number, kind: { type: String, enum: ['text', 'area', 'image'] },
   rects: [{ x: Number, y: Number, width: Number, height: Number, _id: false }],
   imageRegionId: String, imageQuad: [{x:Number,y:Number,_id:false}],
+  attachments: { type: [{ id: String, name: String, contentType: String, width: Number, height: Number, _id: false }], default: [] },
   selectedText: String, text: String, source: { type: String, enum: ['manager', 'client'] },
   authorId: String, authorName: String, createdAt: { type: Date, default: Date.now }, submittedAt: Date,
 });

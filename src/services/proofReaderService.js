@@ -1,3 +1,5 @@
+import { buildProofOcr } from './proofOcrService.js';
+import { watermarkOverlay } from './proofWatermark.js';
 import mongoose from 'mongoose';
 import {GEOMETRY_VERSION,imageRegions} from './proofGeometry.js';
 import { Readable } from 'node:stream';
@@ -117,6 +119,7 @@ export async function renderProofPage(pdf, number, signal, {geometryOnly=false}=
   } finally { signal?.removeEventListener('abort', cancel); page.cleanup(); }
 }
 export async function buildProof(job, signal, context = new Map()) {
+  if (job.ocrOnly) return buildProofOcr(job, signal);
   const order = await Order.findById(job.orderId);
   const draft = order?.draftVersions.find((d) => d.versionNumber === job.version);
   if (!draft) throw new Error('Magazine version is unavailable');
@@ -154,7 +157,6 @@ export async function buildProof(job, signal, context = new Map()) {
     }
   } catch (error) { context.delete(key); await pdf.destroy(); throw error; } finally { unbind(); }
 }
-const escapeXml = (value) => String(value).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
 const watermarkCache=new Map();let watermarkBytes=0;
 export async function watermarkedPage(page, identity, sessionKey='') {
   if(!sessionKey)return makeWatermarkedPage(page,`${identity} · ${new Date().toISOString()}`);
@@ -182,15 +184,7 @@ async function baseImage(page){
 }
 async function makeWatermarkedPage(page, identity) {
   const image = await baseImage(page);
-  const lines = String(identity).split(' · ').map((part) => part.slice(0, 160));
-  const fontSize = Math.max(9, Math.min(18, (page.width - 40) / (Math.max(...lines.map((l) => l.length)) * .65)));
-  const rows = [];
-  for (let y = 45; y < page.height; y += 200) {
-   for(let x=20;x<page.width;x+=Math.max(300,page.width/2)){
-    lines.forEach((line, index) => rows.push(`<text x="${x}" y="${y + index * (fontSize + 4)}" fill="#333" fill-opacity="0.30" font-size="${fontSize}" font-family="sans-serif">${escapeXml(line)}</text>`));
-  }
-  }
-  const overlay = Buffer.from(`<svg width="${page.width}" height="${page.height}" xmlns="http://www.w3.org/2000/svg">${rows.join('')}</svg>`);
+  const overlay = watermarkOverlay(page.width, page.height, identity);
   return sharp(image).composite([{ input: overlay }]).webp({ quality: 85, effort: 2 }).toBuffer();
 }
 export function pendingAnnotations(order, source) {
@@ -203,5 +197,5 @@ export function submitAnnotations(order, source, items = []) {
   const annotations = pendingAnnotations(order, source);
   const now = new Date();
   for (const annotation of annotations) annotation.submittedAt = now;
-  return [...items, ...annotations.map((a) => ({ text: a.text, pageReference: String(a.page), annotationId: a._id }))];
+  return [...items, ...annotations.map((a) => ({ text: a.text || 'Review attached images / Kagua picha zilizoambatishwa', pageReference: String(a.page), annotationId: a._id }))];
 }

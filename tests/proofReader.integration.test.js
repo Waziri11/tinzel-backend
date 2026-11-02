@@ -129,7 +129,7 @@ test('detected image anchors are authoritative, tracked, private and upgraded wi
  await runMediaJobs({maxJobs:4,proofFilter:{orderId:record._id,version:1}});
  tokens.imageClient=await generateClientToken(record);
  const url=`/api/proofs/staff/${record._id}/1`,g=(await request(url+'/pages/1?text=1')).data;
- assert.equal(g.geometryVersion,2);assert.ok(g.imageRegions.length>=3,JSON.stringify(g));assert.equal(g.text[0].dir,'ltr');assert.ok(g.text[0].fontFamily);assert.ok(g.text.some(t=>t.hasEOL));
+ assert.equal(g.geometryVersion,3);assert.ok(g.imageRegions.length>=3,JSON.stringify(g));assert.equal(g.text[0].dir,'ltr');assert.ok(g.text[0].fontFamily);assert.ok(g.text.some(t=>t.hasEOL));
  const region=g.imageRegions.find(r=>r.rect.width<.2),payload={page:1,kind:'image',imageRegionId:region.id,rects:[{x:0,y:0,width:1,height:1}],text:'Replace the small photo',clientMutationId:randomUUID()};
  const saved=await request(url+'/annotations','manager',payload);assert.equal(saved.status,200);assert.deepEqual(saved.data.annotations[0].rects,[region.rect]);assert.deepEqual(saved.data.annotations[0].imageQuad,region.quad);assert.equal(saved.data.annotations[0].reviewStatus,'private');
  assert.equal((await request(url+'/annotations','manager',payload)).data.annotations.length,1);
@@ -146,7 +146,7 @@ test('detected image anchors are authoritative, tracked, private and upgraded wi
  const failedGeometry=await request(url);assert.equal(failedGeometry.data.coverReady,true);assert.equal(failedGeometry.data.pages[0].geometryState,'failed');assert.deepEqual(failedGeometry.data.failedPages,[]);
  await request(url+'/prepare','manager',{pages:[1],geometryOnly:true,retry:true});
  await runMediaJobs({maxJobs:2,proofFilter:{orderId:record._id,version:1}});
- const upgraded=await ProofPage.findById(original._id);assert.equal(String(upgraded.imageId),imageId);assert.equal(upgraded.geometryVersion,2);assert.ok(upgraded.imageRegions.length>=3);
+ const upgraded=await ProofPage.findById(original._id);assert.equal(String(upgraded.imageId),imageId);assert.equal(upgraded.geometryVersion,3);assert.ok(upgraded.imageRegions.length>=3);
  const annotationId=saved.data.annotations[0]._id;
  assert.equal((await request(`/api/manager/orders/${record._id}/review-draft`,'manager',{action:'return_to_designer',expectedVersion:1,items:[]})).status,200);
  const returned=(await request(url)).data.annotations[0];assert.equal(returned._id,annotationId);assert.equal(returned.reviewStatus,'open');assert.equal(returned.correction.roundNumber,1);
