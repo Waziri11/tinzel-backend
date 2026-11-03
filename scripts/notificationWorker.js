@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { runAuthAlerts } from '../src/services/authActivityService.js';
 import { runStaffCredentials } from '../src/services/staffCredentialService.js';
 import mongoose from 'mongoose';
 import { connectDB } from '../src/config/db.js';
@@ -6,5 +7,5 @@ import { runWorkflowNotifications } from '../src/services/workflowNotificationSe
 if(!await connectDB()) throw new Error('Notification worker needs a database connection');
 let stopped=false;
 process.on('SIGTERM',()=>{stopped=true;});process.on('SIGINT',()=>{stopped=true;});
-try { do {console.log({credentials:await runStaffCredentials(),workflow:await runWorkflowNotifications()});if(!process.argv.includes('--once')&&!stopped)await new Promise(resolve=>setTimeout(resolve,2000));}while(!stopped&&!process.argv.includes('--once')); }
+try { do {console.log({authAlerts:await runAuthAlerts(),credentials:await runStaffCredentials(),workflow:await runWorkflowNotifications()});if(!process.argv.includes('--once')&&!stopped)await new Promise(resolve=>setTimeout(resolve,2000));}while(!stopped&&!process.argv.includes('--once')); }
 finally {await mongoose.disconnect();}

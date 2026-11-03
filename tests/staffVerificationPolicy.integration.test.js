@@ -34,7 +34,7 @@ const login = (user, device, password = 'TestPassword!123') => call('/api/staff/
 async function verify(user) {
   const start = await login(user); assert.equal(start.data.otpRequired, true);
   const code = otpSink.get(digest(start.data.challengeId)).code;
-  const result = await call('/api/staff/otp/verify', { challengeId: start.data.challengeId, code });
+  const result = await call('/api/staff/otp/verify', { challengeId: start.data.challengeId, code, trustDevice: true });
   assert.equal(result.status, 200);
   return result;
 }

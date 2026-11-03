@@ -1,3 +1,4 @@
+import { runAuthAlerts } from '../services/authActivityService.js';
 import { exportSecurityEvents } from '../services/securityAuditService.js';
 import { runStaffCredentials } from '../services/staffCredentialService.js';
 import mongoose from 'mongoose';
@@ -17,7 +18,7 @@ router.get('/internal/security-audit-export',async(req,res)=>{
 router.get('/internal/notification-jobs',async(req,res)=>{
   const expected=Buffer.from(`Bearer ${process.env.CRON_SECRET || ''}`),actual=Buffer.from(String(req.headers.authorization || ''));
   if(!process.env.CRON_SECRET || expected.length!==actual.length || !timingSafeEqual(expected,actual)) return res.sendStatus(401);
-  try {const credentials=await runStaffCredentials();res.json({...await runWorkflowNotifications(),credentials});}catch {res.status(503).json({message:'Notification worker temporarily unavailable.'});}
+  try {const authAlerts=await runAuthAlerts();const credentials=await runStaffCredentials();res.json({...await runWorkflowNotifications(),credentials,authAlerts});}catch {res.status(503).json({message:'Notification worker temporarily unavailable.'});}
 });
 // Retired bearer-only links never deliver original files.
 router.get('/print-jobs/:orderId/:eventKey/file',(_req,res)=>res.status(410).json({message:'Request a new printer invitation from your manager.'}));

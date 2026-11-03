@@ -1,4 +1,4 @@
-import {randomBytes,createHash,createHmac,randomInt} from 'node:crypto';
+import {randomBytes,createHash,createHmac,randomInt,timingSafeEqual} from 'node:crypto';
 import {AccessSession,AccessChallenge} from '../models/AccessSession.model.js';
 import {getJwtSecret} from '../middlewares/auth.middleware.js';
 import {consumeRateLimit} from '../middlewares/rateLimiter.js';
@@ -25,7 +25,7 @@ export async function createSession(kind,subject,{verifiedAt,scope,purpose}={}){
 export async function readSession(req,kind){
  const cookie=cookieValue(req,kind);const token=cookie || String(req.headers.authorization||'').replace(/^Bearer /,'');
  if(!/^[a-f0-9]{64}$/.test(token))throw Object.assign(new Error('Please sign in again'),{status:401});
- const session=await AccessSession.findOneAndUpdate({_id:digest(token),kind,expiresAt:{$gt:new Date()},idleUntil:{$gt:new Date()}},{$set:{idleUntil:new Date(Date.now()+1800000)}},{returnDocument:'after'});
+ const session=await AccessSession.findOneAndUpdate({_id:digest(token),kind,expiresAt:{$gt:new Date()},idleUntil:{$gt:new Date()}},{$set:{idleUntil:new Date(Date.now()+1800000),lastSeenAt:new Date()}},{returnDocument:'after'});
  if(!session)throw Object.assign(new Error('Session expired or revoked'),{status:401});
  if(cookie && !['GET','HEAD','OPTIONS'].includes(req.method)){
   const origin=req.headers.origin;
@@ -37,18 +37,19 @@ export async function readSession(req,kind){
 }
 export async function requireRecentVerification(req,res,next){if(!req.accessSession?.verifiedAt || Date.now()-new Date(req.accessSession.verifiedAt)>600000)return res.status(403).json({errorCode:'OTP_REQUIRED',message:'Verify your identity before continuing'});next();}
 async function limit(scope,key,maxAttempts,windowMs){const r=await consumeRateLimit({scope,key,maxAttempts,windowMs,failClosed:true});if(!r.allowed)throw Object.assign(new Error('Please wait before requesting another code'),{status:429});}
-export async function issueChallenge({subjectId,purpose,channel,destination,ip,scope}){
+export async function issueChallenge({subjectId,purpose,channel,destination,ip,scope,id=randomBytes(32).toString('hex'),language='en'}){
  assertDeliveryConfiguration();if(!['email','sms'].includes(channel)||!destination)throw Object.assign(new Error('Choose a configured email or SMS destination'),{status:400});
  await limit('otp-send-minute',`${purpose}:${subjectId}`,1,60000);
  await limit('otp-send-account',subjectId,5,900000);await limit('otp-send-ip',ip,20,900000);
+ await limit('otp-send-daily-account',subjectId,20,86400000);await limit('otp-send-daily-destination',digest(destination),30,86400000);await limit('otp-send-global','all',1000,86400000);
  const previous=await AccessChallenge.find({subjectId,purpose,consumedAt:null}).select('_id').lean();for(const item of previous)otpSink.delete(item._id);
  await AccessChallenge.updateMany({subjectId,purpose,consumedAt:null},{$set:{consumedAt:new Date()}});
- const id=randomBytes(32).toString('hex'), code=String(randomInt(100000,1000000));
+ const code=String(randomInt(100000,1000000));
  const codeHash=createHmac('sha256',getJwtSecret()).update(`${id}:${code}`).digest('hex');
  await AccessChallenge.create({_id:digest(id),subjectId,purpose,channel,destination,codeHash,expiresAt:new Date(Date.now()+300000),scope});
  try{
   if(process.env.SECURITY_OTP_SINK==='true' && process.env.NODE_ENV==='test')otpSink.set(digest(id),{code,channel,destination});
-  else if(channel==='sms')await sendNextSMS(destination,`Tinzel verification code: ${code}. Expires in 5 minutes. Do not share this code.`);
+  else if(channel==='sms')await sendNextSMS(destination,language==='sw'?`Msimbo wa Tinzel: ${code}. Unaisha baada ya dakika 5. Usishiriki msimbo huu.`:`Tinzel verification code: ${code}. Expires in 5 minutes. Do not share this code.`);
   else {const result=await sendEmail({to:destination,subject:'Tinzel verification code',text:`Your code is ${code}. It expires in 5 minutes.`,sensitive:true});if(result.mode!=='smtp_live')throw new Error('Delivery unavailable');}
   await AccessChallenge.updateOne({_id:digest(id)},{$set:{ready:true}});
  }catch{await AccessChallenge.deleteOne({_id:digest(id)});throw Object.assign(new Error('Verification delivery unavailable. Please try again later.'),{status:503});}
@@ -60,7 +61,7 @@ export async function consumeChallenge(id,code,purpose,ip){
  if(!row)throw Object.assign(new Error('Code expired or verification limit reached'),{status:401});
  await limit('otp-verify-account',row.subjectId,20,900000);
  const expected=createHmac('sha256',getJwtSecret()).update(`${id}:${String(code)}`).digest('hex');
- if(expected!==row.codeHash)throw Object.assign(new Error('Invalid verification code'),{status:401});
+ if(!row.codeHash || !timingSafeEqual(Buffer.from(expected),Buffer.from(row.codeHash)))throw Object.assign(new Error('Invalid verification code'),{status:401});
  const used=await AccessChallenge.findOneAndUpdate({_id:row._id,consumedAt:null},{$set:{consumedAt:new Date()}},{returnDocument:'after'});
  if(!used)throw Object.assign(new Error('Code has already been used'),{status:401});
  otpSink.delete(row._id);return used;

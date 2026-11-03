@@ -45,7 +45,7 @@ async function pending(extra={}) {const id=new mongoose.Types.ObjectId(),fields=
 const makeOrder=()=>Order.create({submissionId:`SUB-${new mongoose.Types.ObjectId()}`,formId:form._id,clientName:'Test client',clientWhatsApp:'0712000011',status:'payment_verified'});
 
 test('generated initial passwords are exactly eight unambiguous characters and satisfy every character class',()=>{
- const values=new Set();for(let i=0;i<200;i++){const password=generateInitialPassword();assert.equal(password.length,8);assert.equal(passwordErrors(password).length,0);assert.doesNotMatch(password,/[0O1lI]/);values.add(password);}assert.equal(values.size,200);
+ const values=new Set();for(let i=0;i<200;i++){const password=generateInitialPassword();assert.equal(password.length,8);assert.ok(passwordErrors(password).length>0, 'Temporary credentials must be replaced with a full-length passphrase');assert.doesNotMatch(password,/[0O1lI]/);values.add(password);}assert.equal(values.size,200);
 });
 
 test('admin creation, notification, restricted first login and password change complete the onboarding journey',async()=>{
@@ -65,13 +65,13 @@ test('admin creation, notification, restricted first login and password change c
  await assert.rejects(()=>manualAssignOrder(order,user._id,'Pending onboarding',admin));
  const assignment=await autoAssignOrder(order,admin);assert.equal(assignment.queued,true);
  assert.equal((await request('/staff/change-password',{currentPassword:password,newPassword:'weak'},login.data.token)).status,400);
- assert.equal((await request('/staff/change-password',{currentPassword:'Wrong!123',newPassword:'ChosenPass!7'},login.data.token)).status,400);
+ assert.equal((await request('/staff/change-password',{currentPassword:'Wrong!123',newPassword:'Chosen long passphrase!7'},login.data.token)).status,400);
  assert.equal((await request('/staff/change-password',{currentPassword:password,newPassword:password},login.data.token)).status,400);
- const changed=await request('/staff/change-password',{currentPassword:password,newPassword:'ChosenPass!7'},login.data.token);assert.equal(changed.status,200,JSON.stringify(changed.data));assert.equal(changed.data.user.mustChangePassword,false);
- const saved=await StaffUser.findById(user._id).select('+credentialJob');assert.equal(saved.credentialJob,null);assert.equal(saved.temporaryPasswordExpiresAt,null);assert.equal(await saved.comparePassword('ChosenPass!7'),true);
+ const changed=await request('/staff/change-password',{currentPassword:password,newPassword:'Chosen long passphrase!7'},login.data.token);assert.equal(changed.status,200,JSON.stringify(changed.data));assert.equal(changed.data.user.mustChangePassword,false);
+ const saved=await StaffUser.findById(user._id).select('+credentialJob');assert.equal(saved.credentialJob,null);assert.equal(saved.temporaryPasswordExpiresAt,null);assert.equal(await saved.comparePassword('Chosen long passphrase!7'),true);
  assert.equal((await request('/designer/orders',undefined,changed.data.token)).status,200);assert.equal((await request('/staff/me',undefined,login.data.token)).status,401);
  assert.equal((await request('/staff/login',{email:user.email,password},null)).status,401);
- assert.equal((await request('/staff/login',{email:user.email,password:'ChosenPass!7'},null)).status,200);
+ assert.equal((await request('/staff/login',{email:user.email,password:'Chosen long passphrase!7'},null)).status,200);
  const result=await manualAssignOrder(order,user._id,'Setup completed',admin);assert.equal(result.success,true);
 });
 
@@ -89,7 +89,7 @@ test('initial password expiry blocks login and setup, erases encrypted delivery 
  const {user,password}=await create();const login=await request('/staff/login',{email:user.email,password},null);
  await StaffUser.updateOne({_id:user._id},{$set:{temporaryPasswordExpiresAt:new Date(Date.now()-1000)}});
  assert.equal((await request('/staff/login',{email:user.email,password},null)).data.errorCode,'INITIAL_PASSWORD_EXPIRED');
- assert.equal((await request('/staff/change-password',{currentPassword:password,newPassword:'AfterExpiry!7'},login.data.token)).status,401);
+ assert.equal((await request('/staff/change-password',{currentPassword:password,newPassword:'After expiry passphrase!7'},login.data.token)).status,401);
  await runStaffCredentials({staffId:user._id});assert.equal((await StaffUser.findById(user._id).select('+credentialJob')).credentialJob,null);
  assert.equal((await request(`/admin/staff/${user._id}`)).data.user.onboardingStatus,'expired');
  const reissued=await request(`/admin/staff/${user._id}/initial-password`,{});assert.equal(reissued.status,200);assert.equal(reissued.data.user.credentialGeneration,2);
@@ -133,9 +133,9 @@ test('disabled channels, deactivation and replaced credentials stop pending deli
 test('concurrent reissues and password changes cannot overwrite newer credential generations',async()=>{
  const {user,password}=await create(),login=await request('/staff/login',{email:user.email,password},null);
  const resets=await Promise.all([request(`/admin/staff/${user._id}/initial-password`,{}),request(`/admin/staff/${user._id}/initial-password`,{})]);assert.ok(resets.some(result=>result.status===200));assert.ok(resets.every(result=>result.status===200||result.status===409));
- assert.equal((await request('/staff/change-password',{currentPassword:password,newPassword:'Concurrent!8'},login.data.token)).status,401);
+ assert.equal((await request('/staff/change-password',{currentPassword:password,newPassword:'Concurrent passphrase!8'},login.data.token)).status,401);
  const saved=await StaffUser.findById(user._id).select('+credentialJob'),newPassword=decryptInitialPassword(saved),nextLogin=await request('/staff/login',{email:saved.email,password:newPassword},null);
- const changes=await Promise.all([request('/staff/change-password',{currentPassword:newPassword,newPassword:'WinnerOne!8'},nextLogin.data.token),request('/staff/change-password',{currentPassword:newPassword,newPassword:'WinnerTwo!8'},nextLogin.data.token)]);
+ const changes=await Promise.all([request('/staff/change-password',{currentPassword:newPassword,newPassword:'Winner one passphrase!8'},nextLogin.data.token),request('/staff/change-password',{currentPassword:newPassword,newPassword:'Winner two passphrase!8'},nextLogin.data.token)]);
  assert.equal(changes.filter(result=>result.status===200).length,1);assert.equal((await StaffUser.findById(user._id)).mustChangePassword,false);
 });
 
@@ -169,8 +169,8 @@ test('provider delivery callbacks update the matching account generation and can
 test('an initial password that expires during password hashing cannot complete setup',async()=>{
  const {user,password}=await create(),login=await request('/staff/login',{email:user.email,password},null),originalHash=bcrypt.hash;
  await StaffUser.updateOne({_id:user._id},{$set:{temporaryPasswordExpiresAt:new Date(Date.now()+300)}});
- const spy=mock.method(bcrypt,'hash',async(...args)=>{if(args[0]==='ExpiryRace!7')await new Promise(resolve=>setTimeout(resolve,400));return originalHash(...args);});
- try{const response=await request('/staff/change-password',{currentPassword:password,newPassword:'ExpiryRace!7'},login.data.token);assert.equal(response.status,401);assert.equal(response.data.errorCode,'INITIAL_PASSWORD_EXPIRED');assert.equal((await StaffUser.findById(user._id)).mustChangePassword,true);}finally{spy.mock.restore();}
+ const spy=mock.method(bcrypt,'hash',async(...args)=>{if(args[0]==='Expiry race passphrase!7')await new Promise(resolve=>setTimeout(resolve,400));return originalHash(...args);});
+ try{const response=await request('/staff/change-password',{currentPassword:password,newPassword:'Expiry race passphrase!7'},login.data.token);assert.equal(response.status,401);assert.equal(response.data.errorCode,'INITIAL_PASSWORD_EXPIRED');assert.equal((await StaffUser.findById(user._id)).mustChangePassword,true);}finally{spy.mock.restore();}
 });
 
 // A provider may echo rejected content; credential bodies must still stay out of diagnostics.

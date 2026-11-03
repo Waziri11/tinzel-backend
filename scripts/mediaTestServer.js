@@ -8,7 +8,7 @@ import bcrypt from 'bcryptjs';
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'tinzel-browser-'));
 process.chdir(sandbox);
 for (const key of Object.keys(process.env)) {
-  if (/^(SMTP_|TWILIO_|NEXTSMS_|BLOB_|VERCEL|MONGODB_|FRONTEND_URL|BACKEND_URL|CRON_SECRET)/.test(key)) delete process.env[key];
+  if (/^(SMTP_|TWILIO_|NEXTSMS_|TURNSTILE_|BLOB_|VERCEL|MONGODB_|FRONTEND_URL|BACKEND_URL|CRON_SECRET)/.test(key)) delete process.env[key];
 }
 process.env.NODE_ENV = 'test';
 if(process.env.SECURITY_BROWSER_ORIGIN)process.env.FRONTEND_URL=process.env.SECURITY_BROWSER_ORIGIN;
@@ -33,6 +33,7 @@ await MagazineForm.create({ title: 'Acceptance magazine', titleSw: 'Jarida la ma
   fields: types.map((type, order) => ({fieldId:type,sectionId:'story',type,label:`Test ${type}`,labelSw:`Jaribio ${type}`,order,options:['One','Two'],optionsSw:['Moja','Mbili'],rows:['First','Second'],rowsSw:['Kwanza','Pili']})), lipaNambaInstructions: payment });
 const passwordHash = await bcrypt.hash('Browser!2026', 10);
 for (const role of ['admin','manager','designer']) await StaffUser.create({name:`Fictional ${role}`,email:`${role}@example.test`,phone:'0712000001',role,preferredLanguage:'en',passwordHash,maxActiveWorkload:20});
+for (const language of ['en','sw']) await StaffUser.create({name:'Recovery fixture',email:`recovery-${language}@example.test`,phone:'0712000066',role:'designer',preferredLanguage:language,passwordHash});
 await StaffUser.create({name:'Fictional onboarding',email:'onboarding@example.test',role:'designer',preferredLanguage:'en',passwordHash,mustChangePassword:true,temporaryPasswordExpiresAt:new Date(Date.now()+86400000)});
 // Loopback-only test harness message sink; never mounted by the production app.
 const {otpSink}=await import('../src/services/accessSessionService.js');

@@ -20,12 +20,9 @@ export function generateInitialPassword() {
 export function passwordErrors(value) {
   if(typeof value!=='string')return ['Enter a new password.'];
   const errors=[];
-  if(value.length<8)errors.push('Use at least 8 characters.');
-  if(Buffer.byteLength(value,'utf8')>72)errors.push('Use at most 72 bytes.');
-  if(!/[A-Z]/.test(value))errors.push('Include an uppercase letter.');
-  if(!/[a-z]/.test(value))errors.push('Include a lowercase letter.');
-  if(!/[0-9]/.test(value))errors.push('Include a number.');
-  if(!/[^A-Za-z0-9\s]/.test(value))errors.push('Include a special character.');
+  if([...value].length<15)errors.push('Use at least 15 characters. A phrase of unrelated words works well.');
+  if(Buffer.byteLength(value,'utf8')>72)errors.push('Use at most 72 bytes (fewer characters for some languages).');
+  if(/^(.)\1+$/.test(value) || /^(password|qwerty|123456|tinzel|admin)[\W\d]*$/i.test(value))errors.push('Choose a less common passphrase.');
   return errors;
 }
 function encryptionKey() {

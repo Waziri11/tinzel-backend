@@ -65,7 +65,7 @@ export const verifyStaffToken = async (req, res, next) => {
 
     if(decoded.purpose==='password_setup' && !user.mustChangePassword)return await deny(401,{message:'Your setup session has ended. Please sign in again.'});
     if(user.mustChangePassword) {
-      if(!user.temporaryPasswordExpiresAt || new Date(user.temporaryPasswordExpiresAt)<=new Date())return await deny(401,{errorCode:'INITIAL_PASSWORD_EXPIRED',message:'Your initial password has expired. Ask an administrator to issue a new one.'});
+      if(!user.temporaryPasswordExpiresAt || new Date(user.temporaryPasswordExpiresAt)<=new Date())return await deny(401,{errorCode:'INITIAL_PASSWORD_EXPIRED',message:'Your initial password has expired. Use Forgot password or contact an administrator.'});
       const allowed=new Set(['/api/staff/me','/api/staff/preferences','/api/staff/change-password','/api/staff/logout']);
       if(!allowed.has(req.originalUrl.split('?')[0]))return await deny(403,{errorCode:'PASSWORD_CHANGE_REQUIRED',message:'Change your initial password before continuing.'});
     }

@@ -1,3 +1,4 @@
+import { browserLabel } from './authActivityService.js';
 import { randomBytes } from 'node:crypto';
 import { SystemConfig } from '../models/SystemConfig.model.js';
 import { TrustedStaffDevice } from '../models/TrustedStaffDevice.model.js';
@@ -34,7 +35,7 @@ export async function rememberStaffVerification(req, res, user, verifiedAt) {
   if (/^[a-f0-9]{64}$/.test(previous || '')) {
     await TrustedStaffDevice.deleteOne({ _id: digest(previous), subjectId: String(user._id) });
   }
-  if (!hours) {
+  if (!hours || req.body?.trustDevice !== true) {
     setSessionCookie(res, 'staff_device', '', 0);
     return;
   }
@@ -43,6 +44,7 @@ export async function rememberStaffVerification(req, res, user, verifiedAt) {
   await TrustedStaffDevice.create({
     _id: digest(token), subjectId: String(user._id), role: user.role,
     tokenVersion: user.tokenVersion || 0, contactFingerprint: contactFingerprint(user),
+    browser: browserLabel(req.headers['user-agent']),
     verifiedAt, expiresAt: new Date(+verifiedAt + maxAge),
   });
   setSessionCookie(res, 'staff_device', token, maxAge);

@@ -1,3 +1,6 @@
+import staffSecurityRoutes from './staffSecurity.routes.js';
+import { authLimits, captcha, assertUncompromisedPassword } from '../services/authProtectionService.js';
+import { authEvent, securityAlert, revokeAccountAccess, completeSignIn, failedChallengeEvent } from '../services/authActivityService.js';
 import { trustedStaffVerification, rememberStaffVerification } from '../services/staffVerificationPolicy.js';
 import {createSession,setSessionCookie,issueChallenge,consumeChallenge,requireRecentVerification,contactFingerprint} from '../services/accessSessionService.js';
 import {AccessSession,AccessChallenge} from '../models/AccessSession.model.js';
@@ -11,6 +14,8 @@ import { generateToken, verifyStaffToken } from '../middlewares/auth.middleware.
 import { createRateLimiter } from '../middlewares/rateLimiter.js';
 
 const router = Router();
+router.use(staffSecurityRoutes);
+const dummyHash = await bcrypt.hash('Non-account timing comparison only', 10);
 
 const loginRateLimiter = createRateLimiter({
   scope: 'staff-login',
@@ -21,7 +26,7 @@ const loginRateLimiter = createRateLimiter({
 });
 
 // Staff Login
-router.post('/login', loginRateLimiter, async (req, res) => {
+router.post('/login', authLimits('login'), captcha('login'), loginRateLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (typeof email!=='string' || typeof password!=='string' || !email.trim() || !password) {
@@ -30,11 +35,14 @@ router.post('/login', loginRateLimiter, async (req, res) => {
 
     const user = await StaffUser.findOne({ email: email.trim().toLowerCase() });
     if (!user) {
+      await bcrypt.compare(password, dummyHash);
+      await authEvent(req, 'AUTH_LOGIN_FAILED', null, 'denied');
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
+      await authEvent(req, 'AUTH_LOGIN_FAILED', user, 'denied');
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
@@ -42,17 +50,18 @@ router.post('/login', loginRateLimiter, async (req, res) => {
       return res.status(403).json({ success: false, message: 'Account is deactivated' });
     }
 
-    if(user.mustChangePassword && (!user.temporaryPasswordExpiresAt || user.temporaryPasswordExpiresAt<=new Date()))return res.status(401).json({errorCode:'INITIAL_PASSWORD_EXPIRED',message:'Your initial password has expired. Ask an administrator to issue a new one.'});
+    if(user.mustChangePassword && (!user.temporaryPasswordExpiresAt || user.temporaryPasswordExpiresAt<=new Date()))return res.status(401).json({errorCode:'INITIAL_PASSWORD_EXPIRED',message:'Your initial password has expired. Use Forgot password or contact an administrator.'});
     let verifiedAt;
     if(['admin','manager'].includes(user.role) && !user.mustChangePassword){
       verifiedAt = await trustedStaffVerification(req, user);
       if (!verifiedAt) {
         const channel='sms';
-        return res.json({...await issueChallenge({subjectId:String(user._id),purpose:'login',channel,destination:user.phone,ip:req.ip,scope:{tokenVersion:user.tokenVersion||0,contactFingerprint:contactFingerprint(user)}}),otpRequired:true});
+        return res.json({...await issueChallenge({subjectId:String(user._id),purpose:'login',channel,destination:user.phone,ip:req.ip,scope:{tokenVersion:user.tokenVersion||0,contactFingerprint:contactFingerprint(user),role:user.role},language:user.preferredLanguage}),otpRequired:true});
       }
     }
     const token = await generateToken(user, { verifiedAt });
     setSessionCookie(res,'staff',token,12*3600000);
+    await completeSignIn(req,res,user,token);
 
     return res.status(200).json({
       success: true,
@@ -81,20 +90,21 @@ router.post('/login', loginRateLimiter, async (req, res) => {
 router.post('/otp/verify',async(req,res,next)=>{try{
  const challenge=await consumeChallenge(req.body.challengeId,req.body.code,'login',req.ip);
  const user=await StaffUser.findById(challenge.subjectId);
- if(challenge.channel!=='sms' || !user?.isActive || user.deletedAt || user.mustChangePassword || (user.tokenVersion||0)!==challenge.scope.tokenVersion || contactFingerprint(user)!==challenge.scope.contactFingerprint)return res.sendStatus(401);
+ if(challenge.channel!=='sms' || !user?.isActive || user.deletedAt || user.mustChangePassword || (user.tokenVersion||0)!==challenge.scope.tokenVersion || contactFingerprint(user)!==challenge.scope.contactFingerprint || (challenge.scope.role && user.role!==challenge.scope.role))return res.sendStatus(401);
  const verifiedAt = new Date();
  const token=await createSession('staff',user,{verifiedAt});setSessionCookie(res,'staff',token,12*3600000);
  await rememberStaffVerification(req, res, user, verifiedAt);
+ await completeSignIn(req,res,user,token);
  res.json({success:true,token:'cookie',csrf:(await AccessSession.findById(digest(token))).csrf,user:{...user.toObject(),id:user._id}});
-}catch(e){next(e);}});
+}catch(e){await failedChallengeEvent(req,'AUTH_OTP_FAILED','login');next(e);}});
 router.post('/otp/resend',async(req,res,next)=>{try{
  const old=await AccessChallenge.findOne({_id:digest(req.body.challengeId),purpose:'login',expiresAt:{$gt:new Date()},consumedAt:null});
- if(!old)return res.sendStatus(401);const user=await StaffUser.findById(old.subjectId);if(!user?.isActive || user.deletedAt)return res.sendStatus(401);
+ if(!old)return res.sendStatus(401);const user=await StaffUser.findById(old.subjectId);if(!user?.isActive || user.deletedAt || (user.tokenVersion||0)!==old.scope.tokenVersion || contactFingerprint(user)!==old.scope.contactFingerprint || (old.scope.role && old.scope.role!==user.role))return res.sendStatus(401);
  const channel='sms';
- res.json(await issueChallenge({subjectId:old.subjectId,purpose:'login',channel,destination:user.phone,ip:req.ip,scope:old.scope}));
+ res.json(await issueChallenge({subjectId:old.subjectId,purpose:'login',channel,destination:user.phone,ip:req.ip,scope:old.scope,language:user.preferredLanguage}));
 }catch(e){next(e);}});
 router.post('/step-up',verifyStaffToken,async(req,res,next)=>{try{
- const channel='sms';res.json(await issueChallenge({subjectId:String(req.user._id),purpose:'step-up',channel,destination:req.user.phone,ip:req.ip,scope:{sessionId:req.accessSession._id}}));
+ const channel='sms';res.json(await issueChallenge({subjectId:String(req.user._id),purpose:'step-up',channel,destination:req.user.phone,ip:req.ip,scope:{sessionId:req.accessSession._id},language:req.user.preferredLanguage}));
 }catch(e){next(e);}});
 router.post('/step-up/verify',verifyStaffToken,async(req,res,next)=>{try{
  const challenge=await consumeChallenge(req.body.challengeId,req.body.code,'step-up',req.ip);
@@ -104,13 +114,16 @@ router.post('/step-up/verify',verifyStaffToken,async(req,res,next)=>{try{
 router.post('/contact',verifyStaffToken,requireRecentVerification,async(req,res,next)=>{try{
  const channel=req.body.channel;const destination=String(req.body.destination||'').trim();
  if(channel!=='sms'||!validStaffPhone(destination))return res.status(400).json({message:'SMS verification requires a valid phone number'});
- res.json(await issueChallenge({subjectId:String(req.user._id),purpose:'contact',channel,destination,ip:req.ip,scope:{sessionId:req.accessSession._id}}));
+ res.json(await issueChallenge({subjectId:String(req.user._id),purpose:'contact',channel,destination,ip:req.ip,scope:{sessionId:req.accessSession._id},language:req.user.preferredLanguage}));
 }catch(e){next(e);}});
 router.post('/contact/verify',verifyStaffToken,requireRecentVerification,async(req,res,next)=>{try{
  const challenge=await consumeChallenge(req.body.challengeId,req.body.code,'contact',req.ip);
  if(challenge.channel!=='sms' || challenge.scope.sessionId!==req.accessSession._id)return res.sendStatus(403);
- await StaffUser.updateOne({_id:req.user._id},{$set:{phone:challenge.destination},$inc:{tokenVersion:1}});
- await AccessSession.deleteMany({kind:'staff',subjectId:String(req.user._id)});setSessionCookie(res,'staff','',0);res.json({success:true,message:'Contact verified. Sign in again.'});
+ const updated=await StaffUser.findOneAndUpdate({_id:req.user._id,tokenVersion:req.user.tokenVersion,isActive:true,deletedAt:null,phone:req.user.phone},{$set:{phone:challenge.destination},$inc:{tokenVersion:1}},{returnDocument:'after'});
+ if(!updated)return res.status(409).json({message:'The account changed. Start verification again.'});
+ await revokeAccountAccess(req.user._id);
+ await authEvent(req,'AUTH_CONTACT_CHANGED',updated);await securityAlert(updated,'AUTH_CONTACT_CHANGED',req.user.phone);
+ setSessionCookie(res,'staff_device','',0);setSessionCookie(res,'staff','',0);res.json({success:true,message:'Contact verified. Sign in again.'});
 }catch(e){next(e);}});
 
 // Current User Profile
@@ -163,25 +176,30 @@ router.post('/change-password',verifyStaffToken,changeLimiter,async(req,res)=>{
     const user=await StaffUser.findById(req.user._id);
     if(!user || !await user.comparePassword(currentPassword))return res.status(400).json({message:'Current password is incorrect.'});
     if(await user.comparePassword(newPassword))return res.status(400).json({message:'Choose a different password from your current password.'});
-    if(user.mustChangePassword && user.temporaryPasswordExpiresAt<=new Date())return res.status(401).json({errorCode:'INITIAL_PASSWORD_EXPIRED',message:'Your initial password has expired. Ask an administrator to issue a new one.'});
-    const hash=await bcrypt.hash(newPassword,10);
+    if(user.mustChangePassword && user.temporaryPasswordExpiresAt<=new Date())return res.status(401).json({errorCode:'INITIAL_PASSWORD_EXPIRED',message:'Your initial password has expired. Use Forgot password or contact an administrator.'});
+    await assertUncompromisedPassword(newPassword);
+    const hash=await bcrypt.hash(newPassword,12);
     const updated=await StaffUser.findOneAndUpdate({_id:user._id,isActive:true,deletedAt:null,passwordHash:user.passwordHash,tokenVersion:{$in:[user.tokenVersion || 0,...(!user.tokenVersion?[null]:[])]},credentialGeneration:{$in:[user.credentialGeneration || 0,...(!user.credentialGeneration?[null]:[])]},...(user.mustChangePassword?{temporaryPasswordExpiresAt:{$gt:new Date()}}:{})},{$set:{passwordHash:hash,mustChangePassword:false,temporaryPasswordExpiresAt:null,passwordChangedAt:new Date()},$unset:{credentialJob:1},$inc:{tokenVersion:1}},{returnDocument:'after'});
-    if(!updated){if(user.mustChangePassword&&user.temporaryPasswordExpiresAt<=new Date())return res.status(401).json({errorCode:'INITIAL_PASSWORD_EXPIRED',message:'Your initial password has expired. Ask an administrator to issue a new one.'});return res.status(409).json({message:'Your account changed. Please sign in again before changing the password.'});}
+    if(!updated){if(user.mustChangePassword&&user.temporaryPasswordExpiresAt<=new Date())return res.status(401).json({errorCode:'INITIAL_PASSWORD_EXPIRED',message:'Your initial password has expired. Use Forgot password or contact an administrator.'});return res.status(409).json({message:'Your account changed. Please sign in again before changing the password.'});}
     await finishStaffCredentialDelivery(updated._id,updated.credentialGeneration || 0).catch(()=>{});
     await AuditLog.create({actor:{type:updated.role,id:updated._id,name:updated.name},action:'STAFF_PASSWORD_CHANGED',details:{staffId:updated._id}});
+    await revokeAccountAccess(updated._id);
+    await authEvent(req,'AUTH_PASSWORD_CHANGED',updated);await securityAlert(updated,'AUTH_PASSWORD_CHANGED');
     const fresh=await createSession('staff',updated);setSessionCookie(res,'staff',fresh,12*3600000);
+    setSessionCookie(res,'staff_device','',0);
     return res.json({success:true,token:'cookie',csrf:(await AccessSession.findById(digest(fresh))).csrf,user:{id:updated._id,name:updated.name,email:updated.email,role:updated.role,preferredLanguage:updated.preferredLanguage || 'sw',mustChangePassword:false,currentActiveWorkload:updated.currentActiveWorkload,maxActiveWorkload:updated.maxActiveWorkload,isEligibleForAssignment:updated.isEligibleForAssignment}});
-  }catch{res.status(500).json({message:'Unable to change the password. Please retry.'});}
+  }catch(error){res.status(error.status||500).json({message:error.status?error.message:'Unable to change the password. Please retry.'});}
 });
 
 // Revoke Active Staff Session Tokens on Logout
 router.post('/logout', verifyStaffToken, async (req, res) => {
   try {
-    await AccessSession.deleteMany({kind:'staff',subjectId:String(req.user._id)});
+    await AccessSession.deleteOne({_id:req.accessSession._id,kind:'staff',subjectId:String(req.user._id)});
+    await authEvent(req,'AUTH_LOGOUT',req.user);
     setSessionCookie(res,'staff','',0);
     return res.status(200).json({
       success: true,
-      message: 'Logged out and active session tokens revoked',
+      message: 'Signed out of this session',
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to revoke session' });
