@@ -4,6 +4,7 @@ import {getJwtSecret} from '../middlewares/auth.middleware.js';
 import {consumeRateLimit} from '../middlewares/rateLimiter.js';
 import {sendNextSMS} from './smsService.js';
 import {sendEmail} from './emailService.js';
+import { isSafeMethod, verifySessionCsrf } from './csrfService.js';
 export const digest=value=>createHash('sha256').update(String(value)).digest('hex');
 export const contactFingerprint=user=>digest(`${user.email}|${user.phone}`);
 export const otpSink=new Map();
@@ -25,14 +26,16 @@ export async function createSession(kind,subject,{verifiedAt,scope,purpose}={}){
 export async function readSession(req,kind){
  const cookie=cookieValue(req,kind);const token=cookie || String(req.headers.authorization||'').replace(/^Bearer /,'');
  if(!/^[a-f0-9]{64}$/.test(token))throw Object.assign(new Error('Please sign in again'),{status:401});
- const session=await AccessSession.findOneAndUpdate({_id:digest(token),kind,expiresAt:{$gt:new Date()},idleUntil:{$gt:new Date()}},{$set:{idleUntil:new Date(Date.now()+1800000),lastSeenAt:new Date()}},{returnDocument:'after'});
- if(!session)throw Object.assign(new Error('Session expired or revoked'),{status:401});
- if(cookie && !['GET','HEAD','OPTIONS'].includes(req.method)){
-  const origin=req.headers.origin;
-  const allowed=[process.env.FRONTEND_URL,...(process.env.ALLOWED_ORIGINS||'').split(',')].filter(Boolean);
-  if(process.env.NODE_ENV!=='production')allowed.push('http://127.0.0.1:5177','http://localhost:5173');
-  if(!origin || !allowed.includes(origin) || req.headers['x-csrf-token']!==session.csrf)throw Object.assign(new Error('Request verification failed'),{status:403});
+ const active={_id:digest(token),kind,expiresAt:{$gt:new Date()},idleUntil:{$gt:new Date()}};
+ if(cookie && !isSafeMethod(req.method)){
+  const session=await AccessSession.findOne(active);
+  if(!session)throw Object.assign(new Error('Session expired or revoked'),{status:401});
+  verifySessionCsrf(req,session.csrf);
  }
+ // Rejected requests must not keep a session alive. Recheck revocation/expiry
+ // atomically when updating activity after CSRF validation.
+ const session=await AccessSession.findOneAndUpdate({...active,expiresAt:{$gt:new Date()},idleUntil:{$gt:new Date()}},{$set:{idleUntil:new Date(Date.now()+1800000),lastSeenAt:new Date()}},{returnDocument:'after'});
+ if(!session)throw Object.assign(new Error('Session expired or revoked'),{status:401});
  req.accessSession=session;return session;
 }
 export async function requireRecentVerification(req,res,next){if(!req.accessSession?.verifiedAt || Date.now()-new Date(req.accessSession.verifiedAt)>600000)return res.status(403).json({errorCode:'OTP_REQUIRED',message:'Verify your identity before continuing'});next();}

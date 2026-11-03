@@ -153,13 +153,14 @@ test('security alert worker claims messages once and does not retry unknown deli
 });
 
 test('production routes reject missing CAPTCHA configuration before login or recovery delivery', async () => {
-  const previous = process.env.NODE_ENV, secret = process.env.TURNSTILE_SECRET_KEY;
+  const previous = process.env.NODE_ENV, secret = process.env.TURNSTILE_SECRET_KEY, frontend = process.env.FRONTEND_URL;
   try {
     process.env.NODE_ENV = 'production'; delete process.env.TURNSTILE_SECRET_KEY;
+    process.env.FRONTEND_URL = 'http://127.0.0.1:5177';
     const user = await person();
     assert.equal((await call('/login', { email: user.email, password })).status, 503);
     assert.equal((await call('/recovery/request', { email: user.email })).status, 503);
     assert.equal(await AccessChallenge.countDocuments({ subjectId: String(user._id) }), 0);
     assert.equal(await AccessSession.countDocuments({ subjectId: String(user._id) }), 0);
-  } finally { process.env.NODE_ENV = previous; if (secret === undefined) delete process.env.TURNSTILE_SECRET_KEY; else process.env.TURNSTILE_SECRET_KEY = secret; }
+  } finally { process.env.NODE_ENV = previous; if (secret === undefined) delete process.env.TURNSTILE_SECRET_KEY; else process.env.TURNSTILE_SECRET_KEY = secret; if (frontend === undefined) delete process.env.FRONTEND_URL; else process.env.FRONTEND_URL = frontend; }
 });

@@ -1,3 +1,5 @@
+import csrfRoutes from './routes/csrf.routes.js';
+import { isAllowedOrigin, protectAuthenticationEntry } from './services/csrfService.js';
 import {authorizePrivatePhoto} from './services/privateMediaAccessService.js';
 import printerRoutes from './routes/printer.routes.js';
 import securityRoutes from './routes/security.routes.js';
@@ -30,24 +32,6 @@ import { signMediaPath, verifySignedMediaRequest } from './services/mediaSignSer
 const app = express();
 app.disable('x-powered-by');
 
-function isAllowedOrigin(origin) {
-  if (!origin) return true;
-  const configured = [
-    ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : []),
-    process.env.FRONTEND_URL || '',
-  ]
-    .map((item) => item.trim())
-    .filter(Boolean);
-
-  if (configured.includes(origin)) return true;
-
-  if (process.env.NODE_ENV !== 'production' && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) {
-    return true;
-  }
-
-  return false;
-}
-
 // Security headers & CORS allowlist
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -64,7 +48,7 @@ app.use((req, res, next) => {
 app.use(
   cors({
     origin(origin, callback) {
-      if (isAllowedOrigin(origin)) {
+      if (!origin || isAllowedOrigin(origin)) {
         return callback(null, true);
       }
       return callback(null, false);
@@ -239,10 +223,13 @@ app.use((req, res, next) => {
       const { message: _m, error: _e, details: _d, stack: _s, ...rest } = body;
       body = { ...rest, success: false, message: SAFE_SERVER_ERROR, requestId: req.requestId };
     }
+    if (body?.csrf) res.setHeader('Cache-Control', 'private, no-store');
     return json(sanitizeResponseNode(body));
   };
   next();
 });
+app.use('/api/csrf', csrfRoutes);
+app.use(['/api/staff/login', '/api/staff/otp', '/api/staff/recovery', '/api/client/request-otp', '/api/client/verify-otp', '/api/printer/invitations'], protectAuthenticationEntry);
 app.use('/api/printer',printerRoutes);
 app.use('/api/security',securityRoutes);
 app.use('/api/proofs', proofReaderRoutes);
@@ -279,6 +266,7 @@ app.use((err, req, res, next) => {
     success: false,
     message: err.code === 'LIMIT_FILE_SIZE' ? 'This endpoint accepts small PDFs only. Refresh the application to use resumable uploads up to 500 MB.' : err.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : err.message || 'Internal Server Error',
     requestId: req.requestId,
+    errorCode: err.code,
   });
 });
 

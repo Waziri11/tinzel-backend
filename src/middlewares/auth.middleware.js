@@ -73,7 +73,7 @@ export const verifyStaffToken = async (req, res, next) => {
     req.user = user;
     next();
   } catch (error) {
-    return await deny(error.status || 500,{ success: false, message: error.message || 'Authentication error' });
+    return await deny(error.status || 500,{ success: false, message: error.message || 'Authentication error', errorCode:error.code });
   }
 };
 
@@ -93,5 +93,5 @@ export const requireRoles = (...roles) => {
 export const verifyClientToken = async (req,res,next) => {
  try{const session=await readSession(req,'client');const order=await Order.findById(session.subjectId).select('_id trackingId clientWhatsApp');
  if(!order || session.contactFingerprint!==digest(`${order.trackingId}|${order.clientWhatsApp}`))throw new Error('Order session unavailable');req.clientAuth={orderId:order._id,trackingId:order.trackingId,role:'client'};next();
- }catch(error){res.status(error.status||401).json({message:error.message||'Client session expired'});}
+ }catch(error){res.status(error.status||401).json({message:error.message||'Client session expired',errorCode:error.code});}
 };

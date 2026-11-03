@@ -30,6 +30,20 @@ Only a recently SMS-verified administrator can assist an active manager or desig
 
 Self-service phone replacement requires verification of the current account phone and then the replacement phone. Administrator accounts cannot use assisted recovery through this screen; recovering an administrator who has lost their phone requires the organization's separate controlled recovery procedure. No unauthenticated phone-change or administrator bypass has been added.
 
+## CSRF protection
+
+Cookie-authenticated writes require the session's random CSRF token in `X-CSRF-Token` and a trusted `Origin`. Staff, client, and printer sessions have separate tokens. Validation uses a constant-time comparison; missing, malformed, or another session's token returns `403 CSRF_TOKEN_INVALID`. An absent or untrusted origin returns `403 CSRF_ORIGIN_INVALID`. Rejected requests do not extend session activity or execute the route's mutation. Explicit bearer authentication without a session cookie remains supported; a cookie takes precedence when both are supplied.
+
+`GET /api/csrf/staff`, `/api/csrf/client`, and `/api/csrf/printer` restore the token only for an existing live session. They create no sessions and return `Cache-Control: private, no-store`; all other token-bearing JSON responses are also non-cacheable. The frontend keeps tokens in memory, restores them before the first write after reload, shares concurrent restoration requests, and refreshes/retries once only after an explicit token rejection. Login/password changes provide the new session's token. Sign-out and rejected authentication clear the cached token. PDF uploads and photo-folder downloads use this handling too.
+
+Login, OTP entry, and password recovery run before an authenticated session exists. These endpoints accept JSON only and reject foreign browser origins and browser requests with a missing origin. Non-browser JSON clients without browser origin metadata remain supported. Public uploads using `X-Upload-Token`, signed provider webhooks, and bearer-only integrations retain their existing authentication contracts.
+
+Set `FRONTEND_URL` to the exact frontend origin (scheme, hostname, optional port; no path or trailing slash). Additional trusted frontend origins can be listed in comma-separated `ALLOWED_ORIGINS`; surrounding whitespace is ignored. CORS and CSRF share this allowlist. Localhost origins are automatically accepted only outside production. Deploy the backend with the token-restoration endpoint before deploying the updated frontend.
+
+Regression coverage includes absent/invalid/cross-session tokens, all unsafe HTTP methods and session kinds, cookie/bearer precedence, expiry/revocation, cache headers, origin checks, concurrent restoration, a single retry after another tab signs in, cancellation, token isolation, upload transport, folder downloads, and logout. Tests use disposable local databases and simulated providers; deployed behavior still requires a release check.
+
+Reference: [OWASP CSRF prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html).
+
 ## Release validation
 
 Local checks: 190 backend tests, 30 frontend tests, the production frontend build, and 11 browser tests against the production preview passed. Both repositories passed whitespace/diff checks.
