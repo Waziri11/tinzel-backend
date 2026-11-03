@@ -1,3 +1,4 @@
+import { trustedStaffVerification, rememberStaffVerification } from '../services/staffVerificationPolicy.js';
 import {createSession,setSessionCookie,issueChallenge,consumeChallenge,requireRecentVerification,contactFingerprint} from '../services/accessSessionService.js';
 import {AccessSession,AccessChallenge} from '../models/AccessSession.model.js';
 import {digest} from '../services/accessSessionService.js';
@@ -42,11 +43,15 @@ router.post('/login', loginRateLimiter, async (req, res) => {
     }
 
     if(user.mustChangePassword && (!user.temporaryPasswordExpiresAt || user.temporaryPasswordExpiresAt<=new Date()))return res.status(401).json({errorCode:'INITIAL_PASSWORD_EXPIRED',message:'Your initial password has expired. Ask an administrator to issue a new one.'});
+    let verifiedAt;
     if(['admin','manager'].includes(user.role) && !user.mustChangePassword){
-      const channel='sms';
-      return res.json({...await issueChallenge({subjectId:String(user._id),purpose:'login',channel,destination:user.phone,ip:req.ip,scope:{tokenVersion:user.tokenVersion||0,contactFingerprint:contactFingerprint(user)}}),otpRequired:true});
+      verifiedAt = await trustedStaffVerification(req, user);
+      if (!verifiedAt) {
+        const channel='sms';
+        return res.json({...await issueChallenge({subjectId:String(user._id),purpose:'login',channel,destination:user.phone,ip:req.ip,scope:{tokenVersion:user.tokenVersion||0,contactFingerprint:contactFingerprint(user)}}),otpRequired:true});
+      }
     }
-    const token = await generateToken(user);
+    const token = await generateToken(user, { verifiedAt });
     setSessionCookie(res,'staff',token,12*3600000);
 
     return res.status(200).json({
@@ -77,7 +82,9 @@ router.post('/otp/verify',async(req,res,next)=>{try{
  const challenge=await consumeChallenge(req.body.challengeId,req.body.code,'login',req.ip);
  const user=await StaffUser.findById(challenge.subjectId);
  if(challenge.channel!=='sms' || !user?.isActive || user.deletedAt || user.mustChangePassword || (user.tokenVersion||0)!==challenge.scope.tokenVersion || contactFingerprint(user)!==challenge.scope.contactFingerprint)return res.sendStatus(401);
- const token=await createSession('staff',user,{verifiedAt:new Date()});setSessionCookie(res,'staff',token,12*3600000);
+ const verifiedAt = new Date();
+ const token=await createSession('staff',user,{verifiedAt});setSessionCookie(res,'staff',token,12*3600000);
+ await rememberStaffVerification(req, res, user, verifiedAt);
  res.json({success:true,token:'cookie',csrf:(await AccessSession.findById(digest(token))).csrf,user:{...user.toObject(),id:user._id}});
 }catch(e){next(e);}});
 router.post('/otp/resend',async(req,res,next)=>{try{

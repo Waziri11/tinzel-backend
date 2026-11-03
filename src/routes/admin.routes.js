@@ -1,3 +1,6 @@
+import { STAFF_VERIFICATION_KEY, DEFAULT_STAFF_VERIFICATION_HOURS, validStaffVerificationHours } from '../services/staffVerificationPolicy.js';
+import { requireRecentVerification } from '../services/accessSessionService.js';
+import { TrustedStaffDevice } from '../models/TrustedStaffDevice.model.js';
 import staffManagementRoutes from './staffManagement.routes.js';
 import { Router } from 'express';
 import mongoose from 'mongoose';
@@ -253,6 +256,7 @@ const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 router.get('/config', async (req, res) => {
   try {
     const configs = await SystemConfig.find();
+    if (!configs.some(config => config.key === STAFF_VERIFICATION_KEY)) configs.push({ key: STAFF_VERIFICATION_KEY, value: DEFAULT_STAFF_VERIFICATION_HOURS });
     const simulatedNotifs = await getNotificationHistory({ limit: 50 });
     return res.status(200).json({ success: true, configs, simulatedNotifications: simulatedNotifs });
   } catch (error) {
@@ -261,6 +265,7 @@ router.get('/config', async (req, res) => {
 });
 
 const CONFIG_KEY_VALIDATORS = {
+  [STAFF_VERIFICATION_KEY]: validStaffVerificationHours,
   printer_preferred_language: (v) => ['en','sw'].includes(v),
   printer_whatsapp_phone: (v) => typeof v === 'string' && /^\+?[\d\s-]{9,20}$/.test(v.trim()),
   printer_name: (v) => typeof v === 'string' && v.trim().length <= 120,
@@ -271,7 +276,7 @@ const CONFIG_KEY_VALIDATORS = {
   default_max_workload: (v) => Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= 20,
 };
 
-router.put('/config', async (req, res) => {
+router.put('/config', (req, res, next) => req.body?.key === STAFF_VERIFICATION_KEY ? requireRecentVerification(req, res, next) : next(), async (req, res) => {
   try {
     const { key, value, description } = req.body || {};
     if (typeof key !== 'string' || !Object.prototype.hasOwnProperty.call(CONFIG_KEY_VALIDATORS, key)) {
@@ -292,6 +297,7 @@ router.put('/config', async (req, res) => {
       },
       { upsert: true, new: true }
     );
+    if (key === STAFF_VERIFICATION_KEY && cleanValue === 0) await TrustedStaffDevice.deleteMany({});
     await AuditLog.create({
       actor: { type: req.user.role, id: req.user._id, name: req.user.name },
       action: 'SYSTEM_CONFIG_UPDATED',
