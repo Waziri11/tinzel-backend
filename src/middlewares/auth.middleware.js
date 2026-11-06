@@ -1,6 +1,6 @@
 import {recordSecurityEvent} from '../services/securityAuditService.js';
 import {roleAllowed} from '../services/authorizationService.js';
-import {createSession,readSession,contactFingerprint,digest} from '../services/accessSessionService.js';
+import {createSession,readSession,matchesClientSession,contactFingerprint} from '../services/accessSessionService.js';
 import {Order} from '../models/Order.model.js';
 import jwt from 'jsonwebtoken';
 import { createHmac, randomBytes } from 'node:crypto';
@@ -91,7 +91,7 @@ export const requireRoles = (...roles) => {
 };
 
 export const verifyClientToken = async (req,res,next) => {
- try{const session=await readSession(req,'client');const order=await Order.findById(session.subjectId).select('_id trackingId clientWhatsApp');
- if(!order || session.contactFingerprint!==digest(`${order.trackingId}|${order.clientWhatsApp}`))throw new Error('Order session unavailable');req.clientAuth={orderId:order._id,trackingId:order.trackingId,role:'client'};next();
+ try{const session=await readSession(req,'client');const order=await Order.findById(session.subjectId).select('_id trackingId clientWhatsApp clientAccessVersion');
+ if(!matchesClientSession(session, order))throw new Error('Order session unavailable');req.clientAuth={orderId:order._id,trackingId:order.trackingId,role:'client'};next();
  }catch(error){res.status(error.status||401).json({message:error.message||'Client session expired',errorCode:error.code});}
 };

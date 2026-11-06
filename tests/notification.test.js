@@ -142,7 +142,7 @@ test('Milestone Multi-Channel: sends only WhatsApp if clientEmail is not present
   assert.equal(notifs[0].to, '+255788990011');
 });
 
-test('Client OTP: dispatches OTP to both WhatsApp and Email', async () => {
+test('Client OTP: sends only SMS to the registered number and redacts the stored code', async () => {
   clearSimulatedNotifications();
 
   const mockOrder = {
@@ -152,19 +152,13 @@ test('Client OTP: dispatches OTP to both WhatsApp and Email', async () => {
     clientEmail: 'rehema@example.com',
   };
 
-  const results = await notifyClientOtp(mockOrder, '991122');
-  assert.equal(results.length, 2);
-
+  const result = await notifyClientOtp(mockOrder, '991122');
+  assert.equal(result.channel, 'sms');
   const notifs = getSimulatedNotifications();
-  assert.equal(notifs.length, 2);
-  const wa = notifs.find((n) => n.channel === 'whatsapp');
-  const mail = notifs.find((n) => n.channel === 'email');
-
-  // OTP is delivered to the provider, but stored history/log entries must never retain the raw code.
-  assert.ok(wa && mail);
-  assert.equal(wa.message.includes('991122'), false);
-  assert.equal(mail.message.includes('991122'), false);
-  assert.ok(wa.message.includes('[REDACTED-OTP]'));
+  assert.equal(notifs.length, 1);
+  assert.equal(notifs[0].to, mockOrder.clientWhatsApp);
+  assert.doesNotMatch(notifs[0].message, /991122/);
+  assert.match(notifs[0].message, /\[REDACTED-OTP\]/);
 });
 
 test('Twilio Webhook: updateNotificationDeliveryStatus updates status and error details', async () => {

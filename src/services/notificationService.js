@@ -135,7 +135,7 @@ export const NOTIFICATION_TRIGGER_CATALOG = [
     description: 'Triggered when a client requests a one-time password to access the tracking portal.',
     category: 'Security',
     recipient: 'Client',
-    defaults: { enabled: true, in_system: true, email: true, sms: true },
+    defaults: { enabled: true, in_system: false, email: false, sms: true },
   },
 ];
 
@@ -287,6 +287,7 @@ export const resetNotificationSettings = async (updatedBy = null) => {
  * Evaluates whether a given notification template and channel are enabled.
  */
 export const isTriggerChannelEnabled = (template, channel, settings = inMemoryNotificationSettings) => {
+  if (template === 'client_otp' && channel !== 'sms') return false;
   const normalizedChannel = channel === 'whatsapp' ? 'sms' : channel;
   if (settings?.channels && settings.channels[normalizedChannel] === false) {
     return false;
@@ -382,6 +383,7 @@ export const sendNotification = async ({
 }) => {
   await refreshProviderSettings();
   const timestamp = new Date().toISOString();
+  const sensitive = template === 'staff_credentials' || template === 'client_otp';
   const logEntry = {
     id: `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     to,
@@ -427,7 +429,7 @@ export const sendNotification = async ({
       subject: subject || title || `Taarifa ya Tinzel: ${template}`,
       html,
       text: message,
-      sensitive: template === 'staff_credentials',
+      sensitive,
     });
 
     logEntry.mode = mailResult.mode;
@@ -472,23 +474,23 @@ export const sendNotification = async ({
         logEntry.status = isRejected ? 'failed' : firstMsg?.messageId || firstMsg?.sendReference ? 'sent' : 'unconfirmed';
         logEntry.retryable = false;
         if (isRejected) {
-          logEntry.error =
+          logEntry.error = sensitive ? 'Credential delivery failed.' :
             firstMsg?.status?.description || firstMsg?.status?.name || 'NextSMS rejected message';
         }
         logEntry.metadata = {
           ...metadata,
           senderId,
-          nextSmsStatus: firstMsg?.status || null,
+          nextSmsStatus: sensitive ? undefined : firstMsg?.status || null,
           smsCount: firstMsg?.smsCount ?? 1,
           price: firstMsg?.price ?? null,
         };
       } catch (nextErr) {
-        console.warn(`[NextSMS Error] ${template === 'staff_credentials' ? 'Credential delivery failed.' : nextErr.message}`);
+        console.warn(`[NextSMS Error] ${sensitive ? 'Credential delivery failed.' : nextErr.message}`);
         logEntry.channel = 'sms';
         logEntry.mode = 'nextsms_failed';
         logEntry.status = nextErr.uncertain ? 'unconfirmed' : 'failed';
         logEntry.retryable = nextErr.retryable === true;
-        logEntry.error = template === 'staff_credentials' ? 'Credential delivery failed.' : nextErr.message;
+        logEntry.error = sensitive ? 'Credential delivery failed.' : nextErr.message;
       }
     } else if (client) {
       const formattedRecipient = normalizePhoneNumber(to);
@@ -521,7 +523,7 @@ export const sendNotification = async ({
         logEntry.mode = 'twilio_live';
         logEntry.status = 'sent';
       } catch (error) {
-        console.warn(`[Twilio Error - ${channel.toUpperCase()}] ${template === 'staff_credentials' ? 'Credential delivery failed.' : redactProviderText(error.message)}`);
+        console.warn(`[Twilio Error - ${channel.toUpperCase()}] ${sensitive ? 'Credential delivery failed.' : redactProviderText(error.message)}`);
 
         // Automatic fallback to SMS if WhatsApp fails
         const shouldFallback =
@@ -557,7 +559,7 @@ export const sendNotification = async ({
         } else {
           logEntry.mode = 'twilio_failed_fallback_simulated';
           logEntry.status = 'failed';
-          logEntry.error = template === 'staff_credentials' ? 'Credential delivery failed.' : redactProviderText(error.message);
+          logEntry.error = sensitive ? 'Credential delivery failed.' : redactProviderText(error.message);
           logEntry.status = !error.status || error.status >= 500 ? 'unconfirmed' : 'failed';
           logEntry.retryable = error.status === 429;
         }
@@ -1607,82 +1609,16 @@ export const notifyOrderClosed = async (order, deliveryDetails = {}) => {
   });
 };
 
-/**
- * Dispatch Client Login OTP via WhatsApp, Email (if available), and In-System log.
- */
-export const notifyClientOtp = async (order, otpCode) => {
-  const notifications = [];
-  const eventGroupId = `evt-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-  const sharedMeta = {
-    trackingId: order.trackingId,
-    channelsSummary: {
-      in_system: true,
-      email: Boolean(order.clientEmail),
-      phone: Boolean(order.clientWhatsApp),
-      emailAddress: order.clientEmail || '',
-      phoneNumber: order.clientWhatsApp || '',
-    },
-  };
-
-  const otpContent = clientOtpMessage(order, otpCode);
-  const message = otpContent.message;
-  const redactedSystemMessage = `Namba ya siri (OTP) ya kuingia kwenye mfumo wa Tinzel imetumwa kwa mteja (${order.clientName || order.trackingId}). [REDACTED-OTP]`;
-
-  const inSystemPromise = recordInSystemNotification({
-    recipient: order.clientName || order.clientWhatsApp,
-    recipientName: order.clientName,
-    recipientRole: 'manager',
-    eventGroupId,
-    title: `OTP ya Mteja Imetumwa: ${order.trackingId || order.clientName}`,
-    template: 'client_otp',
-    message: redactedSystemMessage,
-    orderId: order._id,
-    emailTo: order.clientEmail,
-    phoneTo: order.clientWhatsApp,
-    metadata: sharedMeta,
-  });
-
-  if (order.clientWhatsApp) {
-    notifications.push(
-      sendNotification({
-        to: order.clientWhatsApp,
-        recipientName: order.clientName,
-        recipientRole: 'client',
-        eventGroupId,
-        title: otpContent.title,
-        channel: 'whatsapp',
-        template: 'client_otp',
-        message,
-        orderId: order._id,
-        metadata: sharedMeta,
-      })
-    );
-  }
-
-  if (order.clientEmail) {
-    const templateData = { ...otpContent, text: otpContent.message };
-
-    notifications.push(
-      sendNotification({
-        to: order.clientEmail,
-        recipientName: order.clientName,
-        recipientRole: 'client',
-        eventGroupId,
-        title: templateData.title,
-        channel: 'email',
-        template: 'client_otp',
-        subject: templateData.title,
-        html: templateData.html,
-        message: templateData.text,
-        orderId: order._id,
-        metadata: sharedMeta,
-      })
-    );
-  }
-
-  const [, results] = await Promise.all([inSystemPromise, Promise.allSettled(notifications)]);
-  return results.map((r) => (r.status === 'fulfilled' ? r.value : { status: 'failed', error: r.reason }));
-};
+// Tracking codes are delivered only to the phone saved on the submission.
+export const notifyClientOtp = (order, otpCode) => sendNotification({
+  to: order.clientWhatsApp,
+  recipientName: order.clientName,
+  recipientRole: 'client',
+  channel: 'sms',
+  template: 'client_otp',
+  orderId: order._id,
+  ...clientOtpMessage(order, otpCode),
+});
 
 /**
  * Schedules a notification task in the background on Vercel/HTTP routes without
@@ -2123,6 +2059,7 @@ export const resendNotification = async (notificationId, { channelOverride = nul
     throw new Error('Notification record not found');
   }
 
+  if (original.template === 'client_otp') throw Object.assign(new Error('Request a fresh SMS code from order tracking.'), { status: 409 });
   if(original.metadata?.staffCredential)throw Object.assign(new Error('Use the administrator credential-delivery action for this message.'),{status:403});
   const targetChannel = channelOverride || original.channel;
   const result = await sendNotification({

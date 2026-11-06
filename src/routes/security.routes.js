@@ -18,7 +18,17 @@ router.get('/downloads',requireRoles('admin','manager'),async(req,res,next)=>{tr
  if(req.query.before && !Number.isNaN(Date.parse(req.query.before)))query.createdAt={$lt:new Date(req.query.before)};
  res.json({events:await SecurityEvent.find(query).sort({createdAt:-1}).limit(100).lean()});
 }catch(e){next(e);}});
-router.post('/orders/:id/revoke-client',requireRoles('admin','manager'),requireRecentVerification,async(req,res,next)=>{try{const order=await findOrder(req.params.id);if(!order)return res.sendStatus(404);await AccessSession.deleteMany({kind:'client',subjectId:String(order._id)});await recordSecurityEvent(req,{action:'CLIENT_SESSIONS_REVOKED',orderId:req.params.id});res.json({success:true});}catch(e){next(e);}});
+router.post('/orders/:id/revoke-client', requireRoles('admin','manager'), requireRecentVerification, async (req, res, next) => {
+  try {
+    const order = await findOrder(req.params.id);
+    if (!order) return res.sendStatus(404);
+    // Invalidate in-flight sign-ins as well as sessions already issued.
+    await Order.updateOne({ _id: order._id }, { $inc: { clientAccessVersion: 1, __v: 1 }, $unset: { otp: 1 } });
+    await AccessSession.deleteMany({ kind: { $in: ['client', 'tracking_device'] }, subjectId: String(order._id) });
+    await recordSecurityEvent(req, { action: 'CLIENT_SESSIONS_REVOKED', orderId: req.params.id });
+    res.json({ success: true });
+  } catch (error) { next(error); }
+});
 router.get('/orders/:id/download/:version',async(req,res,next)=>{try{
  const order=await findOrder(req.params.id);
  if(!permits(req.user,'magazine.download_original',order)){await recordSecurityEvent(req,{action:'DOWNLOAD_DENIED',orderId:req.params.id,outcome:'denied'});return res.sendStatus(403);}

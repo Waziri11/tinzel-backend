@@ -283,7 +283,9 @@ const orderSchema = new mongoose.Schema(
       },
       recipientFeedback: String,
     },
+    clientAccessVersion: { type: Number, default: 0 },
     otp: {
+      binding: String,
       code: String,
       expiresAt: Date,
       attempts: { type: Number, default: 0 },

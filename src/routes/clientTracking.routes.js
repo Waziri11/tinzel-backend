@@ -1,16 +1,16 @@
-import {setSessionCookie,digest} from '../services/accessSessionService.js';
+import {setSessionCookie,cookieValue,digest} from '../services/accessSessionService.js';
 import {AccessSession} from '../models/AccessSession.model.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import { assertNoPendingAnnotations, submitAnnotations } from '../services/proofReaderService.js';
 import { Router } from 'express';
-import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { Notification } from '../models/Notification.model.js';
 import mongoose from 'mongoose';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
 import { verifyClientToken, generateClientToken, getJwtSecret } from '../middlewares/auth.middleware.js';
 import { createRateLimiter } from '../middlewares/rateLimiter.js';
-import { sendNotification, notifyClientOtp } from '../services/notificationService.js';
+import { notifyClientOtp } from '../services/notificationService.js';
 import { sanitizeOrderForClient } from '../services/workflowService.js';
 import { streamDraftPdf } from '../services/draftFileService.js';
 import { assertExpectedVersion, createRevisionRequest, normalizeCorrectionItems } from '../services/revisionRequestService.js';
@@ -79,7 +79,7 @@ const verifyOtpLimiter = createRateLimiter({
 });
 
 const UNIFORM_LOOKUP_ERROR =
-  'Unable to verify tracking details. Please check your Tracking/Submission ID and registered WhatsApp number.';
+  'Unable to verify tracking details. Please check your Tracking/Submission ID and registered phone number.';
 
 export function normalizeClientPhone(rawPhone) {
   const digits = String(rawPhone || '')
@@ -105,14 +105,48 @@ async function findOrderByTrackingOrSubmissionId(rawId) {
   });
 }
 
+const DEVICE_TRUST_MS = 30 * 24 * 60 * 60 * 1000;
+const deviceCookie = orderId => `tracking_${orderId}`;
+const trackingBinding = order => digest(JSON.stringify([String(order._id), normalizeClientPhone(order.clientWhatsApp), order.clientAccessVersion || 0]));
+
+async function trustsSubmission(req, order) {
+  const token = cookieValue(req, deviceCookie(order._id));
+  if (!/^[a-f0-9]{64}$/.test(token || '')) return false;
+  return AccessSession.exists({
+    _id: digest(token), kind: 'tracking_device', subjectId: String(order._id),
+    contactFingerprint: trackingBinding(order), expiresAt: { $gt: new Date() },
+  });
+}
+
+async function startTrackingSession(res, order, remember = false) {
+  const token = await generateClientToken(order);
+  const session = await AccessSession.findById(digest(token));
+  if (remember) {
+    const deviceToken = randomBytes(32).toString('hex');
+    await AccessSession.create({
+      _id: digest(deviceToken), kind: 'tracking_device', subjectId: String(order._id),
+      contactFingerprint: trackingBinding(order), expiresAt: new Date(Date.now() + DEVICE_TRUST_MS),
+    });
+    setSessionCookie(res, deviceCookie(order._id), deviceToken, DEVICE_TRUST_MS);
+  }
+  setSessionCookie(res, 'client', token, 8 * 3600000);
+  return res.json({ success: true, clientToken: 'cookie', csrf: session.csrf });
+}
+
 // Request 6-Digit OTP for Client Tracking
 router.post('/request-otp', requestOtpLimiter, async (req, res) => {
   try {
     const { trackingId, clientWhatsApp } = req.body;
+    // A passive return visit may restore an existing grant, but never sends SMS.
+    if (req.body.resumeOnly === true) {
+      const order = await findOrderByTrackingOrSubmissionId(trackingId);
+      if (!order || !await trustsSubmission(req, order)) return res.json({ success: false });
+      return await startTrackingSession(res, order);
+    }
     if (!trackingId || !clientWhatsApp) {
       return res.status(400).json({
         success: false,
-        message: 'Both Tracking ID and WhatsApp number are required',
+        message: 'Both Tracking ID and phone number are required',
       });
     }
 
@@ -127,36 +161,25 @@ router.post('/request-otp', requestOtpLimiter, async (req, res) => {
       });
     }
 
+    if (await trustsSubmission(req, order)) return await startTrackingSession(res, order);
+
     // Generate cryptographically random 6-digit OTP and store only its keyed HMAC-SHA256 hash
     const otpCode = randomInt(100000, 1000000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-    order.otp = {
-      code: hashOtpCode(order._id, otpCode),
-      expiresAt,
-      attempts: 0,
-    };
+    const sms = await notifyClientOtp(order, otpCode);
+    const accepted = ['sent', 'delivered'].includes(sms.status)
+      || (process.env.NODE_ENV !== 'production' && sms.status === 'simulated');
+    if (!accepted) return res.status(502).json({ success: false, message: 'Unable to send the SMS code. Please try again.' });
+
+    order.otp = { code: hashOtpCode(order._id, otpCode), binding: trackingBinding(order), expiresAt, attempts: 0 };
     await order.save();
-
-    // Send OTP via multi-channel notification service (WhatsApp & Email if available)
-    const dispatchResults = await notifyClientOtp(order, otpCode);
-
-    const hasAnySuccess = (dispatchResults || []).some(
-      (res) => res.status === 'sent' || res.status === 'delivered' || res.status === 'simulated'
-    );
-
-    if (!hasAnySuccess && (dispatchResults || []).length > 0) {
-      return res.status(502).json({
-        success: false,
-        message: 'Unable to deliver verification code. Our messaging provider is unreachable. Please contact support.',
-      });
-    }
-
     return res.status(200).json({
       success: true,
-      message: 'OTP sent to your registered contact channel',
+      channel: 'sms',
+      message: 'Code sent by SMS',
       // For local development convenience, provide otp in dev mode
-      devOtp: process.env.NODE_ENV !== 'production' ? otpCode : undefined,
+      devOtp: process.env.NODE_ENV !== 'production' && sms.status === 'simulated' ? otpCode : undefined,
     });
   } catch (error) {
     return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message });
@@ -172,7 +195,7 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res) => {
     }
 
     const order = await findOrderByTrackingOrSubmissionId(trackingId);
-    if (!order || !order.otp || !order.otp.code) {
+    if (!order || !order.otp || !order.otp.code || order.otp.binding !== trackingBinding(order)) {
       return res.status(400).json({ success: false, message: 'No active OTP request found' });
     }
 
@@ -210,20 +233,23 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res) => {
     order.otp = undefined;
     await order.save();
 
-    const clientToken = await generateClientToken(order);
-    setSessionCookie(res,'client',clientToken,8*3600000);
-
-    return res.status(200).json({
-      success: true,
-      clientToken:'cookie',csrf:(await AccessSession.findById(digest(clientToken))).csrf,
-      message: 'Access granted',
-    });
+    return await startTrackingSession(res, order, true);
   } catch (error) {
     return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message });
   }
 });
 
-router.post('/logout',verifyClientToken,async(req,res)=>{await AccessSession.deleteOne({_id:req.accessSession._id});setSessionCookie(res,'client','',0);res.json({success:true});});
+router.post('/logout', verifyClientToken, async (req, res) => {
+  if (req.body?.forgetDevice === true) {
+    const name = deviceCookie(req.clientAuth.orderId);
+    const token = cookieValue(req, name);
+    if (token) await AccessSession.deleteOne({ _id: digest(token), kind: 'tracking_device', subjectId: String(req.clientAuth.orderId) });
+    setSessionCookie(res, name, '', 0);
+  }
+  await AccessSession.deleteOne({ _id: req.accessSession._id });
+  setSessionCookie(res, 'client', '', 0);
+  res.json({ success: true });
+});
 
 // Get sanitized order details for client portal
 router.get('/order', verifyClientToken, async (req, res) => {
