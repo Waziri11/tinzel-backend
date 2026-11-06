@@ -58,6 +58,35 @@ async function req(path, role = 'manager', method = 'GET', body) {
   });
   return { status: res.status, data: await res.json() };
 }
+test('manager can manage magazine forms through the same endpoints as admin', async () => {
+  const forms = '/admin/forms';
+  const draft = {
+    title: 'Manager edition',
+    coverImageUrl: '/cover.jpg',
+    sections: [{ sectionId: 'story', title: 'Story' }],
+    fields: [{ sectionId: 'story', fieldId: 'headline', type: 'text', label: 'Headline' }],
+    lipaNambaInstructions: { tillNumber: 'TEST', accountName: 'Test', instructions: 'Test only' },
+  };
+  const created = await req(forms, 'manager', 'POST', draft);
+  assert.equal(created.status, 201, JSON.stringify(created.data));
+  const id = created.data.form._id;
+  const path = `${forms}/${id}`;
+  for (const role of ['admin', 'manager']) {
+    const list = await req(forms, role);
+    assert.equal(list.status, 200);
+    assert.ok(list.data.forms.some(form => form._id === id));
+  }
+  assert.equal((await req(forms, 'designer')).status, 403);
+  assert.equal((await req(path, 'designer', 'DELETE')).status, 403);
+  assert.equal((await req(path, 'manager', 'PUT', { ...draft, title: 'Updated edition' })).status, 200);
+  const published = await req(`${path}/publish`, 'manager', 'POST', {});
+  assert.equal(published.status, 200, JSON.stringify(published.data));
+  assert.equal(published.data.form.isActive, true);
+  const archived = await req(path, 'manager', 'DELETE');
+  assert.equal(archived.status, 200);
+  assert.equal(archived.data.form.isArchived, true);
+});
+
 test('manager lists designers only and cannot target privileged users or delete', async () => {
   const r = await req('/manager/staff');
   assert.equal(r.status, 200);
