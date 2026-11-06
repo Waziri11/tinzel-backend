@@ -16,7 +16,7 @@ import { MagazineForm } from '../src/models/MagazineForm.model.js';
 import { generateToken } from '../src/middlewares/auth.middleware.js';
 import { resetNotificationSettings, updateNotificationSettings, sendNotification } from '../src/services/notificationService.js';
 import { getTransporter } from '../src/services/emailService.js';
-import { initialCredentialFields, decryptInitialPassword, runStaffCredentials, generateInitialPassword, passwordErrors, retryStaffCredentials } from '../src/services/staffCredentialService.js';
+import { initialCredentialFields, decryptInitialPassword, runStaffCredentials, generateInitialPassword, retryStaffCredentials } from '../src/services/staffCredentialService.js';
 import { autoAssignOrder, manualAssignOrder } from '../src/services/assignmentService.js';
 let mongo,server,base,admin,adminToken,managerToken,form;
 const encryptionKey=randomBytes(32).toString('base64');
@@ -45,7 +45,7 @@ async function pending(extra={}) {const id=new mongoose.Types.ObjectId(),fields=
 const makeOrder=()=>Order.create({submissionId:`SUB-${new mongoose.Types.ObjectId()}`,formId:form._id,clientName:'Test client',clientWhatsApp:'0712000011',status:'payment_verified'});
 
 test('generated initial passwords are exactly eight unambiguous characters and satisfy every character class',()=>{
- const values=new Set();for(let i=0;i<200;i++){const password=generateInitialPassword();assert.equal(password.length,8);assert.ok(passwordErrors(password).length>0, 'Temporary credentials must be replaced with a full-length passphrase');assert.doesNotMatch(password,/[0O1lI]/);values.add(password);}assert.equal(values.size,200);
+ const values=new Set();for(let i=0;i<200;i++){const password=generateInitialPassword();assert.equal(password.length,8);for(const group of [/[A-Z]/,/[a-z]/,/[0-9]/,/[!@#$]/])assert.match(password,group);assert.doesNotMatch(password,/[0O1lI]/);values.add(password);}assert.equal(values.size,200);
 });
 
 test('admin creation, notification, restricted first login and password change complete the onboarding journey',async()=>{
@@ -64,14 +64,14 @@ test('admin creation, notification, restricted first login and password change c
  const available=(await request('/manager/designers')).data.designers;assert.ok(available.every(person=>String(person._id)!==String(user._id)));
  await assert.rejects(()=>manualAssignOrder(order,user._id,'Pending onboarding',admin));
  const assignment=await autoAssignOrder(order,admin);assert.equal(assignment.queued,true);
- assert.equal((await request('/staff/change-password',{currentPassword:password,newPassword:'weak'},login.data.token)).status,400);
- assert.equal((await request('/staff/change-password',{currentPassword:'Wrong!123',newPassword:'Chosen long passphrase!7'},login.data.token)).status,400);
+ assert.equal((await request('/staff/change-password',{currentPassword:password,newPassword:'Cedar!7'},login.data.token)).status,400);
+ assert.equal((await request('/staff/change-password',{currentPassword:'Wrong!123',newPassword:'Cedar!72'},login.data.token)).status,400);
  assert.equal((await request('/staff/change-password',{currentPassword:password,newPassword:password},login.data.token)).status,400);
- const changed=await request('/staff/change-password',{currentPassword:password,newPassword:'Chosen long passphrase!7'},login.data.token);assert.equal(changed.status,200,JSON.stringify(changed.data));assert.equal(changed.data.user.mustChangePassword,false);
- const saved=await StaffUser.findById(user._id).select('+credentialJob');assert.equal(saved.credentialJob,null);assert.equal(saved.temporaryPasswordExpiresAt,null);assert.equal(await saved.comparePassword('Chosen long passphrase!7'),true);
+ const changed=await request('/staff/change-password',{currentPassword:password,newPassword:'Cedar!72'},login.data.token);assert.equal(changed.status,200,JSON.stringify(changed.data));assert.equal(changed.data.user.mustChangePassword,false);
+ const saved=await StaffUser.findById(user._id).select('+credentialJob');assert.equal(saved.credentialJob,null);assert.equal(saved.temporaryPasswordExpiresAt,null);assert.equal(await saved.comparePassword('Cedar!72'),true);
  assert.equal((await request('/designer/orders',undefined,changed.data.token)).status,200);assert.equal((await request('/staff/me',undefined,login.data.token)).status,401);
  assert.equal((await request('/staff/login',{email:user.email,password},null)).status,401);
- assert.equal((await request('/staff/login',{email:user.email,password:'Chosen long passphrase!7'},null)).status,200);
+ assert.equal((await request('/staff/login',{email:user.email,password:'Cedar!72'},null)).status,200);
  const result=await manualAssignOrder(order,user._id,'Setup completed',admin);assert.equal(result.success,true);
 });
 

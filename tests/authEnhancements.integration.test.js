@@ -87,8 +87,8 @@ test('password reset rejects stale account/contact state, deactivation, expired 
 });
 test('weak password rejection keeps recovery grant usable and expired initial credentials can be recovered', async () => {
   const user = await person('designer', { mustChangePassword: true, temporaryPasswordExpiresAt: new Date(0) }), token = await grant(user);
-  assert.equal((await call('/recovery/reset', { resetToken: token, newPassword: 'short' })).status, 400);
-  assert.equal((await call('/recovery/reset', { resetToken: token, newPassword: replacement })).status, 200);
+  assert.equal((await call('/recovery/reset', { resetToken: token, newPassword: 'Cedar!7' })).status, 400);
+  assert.equal((await call('/recovery/reset', { resetToken: token, newPassword: 'Cedar!72' })).status, 200);
   const updated = await StaffUser.findById(user._id); assert.equal(updated.mustChangePassword, false); assert.equal(updated.temporaryPasswordExpiresAt, null);
 });
 test('session inventory is private; revocation enforces ownership, CSRF, and recent SMS verification', async () => {
