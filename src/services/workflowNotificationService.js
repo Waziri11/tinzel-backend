@@ -163,6 +163,10 @@ export async function runWorkflowNotifications({limit=20,orderId=null,send=sendN
       if(!tasks) {
         const recipients=await recipientsFor(order,event);
         tasks=recipients.flatMap(person=>['in_system','sms',...(person.email?['email']:[]),...(person.role==='printer'?['whatsapp']:[])].map(channel=>({...person,channel})));
+        // Show new submissions in every inbox before waiting on SMS or email.
+        if (event.type === 'order_submitted') {
+          tasks = [...tasks.filter(task => task.channel === 'in_system'), ...tasks.filter(task => task.channel !== 'in_system')];
+        }
         await setEvent(saved._id,event.key,owner,{tasks});
       }
       const pending=[];

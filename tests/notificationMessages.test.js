@@ -28,16 +28,16 @@ test('production protected printer links cannot use a loopback request origin', 
   assert.equal(notificationBackendUrl('http://127.0.0.1:8888'),'https://tinzel-backend.stryxis.com');
 });
 
-test('created and reissued credentials explain every staff role in each language without localhost links', () => {
+test('created and reissued credentials contain only the sign-in essentials in both languages', () => {
   process.env.FRONTEND_URL='http://localhost:5173';
   for(const preferredLanguage of ['en','sw'])for(const role of ['admin','manager','designer'])for(const reason of ['created','reissue']) {
-    const user={name:'Asha <Test>',email:'asha@example.test',role,preferredLanguage,temporaryPasswordExpiresAt:new Date('2026-11-02T09:00:00Z'),credentialGeneration:1,credentialJob:{reason}};
-    const content=staffCredentialMessage(user,'Example!7','email');
-    for(const value of [user.name,user.email,'Example!7','https://tinzel.stryxis.com/staff','EAT','24'])assert.ok(content.message.includes(value));
-    assert.match(content.message,preferredLanguage==='en'?/Role: .+\nResponsibilities: .+/ : /Wadhifa: .+\nMajukumu: .+/);
-    assert.match(content.message,preferredLanguage==='en'?/before starting work/:/kabla ya kuanza kazi/);
-    if(reason==='reissue')assert.match(content.message,preferredLanguage==='en'?/previous password no longer works/:/Nenosiri la zamani halitumiki/);
-    assert.ok(!content.html.includes('Asha <Test>'));assert.ok(content.html.includes('Asha &lt;Test&gt;'));assert.doesNotMatch(content.message,/localhost/);
+    const user={name:'Asha',email:'asha@example.test',role,preferredLanguage,temporaryPasswordExpiresAt:new Date('2026-11-02T09:00:00Z'),credentialGeneration:1,credentialJob:{reason}};
+    const content=staffCredentialMessage(user,'Example<&7','email');
+    for(const value of [user.email,'Example<&7','https://tinzel.stryxis.com/staff','EAT'])assert.ok(content.message.includes(value));
+    assert.doesNotMatch(content.message,/Responsibilities|Role:|Majukumu|Wadhifa/);
+    assert.match(content.message,preferredLanguage==='en'?/set your password/:/weka nenosiri lako/);
+    if(reason==='reissue')assert.match(content.title,preferredLanguage==='en'?/New Tinzel password/:/Nenosiri jipya/);
+    assert.ok(!content.html.includes('Example<&7'));assert.ok(content.html.includes('Example&lt;&amp;7'));assert.doesNotMatch(content.message,/localhost/);
   }
 });
 
@@ -46,13 +46,12 @@ test('handoff messages identify the customer and order and distinguish designer 
   const event={version:3,revisionId:'round-2'};
   for(const lang of ['en','sw'])for(const type of ['client_revision_requested','client_approved','printing_in_progress','order_closed']) {
     const content=workflowMessage(type,order,event,{name:'Manager A',role:'manager',channel:'sms'},lang,'https://tinzel.stryxis.com/staff/post-design');
-    for(const value of ['Manager A','Neema','SUB-99','TNZ-99','Birthday Magazine'])assert.ok(content.message.includes(value));
-    assert.match(content.message,lang==='en'?/Role: Manager/:/Wadhifa: Meneja/);
-    if(type==='client_approved')assert.match(content.message,lang==='en'?/assigned designer must prepare/:/Mbunifu aliyekabidhiwa anatakiwa/);
-    if(type==='client_revision_requested')assert.match(content.message,lang==='en'?/Correction round: 2\nCorrection items: 2/:/Duru ya marekebisho: 2\nVipengele vya marekebisho: 2/);
+    for(const value of ['Neema','TNZ-99','Birthday Magazine']) assert.ok(content.message.includes(value));
+    assert.doesNotMatch(content.message,/Manager A|SUB-99|Role:|Wadhifa:|Responsibilities|Majukumu/);
+    if(type==='client_approved') assert.match(content.message,lang==='en'?/customer approved version 3/:/Mteja ameidhinisha toleo la 3/);
   }
   const designer=workflowMessage('client_approved',order,event,{name:'Designer A',role:'designer'},'en','https://tinzel.stryxis.com/staff/design/orders/99');
-  assert.match(designer.message,/As the assigned designer, prepare/);
+  assert.match(designer.message,/Upload the print file/);
 });
 
 test('printer SMS directs to WhatsApp, while WhatsApp includes specifications and the protected link', () => {
@@ -67,8 +66,8 @@ test('printer SMS directs to WhatsApp, while WhatsApp includes specifications an
 test('customer OTP messages use the saved language and give the order, public sign-in link, expiry and secrecy instruction', () => {
   for(const clientPreferredLanguage of ['en','sw']) {
     const content=clientOtpMessage({clientName:'Neema',trackingId:'TNZ-99',clientPreferredLanguage},'123456');
-    for(const value of ['Neema','TNZ-99','123456','10','https://tinzel.stryxis.com/track'])assert.ok(content.message.includes(value));
-    assert.match(content.message,clientPreferredLanguage==='en'?/Do not share this code/:/Usishirikishe mtu namba hii/);
+    for(const value of ['TNZ-99','123456','10','https://tinzel.stryxis.com/track'])assert.ok(content.message.includes(value));
+    assert.match(content.message,clientPreferredLanguage==='en'?/Do not share it/:/Usiushirikishe/);
   }
 });
 

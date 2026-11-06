@@ -246,6 +246,17 @@ router.use(verifyStaffToken, requireRoles('manager', 'admin', 'designer'));
  */
 router.get('/history', async (req, res) => {
   try {
+    if (req.query.view === 'badge') {
+      const managesOrders = ['manager', 'admin'].includes(req.user.role);
+      const [summary, submissionAlert] = await Promise.all([
+        getNotificationSummary(req.user),
+        managesOrders ? Notification.findOne({
+          recipientUser: req.user._id, template: 'order_submitted',
+          channel: 'in_system', status: 'delivered', isRead: false,
+        }).sort({ createdAt: -1 }).select('recipientUser orderId').populate('orderId', 'clientName formTitle').lean() : null,
+      ]);
+      return res.json({ unreadCount: summary.unreadCount, submissionAlert });
+    }
     const { limit = 100, orderId, channel, status, unreadOnly, search } = req.query;
     const [notifications, { unreadCount, channelCounts }] = await Promise.all([
       getNotificationHistory({

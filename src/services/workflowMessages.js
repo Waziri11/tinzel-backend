@@ -1,59 +1,65 @@
-import { messageContent, roleLabels } from './accountMessages.js';
+import { messageContent } from './accountMessages.js';
 
 const copy = {
-  order_submitted: ['Verify payment', 'Thibitisha malipo', 'A new magazine order from {client} awaits payment verification. Check the submitted payment details in Pre-Design, confirm the payment and verify it in Tinzel so tracking and designer assignment can proceed.', 'Oda mpya ya jarida kutoka kwa {client} inasubiri uthibitisho wa malipo. Kagua taarifa za malipo kwenye Pre-Design, hakiki malipo na uyathibitishe Tinzel ili namba ya ufuatiliaji itolewe na mbunifu akabidhiwe kazi.'],
-  payment_verified: ['Payment confirmed', 'Malipo yamethibitishwa', 'Your payment has been verified. Keep your tracking number below. Open order tracking and verify your identity to follow design progress, review your magazine and see delivery updates.', 'Malipo yako yamethibitishwa. Hifadhi namba yako ya ufuatiliaji iliyo hapa chini. Fungua ufuatiliaji wa oda na uthibitishe utambulisho wako ili kuona maendeleo ya usanifu, kukagua jarida na kupata taarifa za uwasilishaji.'],
-  assignment_queued: ['Assign a designer', 'Mkabidhi mbunifu', 'Payment is verified, but no eligible designer currently has capacity. Review designer availability and assign this paid order in Pre-Design so design can begin.', 'Malipo yamethibitishwa lakini hakuna mbunifu anayestahili mwenye nafasi kwa sasa. Kagua upatikanaji wa wabunifu na ukabidhi oda hii iliyolipiwa kwenye Pre-Design ili usanifu uanze.'],
-  order_assigned: ['Your design task is ready', 'Kazi yako ya usanifu iko tayari', 'You are the assigned designer for this magazine. Open the order, review the customer brief, text and photos, and begin design. Upload the completed draft for manager review.', 'Wewe ndiye mbunifu aliyekabidhiwa jarida hili. Fungua oda, soma maelekezo ya mteja na kagua maandishi na picha, kisha anza usanifu. Pakia rasimu iliyokamilika kwa ukaguzi wa meneja.'],
-  draft_uploaded: ['Design completed — review required', 'Usanifu umekamilika — kagua rasimu', 'Magazine version {version} for {client} is completed and awaits your review. Check the entire draft and any corrected items. Release it to the customer if approved, or return a clear correction list to the designer.', 'Toleo la {version} la jarida la {client} limekamilika na linasubiri ukaguzi wako. Kagua rasimu nzima na vipengele vilivyorekebishwa. Ukiidhinisha, litume kwa mteja; vinginevyo mrudishie mbunifu orodha ya marekebisho iliyo wazi.'],
-  draft_released: ['Your magazine awaits approval', 'Jarida lako linasubiri idhini', 'Your magazine version {version} has passed manager review and is ready for your approval. Review every page, including names, text and photographs. Approve it in Tinzel or submit all requested corrections there before printing can proceed.', 'Toleo la {version} la jarida lako limepita ukaguzi wa meneja na liko tayari kwa idhini yako. Kagua kila ukurasa, pamoja na majina, maandishi na picha. Liidhinishe Tinzel au tuma marekebisho yote unayohitaji humo kabla ya hatua za uchapishaji kuendelea.'],
-  draft_returned: ['Magazine corrections required', 'Marekebisho ya jarida yanahitajika', 'The manager requested corrections to version {version}. Open the correction list, address every item and record your responses. Upload a corrected draft for manager review when all items are complete.', 'Meneja ameomba marekebisho ya toleo la {version}. Fungua orodha ya marekebisho, kamilisha kila kipengele na uandike majibu yako. Pakia rasimu iliyorekebishwa kwa ukaguzi wa meneja baada ya kukamilisha vipengele vyote.'],
-  client_revision_requested: ['Customer requested corrections', 'Mteja ameomba marekebisho', 'The customer requested corrections to version {version}. As the assigned designer, review the correction list, address every item and record your responses. Upload the corrected draft for manager review.', 'Mteja ameomba marekebisho ya toleo la {version}. Kama mbunifu aliyekabidhiwa, kagua orodha ya marekebisho, kamilisha kila kipengele na uandike majibu yako. Pakia rasimu iliyorekebishwa kwa ukaguzi wa meneja.'],
-  client_approved: ['Customer approved — prepare print file', 'Mteja ameidhinisha — andaa faili la uchapishaji', 'The customer approved version {version}. As the assigned designer, prepare the final print file from the approved magazine and submit it for manager authorization. Printing starts only after authorization.', 'Mteja ameidhinisha toleo la {version}. Kama mbunifu aliyekabidhiwa, andaa faili la mwisho la uchapishaji kutoka kwenye jarida lililoidhinishwa na ulitume kwa idhini ya meneja. Uchapishaji huanza baada ya idhini kutolewa.'],
-  print_document_uploaded: ['Authorize printing', 'Idhinisha uchapishaji', 'The final print file is ready for your review. Check it against approved version {version}, confirm the print specifications and printer details, then authorize printing in Tinzel.', 'Faili la mwisho la uchapishaji liko tayari kwa ukaguzi wako. Lilinganishe na toleo la {version} lililoidhinishwa, hakiki maelekezo ya uchapishaji na taarifa za mchapishaji, kisha idhinisha uchapishaji Tinzel.'],
-  print_dispatched: ['New print job', 'Kazi mpya ya uchapishaji', 'This magazine has been authorized for printing. Open the protected document in this WhatsApp message and check the print specifications below. Reply POKEA {ref} to acknowledge receipt, then proceed with the authorized print job. Inform the Tinzel manager when printing is complete.', 'Jarida hili limeidhinishwa kuchapishwa. Fungua faili lililolindwa kwenye ujumbe huu wa WhatsApp na uhakiki maelekezo ya uchapishaji hapa chini. Jibu POKEA {ref} kuthibitisha kupokea, kisha endelea na kazi iliyoidhinishwa. Mjulishe meneja wa Tinzel uchapishaji ukikamilika.'],
-  printing_in_progress: ['Printing started', 'Uchapishaji umeanza', 'The printing partner has acknowledged your magazine and printing is in progress. You do not need to take any action now. Follow order tracking for dispatch and delivery updates.', 'Mshirika wa uchapishaji amethibitisha kupokea jarida lako na uchapishaji unaendelea. Huhitaji kuchukua hatua kwa sasa. Fuatilia oda kwa taarifa za usafirishaji na uwasilishaji.'],
-  printing_completed: ['Printing complete — arrange delivery', 'Uchapishaji umekamilika — andaa usafirishaji', 'Printing is complete and has been verified in Tinzel. Arrange the courier, confirm the delivery address, enter the courier and tracking reference, and authorize dispatch.', 'Uchapishaji umekamilika na umethibitishwa Tinzel. Andaa msafirishaji, hakiki anwani ya uwasilishaji, weka taarifa za msafirishaji na namba ya ufuatiliaji, kisha idhinisha usafirishaji.'],
-  order_dispatched: ['Your magazine has been dispatched', 'Jarida lako limesafirishwa', 'Your printed magazine has been dispatched. Courier: {carrier}. Courier tracking reference: {tracking}. Follow your order in Tinzel for updates. If delivery assistance is needed, contact the Tinzel team and quote your order reference.', 'Jarida lako lililochapishwa limesafirishwa. Msafirishaji: {carrier}. Namba ya ufuatiliaji wa msafirishaji: {tracking}. Fuatilia oda Tinzel kwa taarifa zaidi. Ukihitaji msaada wa uwasilishaji, wasiliana na timu ya Tinzel ukitaja namba ya oda yako.'],
-  order_closed: ['Magazine delivered', 'Jarida limewasilishwa', 'Delivery of your magazine has been confirmed and your order is complete. Thank you for choosing Tinzel. Keep your order reference for any follow-up and view the completed order in Tinzel.', 'Uwasilishaji wa jarida lako umethibitishwa na oda yako imekamilika. Asante kwa kuchagua Tinzel. Hifadhi namba ya oda kwa ufuatiliaji wowote na uone oda iliyokamilika Tinzel.'],
+  order_submitted: ['New magazine submission', 'Oda mpya ya jarida', '{client} submitted {magazine}. Verify payment.', '{client} ametuma taarifa za {magazine}. Thibitisha malipo.'],
+  client_submission: ['Order received', 'Tumepokea oda yako', 'We received your magazine details. Follow the payment instructions on your order.', 'Tumepokea taarifa za jarida lako. Fuata maelekezo ya malipo kwenye oda yako.'],
+  payment_verified: ['Payment confirmed', 'Malipo yamethibitishwa', 'Payment received. Track your magazine below.', 'Tumepokea malipo. Fuatilia jarida lako hapa chini.'],
+  assignment_queued: ['Order needs a designer', 'Oda inahitaji mbunifu', 'Payment received. Assign a designer when one is available.', 'Malipo yamepokelewa. Mkabidhi mbunifu oda hii akipatikana.'],
+  order_assigned: ['New design order', 'Oda mpya ya usanifu', 'Start the design using the submitted details and photos.', 'Anza usanifu kwa kutumia taarifa na picha zilizotumwa.'],
+  draft_uploaded: ['Draft ready', 'Rasimu iko tayari', 'Review draft {version}.', 'Kagua rasimu ya toleo la {version}.'],
+  draft_released: ['Review your magazine', 'Kagua jarida lako', 'Review version {version}. Approve it or send corrections.', 'Kagua toleo la {version}. Liidhinishe au tuma marekebisho.'],
+  draft_returned: ['Draft needs changes', 'Rasimu inahitaji marekebisho', 'Make the requested changes to version {version} and upload the new draft.', 'Rekebisha toleo la {version} kulingana na maoni, kisha pakia rasimu mpya.'],
+  client_revision_requested: ['Changes requested', 'Marekebisho yameombwa', 'Update version {version} using the customer’s feedback.', 'Rekebisha toleo la {version} kulingana na maoni ya mteja.'],
+  revision_update: ['Changes requested', 'Marekebisho yameombwa', 'The customer requested changes to version {version}.', 'Mteja ameomba marekebisho ya toleo la {version}.'],
+  client_approved: ['Magazine approved', 'Jarida limeidhinishwa', 'Version {version} was approved. Upload the print file.', 'Toleo la {version} limeidhinishwa. Pakia faili la uchapishaji.'],
+  approval_update: ['Magazine approved', 'Jarida limeidhinishwa', 'The customer approved version {version}.', 'Mteja ameidhinisha toleo la {version}.'],
+  print_document_uploaded: ['Print file ready', 'Faili la uchapishaji liko tayari', 'Review the print file for version {version} and authorize printing.', 'Kagua faili la toleo la {version} na uidhinishe uchapishaji.'],
+  print_dispatched: ['New print job', 'Kazi mpya ya uchapishaji', 'Open the print file. Reply POKEA {ref} to confirm receipt.', 'Fungua faili la uchapishaji. Jibu POKEA {ref} kuthibitisha umelipokea.'],
+  print_sms: ['New print job', 'Kazi mpya ya uchapishaji', 'Open WhatsApp and reply POKEA {ref} to confirm receipt.', 'Fungua WhatsApp na ujibu POKEA {ref} kuthibitisha umepokea faili.'],
+  printing_in_progress: ['Printing started', 'Uchapishaji umeanza', 'Your magazine is being printed.', 'Jarida lako linachapishwa.'],
+  print_update: ['Printing started', 'Uchapishaji umeanza', 'The magazine is being printed.', 'Jarida linachapishwa.'],
+  printing_completed: ['Printing complete', 'Uchapishaji umekamilika', 'Printing is complete. Arrange delivery.', 'Jarida limechapishwa. Panga usafirishaji.'],
+  order_dispatched: ['Magazine dispatched', 'Jarida limesafirishwa', 'Your magazine is on its way.', 'Jarida lako liko njiani.'],
+  order_closed: ['Magazine delivered', 'Jarida limewasilishwa', 'Delivery confirmed. The order is complete.', 'Jarida limepokelewa. Oda imekamilika.'],
 };
-const informed = {
-  client_revision_requested: ['Customer requested corrections — designer action', 'Mteja ameomba marekebisho — hatua ya mbunifu', 'The customer requested corrections to version {version}. The assigned designer is responsible for completing the correction list and uploading a corrected draft. Monitor progress; the new draft will return to you for review.', 'Mteja ameomba marekebisho ya toleo la {version}. Mbunifu aliyekabidhiwa anawajibika kukamilisha orodha ya marekebisho na kupakia rasimu iliyorekebishwa. Fuatilia maendeleo; rasimu mpya itarudi kwako kwa ukaguzi.'],
-  client_approved: ['Customer approved — print preparation assigned', 'Mteja ameidhinisha — mbunifu aandaye faili', 'The customer approved version {version}. The assigned designer must prepare and submit the final print file. Monitor preparation; you will be notified when the file awaits your authorization.', 'Mteja ameidhinisha toleo la {version}. Mbunifu aliyekabidhiwa anatakiwa kuandaa na kutuma faili la mwisho la uchapishaji. Fuatilia maandalizi; utajulishwa faili likisubiri idhini yako.'],
-  printing_in_progress: ['Printing started — progress update', 'Uchapishaji umeanza — taarifa ya maendeleo', 'The printing partner has acknowledged this print job and printing is in progress. Monitor completion and verify the printed work before arranging dispatch.', 'Mshirika wa uchapishaji amethibitisha kupokea kazi hii na uchapishaji unaendelea. Fuatilia kukamilika kwake na uhakiki kazi iliyochapishwa kabla ya kuandaa usafirishaji.'],
-  order_closed: ['Delivery confirmed — order closed', 'Uwasilishaji umethibitishwa — oda imefungwa', 'Delivery has been confirmed and this order is closed. Review the recorded delivery confirmation and order history if follow-up is needed. No further production task is pending.', 'Uwasilishaji umethibitishwa na oda hii imefungwa. Kagua uthibitisho wa uwasilishaji na historia ya oda ikiwa ufuatiliaji unahitajika. Hakuna kazi nyingine ya uzalishaji inayosubiri.'],
+
+const staffUpdates = {
+  client_revision_requested: 'revision_update',
+  client_approved: 'approval_update',
+  printing_in_progress: 'print_update',
 };
+
 export const language = value => value === 'en' ? 'en' : 'sw';
+
 export function workflowMessage(type, order, event, recipient, lang, actionUrl) {
-  const locale = language(lang), sw = locale === 'sw';
-  let words = ['manager', 'admin'].includes(recipient.role) && informed[type] ? informed[type] : copy[type];
-  if (type === 'order_submitted' && recipient.role === 'client') words = ['Order received', 'Oda imepokelewa', 'We have received your magazine order. Keep the submission number below. Complete payment using the instructions on your submission or tracking page. After payment is verified, Tinzel will issue your tracking number and arrange design.', 'Tumepokea oda yako ya jarida. Hifadhi namba ya usajili wa oda iliyo hapa chini. Kamilisha malipo kwa maelekezo kwenye ukurasa wa usajili au ufuatiliaji wa oda. Malipo yakithibitishwa, Tinzel itatoa namba ya ufuatiliaji na kupanga usanifu.'];
-  if (type === 'print_dispatched' && recipient.channel !== 'whatsapp') words = ['New print job — check WhatsApp', 'Kazi mpya ya uchapishaji — angalia WhatsApp', 'A new magazine print job has been authorized. The protected document, print specifications and acknowledgement instructions have been sent to your WhatsApp number. Open WhatsApp and reply POKEA {ref} to acknowledge receipt.', 'Kazi mpya ya uchapishaji wa jarida imeidhinishwa. Faili lililolindwa, maelekezo ya uchapishaji na namna ya kuthibitisha kupokea vimetumwa kwenye namba yako ya WhatsApp. Fungua WhatsApp na ujibu POKEA {ref} kuthibitisha kupokea.'];
+  const sw = language(lang) === 'sw';
+  const staff = ['manager', 'admin'].includes(recipient.role);
+  let key = (staff && staffUpdates[type]) || type;
+  if (type === 'order_submitted' && recipient.role === 'client') key = 'client_submission';
+  if (type === 'print_dispatched' && recipient.channel !== 'whatsapp') key = 'print_sms';
+  const words = copy[key];
   if (!words) throw new Error('Unsupported workflow notification');
+
   const ref = order.trackingId || order.submissionId;
-  const vars = { client: order.clientName, version: event.version || 1, ref, carrier: order.dispatchDetails?.carrier || (sw ? 'Haijawekwa' : 'Not recorded'), tracking: order.dispatchDetails?.trackingReference || (sw ? 'Haijawekwa' : 'Not recorded') };
-  const fill = text => text.replace(/\{(\w+)\}/g, (_, key) => String(vars[key] ?? ''));
-  const title = `${words[sw ? 1 : 0]}: ${ref}`;
-  const lines = [`Tinzel | ${words[sw ? 1 : 0]}`, `${sw ? 'Habari' : 'Hello'} ${recipient.name || roleLabels[locale][recipient.role]},`];
-  if (recipient.role !== 'client') lines.push(`${sw ? 'Wadhifa' : 'Role'}: ${roleLabels[locale][recipient.role]}`, `${sw ? 'Mteja' : 'Customer'}: ${order.clientName}`);
-  if (order.formTitle) lines.push(`${sw ? 'Jarida' : 'Magazine'}: ${order.formTitle}`);
-  if (order.submissionId) lines.push(`${sw ? 'Namba ya usajili wa oda' : 'Submission number'}: ${order.submissionId}`);
-  if (order.trackingId) lines.push(`${sw ? 'Namba ya ufuatiliaji' : 'Tracking number'}: ${order.trackingId}`);
-  lines.push(fill(words[sw ? 3 : 2]));
-  if (type === 'payment_verified') {
-    const payment = order.paymentDetails || {};
-    if (Number.isFinite(payment.amountPaid) && payment.amountPaid > 0) lines.push(`${sw ? 'Kiasi kilichothibitishwa (TZS)' : 'Verified amount (TZS)'}: ${payment.amountPaid.toLocaleString(sw ? 'sw-TZ' : 'en-TZ')}`);
-    if (payment.lipaNambaReference) lines.push(`${sw ? 'Kumbukumbu ya malipo' : 'Payment reference'}: ${payment.lipaNambaReference}`);
+  const values = { ref, client: order.clientName, magazine: order.formTitle || (sw ? 'jarida' : 'magazine details'), version: event.version || 1 };
+  const body = words[sw ? 3 : 2].replace(/\{(\w+)\}/g, (_, name) => values[name]);
+  const lines = [body];
+  if (recipient.role !== 'client' && key !== 'order_submitted') {
+    lines.push([order.clientName, order.formTitle].filter(Boolean).join(' · '));
   }
-  if (['draft_returned', 'client_revision_requested'].includes(type)) {
-    const revision = order.revisionRequests?.find(item => String(item._id) === event.revisionId) || order.revisionRequests?.at(-1);
-    if (revision?.roundNumber) lines.push(`${sw ? 'Duru ya marekebisho' : 'Correction round'}: ${revision.roundNumber}`);
-    if (revision?.items?.length) lines.push(`${sw ? 'Vipengele vya marekebisho' : 'Correction items'}: ${revision.items.length}`);
+  if (ref && type !== 'print_dispatched') lines.push(ref);
+  if (type === 'payment_verified') {
+    const { amountPaid, lipaNambaReference } = order.paymentDetails || {};
+    if (amountPaid > 0) lines.push(`TZS ${amountPaid.toLocaleString(sw ? 'sw-TZ' : 'en-TZ')}`);
+    if (lipaNambaReference) lines.push(lipaNambaReference);
+  }
+  if (type === 'order_dispatched') {
+    const { carrier, trackingReference } = order.dispatchDetails || {};
+    if (carrier || trackingReference) lines.push([carrier, trackingReference].filter(Boolean).join(' · '));
   }
   if (type === 'print_dispatched' && recipient.channel === 'whatsapp') {
-    const specs = order.printDocument?.specs || {}, unknown = sw ? 'Haijawekwa — hakiki na meneja' : 'Not recorded — confirm with the manager';
-    lines.push(`${sw ? 'Toleo lililoidhinishwa' : 'Approved version'}: ${event.version || 1}`, `${sw ? 'Nakala' : 'Copies'}: ${specs.quantity ?? unknown}`, `${sw ? 'Karatasi' : 'Paper'}: ${specs.paperType || unknown}`, `${sw ? 'Kava' : 'Cover'}: ${specs.coverFinish || unknown}`, `${sw ? 'Ufungaji' : 'Binding'}: ${specs.binding || unknown}`);
+    const specs = order.printDocument?.specs || {}, unknown = sw ? 'Haijawekwa' : 'Not recorded';
+    lines.push(`${sw ? 'Toleo lililoidhinishwa' : 'Approved version'}: ${values.version}`, `${sw ? 'Nakala' : 'Copies'}: ${specs.quantity ?? unknown}`, `${sw ? 'Karatasi' : 'Paper'}: ${specs.paperType || unknown}`, `${sw ? 'Kava' : 'Cover'}: ${specs.coverFinish || unknown}`, `${sw ? 'Ufungaji' : 'Binding'}: ${specs.binding || unknown}`);
   }
-  if (actionUrl) lines.push(`${sw ? 'Fungua oda' : 'Open order'}: ${actionUrl}`);
-  return messageContent(title, lines.join('\n'), locale, actionUrl);
+  return messageContent(words[sw ? 1 : 0], lines.filter(Boolean).join('\n'), language(lang), recipient.channel === 'in_system' ? null : actionUrl);
 }

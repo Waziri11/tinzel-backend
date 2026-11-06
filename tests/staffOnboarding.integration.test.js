@@ -101,7 +101,7 @@ test('credential delivery uses the chosen language, is persisted before sending 
  const user=await pending({preferredLanguage:'sw'}),password=decryptInitialPassword(user);let calls=[];
  const send=async input=>{const stored=await Notification.findOne({recipientUser:user._id,channel:input.channel});assert.equal(stored.status,'queued');assert.equal(stored.attempts,1);assert.ok(!JSON.stringify(stored.toObject()).includes(password));calls.push(input);return {status:'sent'};};
  await Promise.all([runStaffCredentials({staffId:user._id,send}),runStaffCredentials({staffId:user._id,send}),runStaffCredentials({staffId:user._id,send})]);
- assert.equal(calls.length,2);assert.ok(calls.every(input=>input.message.includes('Nenosiri la awali')&&input.message.includes(password)&&input.message.includes('Wadhifa: Mbunifu')&&input.message.includes('https://tinzel.stryxis.com/staff')));assert.ok(calls.find(input=>input.channel==='email').html.includes('lang="sw"'));
+ assert.equal(calls.length,2);assert.ok(calls.every(input=>input.message.includes('Nenosiri la awali')&&input.message.includes(password)&&!input.message.includes('Wadhifa:')&&input.message.includes('https://tinzel.stryxis.com/staff')));assert.ok(calls.find(input=>input.channel==='email').html.includes('lang="sw"'));
  assert.equal((await StaffUser.findById(user._id)).credentialDelivery.sms.status,'sent');
 });
 

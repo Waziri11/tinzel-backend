@@ -44,8 +44,14 @@ test('complete HTTP workflow notifies each next recipient, including correction 
  assert.equal(submitted.status,201,JSON.stringify(submitted.data));
  let order=await Order.findOne({submissionId:submitted.data.order.submissionId});const id=order._id;
  let rows=await notices(order,'order_submitted');assert.equal(rows.filter(row=>row.channel==='sms').length,3);
- assert.match(rows.find(row=>String(row.recipientUser)===String(admin._id)&&row.channel==='sms').message,/awaits payment verification/);
- assert.match(rows.find(row=>String(row.recipientUser)===String(manager._id)&&row.channel==='sms').message,/uthibitisho wa malipo/);
+ assert.match(rows.find(row=>String(row.recipientUser)===String(admin._id)&&row.channel==='sms').message,/Asha submitted Handoff magazine. Verify payment/);
+ assert.match(rows.find(row=>String(row.recipientUser)===String(manager._id)&&row.channel==='sms').message,/Asha ametuma taarifa za Handoff magazine. Thibitisha malipo/);
+ const managerAuth=await generateToken(manager,{verifiedAt:new Date()});
+ const badge=await request('/notifications/history?view=badge',undefined,managerAuth);
+ assert.equal(badge.status,200);
+ assert.equal(badge.data.submissionAlert.recipientUser,String(manager._id));
+ assert.equal(badge.data.submissionAlert.orderId._id,String(id));
+ assert.equal((await request('/notifications/history?view=badge',undefined,designAuth)).data.submissionAlert,null);
  let result=await request(`/manager/orders/${id}/verify-payment`,{lipaNambaReference:'PAY-123',amountPaid:50000},auth);assert.equal(result.status,200,JSON.stringify(result.data));
  order=await Order.findById(id);assert.equal(order.status,'assigned');
  assert.equal((await notices(order,'order_assigned')).filter(row=>row.channel==='sms').length,1);
@@ -71,7 +77,7 @@ test('complete HTTP workflow notifies each next recipient, including correction 
  rows=await notices(order,'print_dispatched');assert.equal(rows.filter(row=>row.channel==='sms').length,1);assert.equal(rows.filter(row=>row.channel==='whatsapp').length,1);assert.match(rows.find(row=>row.channel==='whatsapp').message,/POKEA TNZ/);
  const signed=rows.find(row=>row.channel==='whatsapp').metadata.actionUrl;
  assert.ok(rows.find(row=>row.channel==='sms').message.includes('WhatsApp'));
- const assigned=(await notices(order,'order_assigned')).find(row=>row.channel==='sms');assert.ok(assigned.message.includes(designer.name));assert.match(assigned.message,/Role: Designer/);assert.ok(assigned.metadata.actionUrl.startsWith('https://tinzel.stryxis.com/staff/'));
+ const assigned=(await notices(order,'order_assigned')).find(row=>row.channel==='sms');assert.match(assigned.message,/Start the design/);assert.doesNotMatch(assigned.message,/Role:/);assert.ok(assigned.metadata.actionUrl.startsWith('https://tinzel.stryxis.com/staff/'));
  const paid=(await notices(order,'payment_verified')).find(row=>row.channel==='sms');assert.match(paid.message,/PAY-123/);assert.match(paid.message,/50,000/);
  assert.ok(signed.includes('/printer/'));
  const invitationId=new URL(signed).pathname.split('/').pop();
@@ -98,7 +104,7 @@ test('queued assignment alerts managers; contact failures are visible and langua
  order.status='assigned';await order.save();await drain(order);
  const missing=(await notices(order,'order_assigned')).find(row=>row.channel==='sms');assert.equal(missing.status,'failed');assert.equal(missing.attempts,0);assert.match(missing.errorMessage,/phone/);
  await StaffUser.updateOne({_id:designer._id},{$set:{phone:'0712000003',preferredLanguage:'en'}});
- await retryWorkflowNotification(missing._id);const retried=await Notification.findById(missing._id);assert.equal(retried.status,'simulated');assert.match(retried.message,/assigned/);
+ await retryWorkflowNotification(missing._id);const retried=await Notification.findById(missing._id);assert.equal(retried.status,'simulated');assert.match(retried.message,/Start the design/);
 });
 
 test('worker persists attempts before sending, retries only the failed channel and stops after five attempts',async()=>{
@@ -169,10 +175,10 @@ test('delayed messages use the saved recipient language, legacy defaults and act
  const order=await fresh();order.status='draft_manager_review';order.currentDraftVersion=1;await order.save();
  await StaffUser.collection.updateOne({_id:manager._id},{$unset:{preferredLanguage:''}});
  await drain(order);
- const sw=(await notices(order,'draft_uploaded')).find(row=>String(row.recipientUser)===String(manager._id)&&row.channel==='sms');assert.equal(sw.metadata.language,'sw');assert.match(sw.message,/ukaguzi/);
+ const sw=(await notices(order,'draft_uploaded')).find(row=>String(row.recipientUser)===String(manager._id)&&row.channel==='sms');assert.equal(sw.metadata.language,'sw');assert.match(sw.message,/Kagua rasimu/);
  const next=await fresh();next.status='draft_manager_review';next.currentDraftVersion=1;await next.save();
  await StaffUser.updateOne({_id:manager._id},{$set:{preferredLanguage:'en'}});await StaffUser.updateOne({_id:admin._id},{$set:{isActive:false}});
- await drain(next);const rows=await notices(next,'draft_uploaded');assert.ok(rows.every(row=>String(row.recipientUser)!==String(admin._id)));assert.match(rows.find(row=>row.channel==='sms').message,/awaits your review/);
+ await drain(next);const rows=await notices(next,'draft_uploaded');assert.ok(rows.every(row=>String(row.recipientUser)!==String(admin._id)));assert.match(rows.find(row=>row.channel==='sms').message,/Review draft/);
  await StaffUser.updateOne({_id:manager._id},{$set:{preferredLanguage:'sw'}});await StaffUser.updateOne({_id:admin._id},{$set:{isActive:true}});
 });
 
