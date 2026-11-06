@@ -11,6 +11,7 @@ import { SystemConfig } from '../models/SystemConfig.model.js';
 import { sendEmail, emailTemplates, isEmailConfigured, getEmailHealth } from './emailService.js';
 import {
   sendNextSMS,
+  nextSmsSenderId,
   getNextSMSHealth,
   isNextSMSConfigured,
   formatTanzanianPhone,
@@ -150,7 +151,7 @@ export const buildDefaultNotificationSettings = () => {
       email: true,
       sms: true,
     },
-    smsSenderId: providerValue('NEXTSMS_SENDER_ID') || 'ORDER',
+    smsSenderId: nextSmsSenderId(),
     triggers,
   };
 };
@@ -458,8 +459,7 @@ export const sendNotification = async ({
           metadata?.senderId ||
           providerOverride('NEXTSMS_SENDER_ID') ||
           inMemoryNotificationSettings?.smsSenderId ||
-          providerValue('NEXTSMS_SENDER_ID') ||
-          'ORDER';
+          nextSmsSenderId();
         const formatted = formatTanzanianPhone(to);
         const nextSmsRes = await sendNextSMS(formatted, message, senderId);
         const firstMsg = nextSmsRes?.messages?.[0];
@@ -2169,7 +2169,7 @@ export const runSmsHealthTest = async ({ to, message, from, user = null }) => {
   await refreshProviderSettings();
   const startedAt = Date.now();
   const settings = await getNotificationSettings();
-  const senderId = (from || settings.smsSenderId || providerValue('NEXTSMS_SENDER_ID') || 'ORDER').trim();
+  const senderId = (from || settings.smsSenderId || nextSmsSenderId()).trim();
   const formattedPhone = formatTanzanianPhone(to);
   const testMessage =
     (message && message.trim()) ||

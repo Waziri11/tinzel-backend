@@ -6,7 +6,7 @@ dotenv.config();
 const NEXTSMS_V2_SINGLE_TEXT_ENDPOINT = 'https://messaging-service.co.tz/api/sms/v2/text/single';
 const NEXTSMS_V1_SINGLE_TEXT_ENDPOINT = 'https://messaging-service.co.tz/api/sms/v1/text/single';
 const NEXTSMS_V2_BALANCE_ENDPOINT = 'https://messaging-service.co.tz/api/v2/balance';
-const DEFAULT_SENDER_ID = 'ORDER';
+export const nextSmsSenderId = () => providerValue('NEXTSMS_SENDER_ID')?.trim() || 'TINZELGIFTS';
 export const NEXTSMS_TIMEOUT_MS = Number(process.env.NEXTSMS_TIMEOUT_MS) || 10000;
 
 /**
@@ -97,7 +97,7 @@ export const resolveNextSMSAuth = () => {
  *
  * @param {string} to - Recipient phone number
  * @param {string} message - SMS text body
- * @param {string} [senderId] - Optional Sender ID override (defaults to NEXTSMS_SENDER_ID or 'NEXTSMS')
+ * @param {string} [senderId] - Optional Sender ID override (defaults to NEXTSMS_SENDER_ID or 'TINZELGIFTS')
  * @returns {Promise<object>} Parsed response payload from NextSMS
  */
 export const sendNextSMS = async (to, message, senderId) => {
@@ -110,7 +110,7 @@ export const sendNextSMS = async (to, message, senderId) => {
 
   const formattedPhone = formatTanzanianPhone(to);
   const { endpoint, authHeader } = resolveNextSMSAuth();
-  const resolvedSender = (senderId || providerValue('NEXTSMS_SENDER_ID') || DEFAULT_SENDER_ID).trim();
+  const resolvedSender = senderId?.trim() || nextSmsSenderId();
 
   const payload = {
     from: resolvedSender,
@@ -176,7 +176,7 @@ export const sendNextSMS = async (to, message, senderId) => {
  */
 export const getNextSMSHealth = async () => {
   await refreshProviderSettings();
-  const senderId = (providerValue('NEXTSMS_SENDER_ID') || DEFAULT_SENDER_ID).trim();
+  const senderId = nextSmsSenderId();
   if (!isNextSMSConfigured()) {
     return {
       configured: false,

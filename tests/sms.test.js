@@ -26,7 +26,8 @@ test('sendNextSMS: uses v1 Basic Auth when only NEXTSMS_USERNAME and NEXTSMS_PAS
   delete process.env.NEXTSMS_API_KEY;
   process.env.NEXTSMS_USERNAME = 'tinzel_user';
   process.env.NEXTSMS_PASSWORD = 'secret_password';
-  process.env.NEXTSMS_SENDER_ID = 'ORDER';
+  const originalSender = process.env.NEXTSMS_SENDER_ID;
+  delete process.env.NEXTSMS_SENDER_ID;
 
   let capturedUrl = null;
   let capturedOptions = null;
@@ -62,14 +63,19 @@ test('sendNextSMS: uses v1 Basic Auth when only NEXTSMS_USERNAME and NEXTSMS_PAS
 
     const parsedBody = JSON.parse(capturedOptions.body);
     assert.deepEqual(parsedBody, {
-      from: 'ORDER',
+      from: 'TINZELGIFTS',
       to: '255712345678',
       text: 'Order #TNZ-101 is Ready.',
     });
 
     assert.equal(result.messages[0].to, '255712345678');
+    process.env.NEXTSMS_SENDER_ID = 'ALTERNATE';
+    await sendNextSMS('+255712345678', 'Second test');
+    assert.equal(JSON.parse(capturedOptions.body).from, 'ALTERNATE');
   } finally {
     global.fetch = originalFetch;
+    if (originalSender === undefined) delete process.env.NEXTSMS_SENDER_ID;
+    else process.env.NEXTSMS_SENDER_ID = originalSender;
     if (originalApiKey === undefined) delete process.env.NEXTSMS_API_KEY;
     else process.env.NEXTSMS_API_KEY = originalApiKey;
     if (originalUser === undefined) delete process.env.NEXTSMS_USERNAME;

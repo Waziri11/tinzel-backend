@@ -54,7 +54,7 @@ router.get('/health', checkSmsHealth);
  *                 example: "Hello! Your Tinzel order #TNZ-2026-001 status has been updated to Ready."
  *               from:
  *                 type: string
- *                 description: Optional registered Sender ID override (defaults to NEXTSMS_SENDER_ID or NEXTSMS)
+ *                 description: Optional registered Sender ID override (defaults to NEXTSMS_SENDER_ID or TINZELGIFTS)
  *                 example: "NEXTSMS"
  *     responses:
  *       200:
