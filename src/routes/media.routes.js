@@ -44,6 +44,14 @@ router.get('/sessions/:id/assets/:assetId', route(async (req, res) => {
   res.json({ success: true, photo: asset ? photoDescriptor(asset) : null,
     chunks: entry.provider === 'gridfs' && !asset ? await chunkStatus(entry) : [] });
 }));
+// Draft photographs belong to their upload session until an order is submitted.
+// Keep its token in a header, never in an image URL or a public asset link.
+router.get('/sessions/:id/assets/:assetId/preview', route(async (req, res) => {
+  const { session, entry } = await getEntry(req.params.id, token(req), req.params.assetId);
+  const asset = await MediaAsset.findOne({ _id: entry._id, sessionId: session._id }).lean();
+  if (!asset) throw mediaError(404, 'Photo is not ready');
+  await streamAsset(req, res, asset, Boolean(asset.thumbnailId), 'private, no-store');
+}));
 router.put('/sessions/:id/assets/:assetId/chunks/:n', express.raw({ type: 'application/octet-stream', limit: CHUNK_BYTES }), route(async (req, res) => {
   const { entry } = await getEntry(req.params.id, token(req), req.params.assetId);
   await writeChunk(entry, Number(req.params.n), req.body);
@@ -96,12 +104,16 @@ async function serveAsset(req, res, thumbnail) {
     res.setHeader('Retry-After', '10');
     return res.status(404).json({ message: 'Preview is being prepared' });
   }
+  await streamAsset(req, res, asset, thumbnail);
+}
+
+async function streamAsset(req, res, asset, thumbnail, cacheControl = 'private, max-age=3600') {
   const stream = thumbnail
     ? new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'mediaDerivatives' })
       .openDownloadStream(new mongoose.Types.ObjectId(asset.thumbnailId))
     : await openAssetStream(asset);
   res.setHeader('Content-Type', thumbnail ? 'image/webp' : asset.contentType);
-  res.setHeader('Cache-Control', 'private, max-age=3600');
+  res.setHeader('Cache-Control', cacheControl);
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
   if (!thumbnail) res.setHeader('Content-Length', asset.size);

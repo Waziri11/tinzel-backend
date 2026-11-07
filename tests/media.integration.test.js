@@ -82,6 +82,31 @@ test('cancelled selections cannot be resurrected by a late reservation', async (
   assert.equal(response.status, 409);
 });
 
+test('draft previews require the owning open upload session and stop after removal or submission', async () => {
+  const owner = await session(), other = await session();
+  const bytes = await sharp({ create: { width: 24, height: 24, channels: 3, background: '#b99a54' } }).png().toBuffer();
+  const entry = await reserve(owner, bytes.length);
+  const path = `/sessions/${owner.id}/assets/${entry._id}`;
+  assert.equal((await request(`${path}/preview`, owner)).status, 404);
+  await request(`${path}/chunks/0`, owner, bytes, 'PUT', true);
+  await request(`${path}/complete`, owner, {});
+  const preview = await fetch(base + `${path}/preview`, { headers: { 'X-Upload-Token': owner.token } });
+  assert.equal(preview.status, 200);
+  assert.equal(preview.headers.get('cache-control'), 'private, no-store');
+  assert.deepEqual(Buffer.from(await preview.arrayBuffer()), bytes);
+  assert.equal((await fetch(base + `${path}/preview`)).status, 404);
+  assert.equal((await request(`${path}/preview`, other)).status, 404);
+  assert.equal((await request(`/sessions/${other.id}/assets/${entry._id}/preview`, other)).status, 404);
+  await request(`${path}`, owner, undefined, 'DELETE');
+  assert.equal((await request(`${path}/preview`, owner)).status, 404);
+  const second = await reserve(owner, bytes.length);
+  const next = `/sessions/${owner.id}/assets/${second._id}`;
+  await request(`${next}/chunks/0`, owner, bytes, 'PUT', true);
+  await request(`${next}/complete`, owner, {});
+  await request(`/sessions/${owner.id}/submit`, owner, { clientName: 'Preview Test', clientWhatsApp: '0712345678', answers: {}, assetIds: [second._id] });
+  assert.equal((await request(`${next}/preview`, owner)).status, 409);
+});
+
 test('reservation limits and invalid sessions fail before bytes are transferred', async () => {
   const s = await session();
   const tooLarge = await request(`/sessions/${s.id}/assets`, s, { clientId: randomUUID(), name: 'x.jpg', size: 26 * 1024 * 1024, contentType: 'image/jpeg', fieldId: 'photos' });
