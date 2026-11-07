@@ -122,7 +122,7 @@ function routes() {
       let watermarkMs=0,auditMs=0;
       // Keep audit durability before delivery, but overlap its database round trip with image work.
       const [image] = await Promise.all([
-        watermarkedPage(page, `${identity} · ${req.proofOrder.trackingId || req.proofOrder.submissionId} · v${req.proofVersion} · ${view}`, view).then(image=>{watermarkMs=performance.now()-started;return image;}),
+        watermarkedPage(page, `${identity} · ${req.proofOrder.trackingId || req.proofOrder.clientName} · v${req.proofVersion} · ${view}`, view).then(image=>{watermarkMs=performance.now()-started;return image;}),
         recordView().then(()=>{auditMs=performance.now()-started;}),
       ]);
       res.set('Server-Timing',`watermark;dur=${Math.round(watermarkMs)}, audit;dur=${Math.round(auditMs)}`);

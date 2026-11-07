@@ -82,7 +82,7 @@ const verifyOtpLimiter = createRateLimiter({
 });
 
 const UNIFORM_LOOKUP_ERROR =
-  'Unable to verify tracking details. Please check your Tracking/Submission ID and registered phone number.';
+  'Unable to verify tracking details. Please check your tracking ID and registered phone number.';
 
 // Preserve the existing digits-only binding for remembered devices and OTPs.
 export const normalizeClientPhone = raw => normalizePhone(raw)?.slice(1) || null;

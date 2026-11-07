@@ -55,7 +55,7 @@ router.get('/media-download/:token', verifyStaffToken, async (req, res) => {
     if (job?.state !== 'ready') return res.sendStatus(409);
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Cache-Control', 'private, no-store');
-    res.setHeader('Content-Disposition', `attachment; filename="${photoArchiveFileName(order.trackingId || order.submissionId, job.folder)}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${photoArchiveFileName(order.trackingId || order.clientName, job.folder)}"`);
     const stream = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'mediaArchives' }).openDownloadStream(new mongoose.Types.ObjectId(job.outputId));
     res.on('close', () => stream.destroy());
     await pipeline(stream, res);
