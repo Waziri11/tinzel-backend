@@ -866,9 +866,9 @@ export const notifyOrderSubmitted = async (order) => {
         recipient: 'Manager Team',
         recipientName: 'Production Manager',
         recipientRole: 'manager',
-        title: `Oda Mpya Imepokelewa: ${order.submissionId}`,
+        title: `Oda Mpya Imepokelewa: ${order.clientName}`,
         template: 'order_submitted_staff',
-        message: `Oda mpya (${order.submissionId}) kutoka kwa ${order.clientName} inasubiri uthibitisho wa malipo kwenye Pre-Design.`,
+        message: `Oda mpya kutoka kwa ${order.clientName} inasubiri uthibitisho wa malipo kwenye Pre-Design.`,
         orderId: order._id,
         emailTo: order.clientEmail,
         phoneTo: order.clientWhatsApp,
@@ -976,7 +976,7 @@ export const notifyOrderAssigned = async (order, designer) => {
   if (!designer) return [];
   const frontendUrl = notificationFrontendUrl();
   const staffUrl = `${frontendUrl}/staff/design/orders/${order._id}`;
-  const trackingLabel = order.trackingId || order.submissionId;
+  const trackingLabel = order.trackingId || order.clientName;
 
   const tpl = emailTemplates.order_assigned({
     designerName: designer.name,
@@ -1008,7 +1008,7 @@ export const notifyOrderAssigned = async (order, designer) => {
 export const notifyDraftUploaded = async (order, versionNumber) => {
   const frontendUrl = notificationFrontendUrl();
   const staffUrl = `${frontendUrl}/staff/design-phase`;
-  const trackingLabel = order.trackingId || order.submissionId;
+  const trackingLabel = order.trackingId || order.clientName;
   const managers = await getActiveStaffByRole(['manager', 'admin']);
 
   if (managers.length === 0) {
@@ -1149,7 +1149,7 @@ export const notifyDraftReleased = async (order, trackingUrl) => {
 export const notifyDraftReturned = async (order, revisionRequest, source = 'manager') => {
   const frontendUrl = notificationFrontendUrl();
   const staffUrl = `${frontendUrl}/staff/returns`;
-  const trackingLabel = order.trackingId || order.submissionId;
+  const trackingLabel = order.trackingId || order.clientName;
   const items = revisionRequest?.items || [];
   const roundNumber = revisionRequest?.roundNumber || 1;
 
@@ -1247,7 +1247,7 @@ export const notifyDraftReturned = async (order, revisionRequest, source = 'mana
 export const notifyClientApproved = async (order) => {
   const frontendUrl = notificationFrontendUrl();
   const staffUrl = `${frontendUrl}/staff/post-design`;
-  const trackingLabel = order.trackingId || order.submissionId;
+  const trackingLabel = order.trackingId || order.clientName;
 
   const [managers, designer] = await Promise.all([
     getActiveStaffByRole(['manager', 'admin']),
@@ -1309,7 +1309,7 @@ export const notifyClientApproved = async (order) => {
 export const notifyPrintDocumentUploaded = async (order) => {
   const frontendUrl = notificationFrontendUrl();
   const staffUrl = `${frontendUrl}/staff/post-design`;
-  const trackingLabel = order.trackingId || order.submissionId;
+  const trackingLabel = order.trackingId || order.clientName;
   const managers = await getActiveStaffByRole(['manager', 'admin']);
 
   if (managers.length === 0) {
@@ -1579,7 +1579,7 @@ export const notifyDispatchRecorded = async (order, trackingRef, carrier, tracki
  * Dispatches tri-channel (In-System + Email + Phone) to Client and Staff.
  */
 export const notifyOrderClosed = async (order, deliveryDetails = {}) => {
-  const trackingLabel = order.trackingId || order.submissionId;
+  const trackingLabel = order.trackingId || order.clientName;
   const tpl = emailTemplates.order_closed({
     recipientName: order.clientName,
     trackingId: trackingLabel,

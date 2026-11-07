@@ -225,29 +225,23 @@ const rawEmailTemplates = {
     };
   },
 
-  order_submitted: ({ recipientName, submissionId, formTitle, clientName, isStaff = false, staffUrl }) => {
+  order_submitted: ({ recipientName, formTitle, clientName, isStaff = false, staffUrl }) => {
     const title = isStaff
-      ? `Oda Mpya Imepokelewa: ${submissionId}`
-      : `Oda Yako Imepokelewa (${submissionId})`;
+      ? `Oda Mpya Imepokelewa: ${clientName}`
+      : `Oda Yako Imepokelewa`;
     const contentHtml = isStaff
       ? `
         <p>Habari <strong>${recipientName || 'Meneja'}</strong>,</p>
         <p>Oda mpya ya jarida <strong>${formTitle || 'Tinzel Magazine'}</strong> kutoka kwa mteja <strong>${clientName}</strong> imewasilishwa na inasubiri uthibitisho wa malipo (Pre-Design).</p>
-        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 14px; margin: 16px 0;">
-          <p style="margin: 0;"><strong>Submission ID:</strong> ${submissionId}</p>
-        </div>
       `
       : `
         <p>Habari <strong>${clientName}</strong>,</p>
         <p>Taarifa na picha za jarida lako <strong>${formTitle || 'Tinzel Magazine'}</strong> zimepokelewa rasmi.</p>
-        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 14px; margin: 16px 0;">
-          <p style="margin: 0;"><strong>Namba ya Mawasilisho:</strong> ${submissionId}</p>
-        </div>
         <p>Tafadhali kamilisha malipo ili tuweze kuthibitisha oda yako na kutoa Namba ya Kufuatilia (Tracking ID).</p>
       `;
     const text = isStaff
-      ? `Habari ${recipientName || 'Meneja'}!\nOda mpya (${submissionId}) ya ${formTitle || 'Tinzel Magazine'} kutoka kwa ${clientName} inasubiri uthibitisho wa malipo.`
-      : `Habari ${clientName}!\nTaarifa za jarida lako (${formTitle || 'Tinzel Magazine'}) zimepokelewa (Namba: ${submissionId}). Tafadhali kamilisha malipo ili kupata Tracking ID.`;
+      ? `Habari ${recipientName || 'Meneja'}!\nOda mpya ya ${formTitle || 'Tinzel Magazine'} kutoka kwa ${clientName} inasubiri uthibitisho wa malipo.`
+      : `Habari ${clientName}!\nTaarifa za jarida lako (${formTitle || 'Tinzel Magazine'}) zimepokelewa. Tafadhali kamilisha malipo ili kupata Tracking ID.`;
 
     return {
       title,

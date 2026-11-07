@@ -80,3 +80,26 @@ test('payment confirmation includes the saved amount and receipt reference witho
  delete order.paymentDetails;
  assert.doesNotMatch(workflowMessage('payment_verified',order,{}, {name:'Neema',role:'client'},'en','').message,/Verified amount|Payment reference/);
 });
+
+test('all workflow channels omit submission references before a tracking ID is assigned', () => {
+  const order = { submissionId: 'SUB-2026-6AEF293E66CFE393BBD48910', clientName: 'Christine Christoph', formTitle: 'Birthday Magazine' };
+  const types = ['order_submitted', 'payment_verified', 'assignment_queued', 'order_assigned', 'draft_uploaded', 'draft_released', 'draft_returned', 'client_revision_requested', 'client_approved', 'print_document_uploaded', 'print_dispatched', 'printing_in_progress', 'printing_completed', 'order_dispatched', 'order_closed'];
+  for (const type of types) for (const role of ['client', 'manager', 'admin', 'designer', 'printer']) for (const channel of ['sms', 'email', 'whatsapp', 'in_system']) for (const lang of ['en', 'sw']) {
+    const content = workflowMessage(type, order, {}, { role, channel }, lang, 'https://tinzel.gifts/staff/pre-design?orderId=example');
+    assert.doesNotMatch(JSON.stringify(content), /SUB-|undefined/);
+    if (channel !== 'in_system') assert.match(content.message, /orderId=example/);
+  }
+  for (const clientPreferredLanguage of ['en', 'sw']) {
+    assert.doesNotMatch(JSON.stringify(clientOtpMessage({ ...order, clientPreferredLanguage }, '123456')), /SUB-|undefined/);
+  }
+});
+
+test('legacy submission email subjects and bodies identify the customer without submission references', async () => {
+  const { emailTemplates } = await import('../src/services/emailService.js');
+  for (const isStaff of [true, false]) {
+    const content = emailTemplates.order_submitted({ submissionId: 'SUB-2026-ABC123', clientName: 'Christine Christoph', formTitle: 'Birthday Magazine', isStaff });
+    assert.doesNotMatch(JSON.stringify(content), /SUB-|Submission ID|Namba ya Mawasilisho/);
+    assert.match(content.text, /Christine Christoph/);
+    assert.match(content.text, /Birthday Magazine/);
+  }
+});

@@ -40,7 +40,7 @@ export function workflowMessage(type, order, event, recipient, lang, actionUrl) 
   const words = copy[key];
   if (!words) throw new Error('Unsupported workflow notification');
 
-  const ref = order.trackingId || order.submissionId;
+  const ref = order.trackingId || '';
   const values = { ref, client: order.clientName, magazine: order.formTitle || (sw ? 'jarida' : 'magazine details'), version: event.version || 1 };
   const body = words[sw ? 3 : 2].replace(/\{(\w+)\}/g, (_, name) => values[name]);
   const lines = [body];

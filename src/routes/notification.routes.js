@@ -148,7 +148,7 @@ router.post('/webhooks/twilio-inbound', verifyTwilioWebhook, async (req, res) =>
         if (pendingOrders.length === 1) {
           targetOrder = pendingOrders[0];
         } else if (pendingOrders.length > 1) {
-          const orderList = pendingOrders.map((o) => o.trackingId || o.submissionId).join(', ');
+          const orderList = pendingOrders.map((o) => o.trackingId || o.clientName).join(', ');
           const replyMessage = `Tinzel: Kuna zaidi ya oda moja inayosubiri kuchapwa (${orderList}). Tafadhali taja namba ya oda katika jibu lako (mf. POKEA TNZ-2026-0001).`;
           return res.type('text/xml').send(`<Response><Message>${escapeXml(replyMessage)}</Message></Response>`);
         }

@@ -28,7 +28,7 @@ export function staffCredentialMessage(user, password, channel) {
 export function clientOtpMessage(order, code, validityMinutes = 10) {
   const sw = order.clientPreferredLanguage !== 'en';
   const title = sw ? 'Msimbo wa kuingia Tinzel' : 'Tinzel sign-in code';
-  const ref = order.trackingId || order.submissionId;
+  const ref = order.trackingId || '';
   const body = sw
     ? `${code} ni msimbo wako wa Tinzel. Unaisha baada ya dakika ${validityMinutes}. Usiushirikishe.`
     : `${code} is your Tinzel sign-in code. It expires in ${validityMinutes} minutes. Do not share it.`;
