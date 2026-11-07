@@ -92,6 +92,7 @@ const proofAnnotationSchema = new mongoose.Schema({
 const correctionItemSchema = new mongoose.Schema({
   text: { type: String, required: true, trim: true },
   annotationId: mongoose.Schema.Types.ObjectId,
+  audio: { type: new mongoose.Schema({ assetId: mongoose.Schema.Types.ObjectId, contentType: String, size: Number }, { _id: false }), default: undefined },
   pageReference: { type: String, default: '', trim: true },
   status: { type: String, enum: ['open', 'addressed'], default: 'open' },
   designerResponse: { type: String, default: '', trim: true },

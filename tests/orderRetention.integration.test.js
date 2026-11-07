@@ -72,6 +72,8 @@ test('erases all related GridFS bytes, records, access and submission history; k
   const unrelated = await bytes('orderPhotos');
   const doc = await order('closed', 8, { mediaSessionId: 'session', uploadedPhotos: [{ assetId: String(photo) }], draftVersions: [{ versionNumber: 1, assetId: draft }] });
   const orderId = doc._id, key = String(orderId), attachmentId = oid();
+  const audio = await bytes('revisionAudio');
+  await mongoose.connection.db.collection('revisionAudio.files').updateOne({ _id: audio }, { $set: { metadata: { orderId: key } } });
   await UploadSession.create({ _id: 'session', orderId, entries: [{ _id: String(photo), provider: 'gridfs' }], finalization: { private: 'answers' } });
   await MediaAsset.create({ _id: String(photo), sessionId: 'session', thumbnailId: String(thumb) });
   await MediaJob.create({ _id: 'archive', orderId, kind: 'archive', outputId: String(archive), state: 'ready' });
@@ -90,7 +92,7 @@ test('erases all related GridFS bytes, records, access and submission history; k
   await cleanExpiredOrders({ now });
   assert.equal((await cleanExpiredOrders({ now: drained })).deleted, 1);
   for (const model of [Order, UploadSession, MediaAsset, MediaJob, ProofPage, DraftUpload, ProofAttachment, MediaDownloadTicket, Notification, AuditLog, AccessSession, AccessChallenge, SecurityEvent, SecurityEventDelivery]) assert.equal(await model.collection.countDocuments(), 0, model.modelName);
-  for (const bucket of ['orderPhotos', 'mediaDerivatives', 'draftFiles', 'proofPages', 'mediaArchives', 'proofAttachments']) {
+  for (const bucket of ['orderPhotos', 'mediaDerivatives', 'draftFiles', 'proofPages', 'mediaArchives', 'proofAttachments', 'revisionAudio']) {
     assert.equal(await mongoose.connection.db.collection(`${bucket}.files`).countDocuments(), bucket === 'orderPhotos' ? 1 : 0, bucket);
     assert.equal(await mongoose.connection.db.collection(`${bucket}.chunks`).countDocuments(), bucket === 'orderPhotos' ? 1 : 0, bucket);
   }

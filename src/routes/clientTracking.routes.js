@@ -1,3 +1,4 @@
+import { parseRevisionUpload, saveRevisionAudio, deleteRevisionAudio, streamRevisionAudio } from '../services/revisionAudioService.js';
 import { formatTanzanianPhone } from '../services/smsService.js';
 import { normalizePhone } from '../utils/phone.js';
 import {setSessionCookie,cookieValue,digest} from '../services/accessSessionService.js';
@@ -344,8 +345,14 @@ router.post('/approve-draft', verifyClientToken, async (req, res) => {
   }
 });
 
+router.get('/revisions/:requestId/items/:itemId/audio', verifyClientToken, async (req, res, next) => {
+  try { await streamRevisionAudio(req, res, await Order.findById(req.clientAuth.orderId), true); } catch (error) { next(error); }
+});
+
 // Request Revisions (Restarts approval loop)
-router.post('/request-revision', verifyClientToken, async (req, res) => {
+router.post('/request-revision', verifyClientToken, parseRevisionUpload, async (req, res) => {
+  let audio;
+  let saved = false;
   try {
 
     const order = await Order.findById(req.clientAuth.orderId);
@@ -361,7 +368,16 @@ router.post('/request-revision', verifyClientToken, async (req, res) => {
     }
     assertExpectedVersion(order, req.body.expectedVersion);
 
-    const items = normalizeCorrectionItems({ ...req.body, items: submitAnnotations(order, 'client', (Array.isArray(req.body.items) ? req.body.items : []).filter((i) => String(i?.text || '').trim()).map((i) => ({ text: i.text, pageReference: i.pageReference }))) });
+    const supplied = (req.body.items || []).filter(i => String(i?.text || '').trim()).map(i => ({ text: i.text, pageReference: i.pageReference }));
+    if (!supplied.length && req.body.feedback) supplied.push({ text: req.body.feedback });
+    const submitted = submitAnnotations(order, 'client', supplied);
+    // Audio is a required checklist item, so it must be addressed before a corrected draft is submitted.
+    if (req.file) submitted.push({ text: 'Audio feedback', pageReference: '' });
+    const items = normalizeCorrectionItems({ items: submitted });
+    if (req.file) {
+      audio = await saveRevisionAudio(req.file, order._id);
+      items[items.length - 1].audio = audio;
+    }
 
     const currentVersion = order.draftVersions.find(
       (v) => v.versionNumber === order.currentDraftVersion
@@ -384,6 +400,7 @@ router.post('/request-revision', verifyClientToken, async (req, res) => {
     // Restart approval loop back to in_design
     order.status = 'revision_requested';
     await order.save();
+    saved = true;
 
     await AuditLog.create({
       actor: { type: 'client', name: order.clientName },
@@ -405,6 +422,7 @@ router.post('/request-revision', verifyClientToken, async (req, res) => {
       order: sanitizeOrderForClient(order),
     });
   } catch (error) {
+    if (audio && !saved) await deleteRevisionAudio(audio).catch(() => {});
     return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message });
   }
 });

@@ -1,3 +1,4 @@
+import { streamRevisionAudio } from '../services/revisionAudioService.js';
 import { designerColumnFilter } from '../services/designerBoardService.js';
 import { permits,requirePermission } from '../services/authorizationService.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
@@ -42,6 +43,10 @@ router.param('id', async (req, res, next, id) => {
   } catch (error) {
     return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });
   }
+});
+
+router.get('/orders/:id/revisions/:requestId/items/:itemId/audio', async (req, res, next) => {
+  try { await streamRevisionAudio(req, res, req.order); } catch (error) { next(error); }
 });
 
 // Get orders assigned to current designer with server-backed pagination & filters

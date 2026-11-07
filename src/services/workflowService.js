@@ -125,6 +125,7 @@ export const sanitizeOrderForClient = (order) => {
       items: (request.items || []).map((item) => ({
         _id: item._id,
         annotationId: item.annotationId,
+        ...(item.audio ? { audio: { contentType: item.audio.contentType, size: item.audio.size } } : {}),
         text: item.text,
         pageReference: item.pageReference,
         status: item.status,

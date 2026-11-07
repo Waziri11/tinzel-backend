@@ -66,6 +66,8 @@ async function purgeFilesAndRecords(order, owner) {
   }
   const outputs = kind => jobs.filter(j => j.kind === kind).flatMap(j => [j.outputId, ...(j.outputIds || [])]);
   const extraDrafts = await db.collection('draftFiles.files').find({ 'metadata.orderId': orderKey }, { projection: { _id: 1 } }).toArray();
+  const audioFiles = await db.collection('revisionAudio.files').find({ 'metadata.orderId': orderKey }, { projection: { _id: 1 } }).toArray();
+  await removeGridFiles('revisionAudio', audioFiles.map(file => file._id));
   await removeGridFiles('orderPhotos', [...photoIds]);
   await removeGridFiles('mediaDerivatives', [...assets.map(a => a.thumbnailId), ...outputs('preview')]);
   await removeGridFiles('draftFiles', [...drafts.map(d => d.assetId), ...drafts.map(d => fileId(d.fileUrl, 'drafts')), ...uploads.map(u => u.assetId), fileId(printUrl, 'drafts'), ...extraDrafts.map(d => d._id)]);
