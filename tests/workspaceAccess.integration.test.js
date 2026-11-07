@@ -58,6 +58,16 @@ async function req(path, role = 'manager', method = 'GET', body) {
   });
   return { status: res.status, data: await res.json() };
 }
+test('only administrators can configure retention; invalid periods and unauthenticated cleanup are rejected', async () => {
+  const key = 'magazine_retention_days';
+  const initial = await req('/admin/config', 'admin');
+  assert.equal(initial.data.configs.find(config => config.key === key).value, 7);
+  for (const role of ['manager', 'designer']) assert.equal((await req('/admin/config', role, 'PUT', {key, value: 30})).status, 403);
+  for (const value of [0, -1, 1.5, '7', null, 3651]) assert.equal((await req('/admin/config', 'admin', 'PUT', {key, value})).status, 400);
+  assert.equal((await req('/admin/config', 'admin', 'PUT', {key, value: 30})).status, 200);
+  assert.equal((await req('/admin/config', 'admin')).data.configs.find(config => config.key === key).value, 30);
+  assert.equal((await fetch(base + '/internal/order-retention')).status, 401);
+});
 test('manager can manage magazine forms through the same endpoints as admin', async () => {
   const forms = '/admin/forms';
   const draft = {

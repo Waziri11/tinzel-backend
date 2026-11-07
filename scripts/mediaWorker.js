@@ -1,3 +1,4 @@
+import { cleanExpiredOrders } from '../src/services/orderRetentionService.js';
 import 'dotenv/config';
 import mongoose from 'mongoose';
 import { connectDB } from '../src/config/db.js';
@@ -10,6 +11,7 @@ process.on('SIGTERM', () => { stopped = true; });
 process.on('SIGINT', () => { stopped = true; });
 try {
   do {
+    console.log(await cleanExpiredOrders());
     console.log(await runMediaJobs());
     if (process.env.MEDIA_CLEANUP_ENABLED === 'true') console.log(await cleanExpiredUploads());
     if (!once && !stopped) await new Promise((r) => setTimeout(r, 2000));

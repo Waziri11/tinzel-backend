@@ -1,3 +1,4 @@
+import { installOrderRetention } from '../services/orderRetentionPolicy.js';
 import mongoose from 'mongoose';
 import { installWorkflowEvents } from '../services/workflowEvents.js';
 
@@ -118,6 +119,10 @@ const revisionRequestSchema = new mongoose.Schema({
 
 const orderSchema = new mongoose.Schema(
   {
+    completedAt: { type: Date, index: true },
+    retentionDeletingAt: Date,
+    retentionLeaseUntil: Date,
+    retentionOwner: String,
     mediaSessionId: { type: String, unique: true, sparse: true },
     submissionId: {
       type: String,
@@ -297,10 +302,12 @@ const orderSchema = new mongoose.Schema(
   }
 );
 
-orderSchema.set('toJSON',{transform:(_doc,ret)=>{delete ret.workflowEvents;delete ret.draftEvents;return ret;}});
+orderSchema.set('toJSON',{transform:(_doc,ret)=>{delete ret.workflowEvents;delete ret.draftEvents;delete ret.retentionDeletingAt;delete ret.retentionLeaseUntil;delete ret.retentionOwner;return ret;}});
 installWorkflowEvents(orderSchema);
+installOrderRetention(orderSchema);
 orderSchema.index({ 'workflowEvents.state': 1, 'workflowEvents.runAfter': 1 });
 orderSchema.index({ status: 1, updatedAt: -1 });
+orderSchema.index({ status: 1, completedAt: 1 });
 orderSchema.index({ assignedDesigner: 1, status: 1, updatedAt: -1 });
 orderSchema.index({ assignedDesigner: 1, updatedAt: -1 });
 orderSchema.index({ updatedAt: -1 });

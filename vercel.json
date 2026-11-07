@@ -21,6 +21,10 @@
     {
       "path": "/api/internal/security-audit-export",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/internal/order-retention",
+      "schedule": "* * * * *"
     }
   ]
 }

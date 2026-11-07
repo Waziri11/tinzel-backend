@@ -44,3 +44,44 @@ Physical mobile-device testing, live Blob transfers, and the complete 1/2/10 Mbp
 ## Rollout
 
 Deploy additive backend support and configure the worker first, verify its health, then deploy the frontend. Test a controlled original upload above 4.5 MB, compare downloaded bytes, wait for a thumbnail, and verify a staff folder download. Never load-test production. Rollback the frontend to its prior deployment if needed; keep new backend routes and storage reads for already-created orders. Deployment status and any controlled live-test evidence should be recorded separately from local test results.
+
+## Completed magazine retention
+
+Admin **System → Configuration → Magazine history retention** controls
+`magazine_retention_days` (whole days, 1–3650; default 7). The period applies to
+existing and future completed submissions. It starts at delivery/closure, not
+at submission or design approval. The current workflow has no cancellation
+status. Active, held, review, printing and dispatched orders do not expire.
+A reopened order clears its completion timestamp. Existing completed orders
+use `deliveryDetails.confirmedAt`, falling back to their last update once.
+
+`GET /api/internal/order-retention` uses the existing `CRON_SECRET` bearer
+authentication and is scheduled every minute in `vercel.json`. The persistent
+`npm run media:worker` also runs retention, independently of
+`MEDIA_CLEANUP_ENABLED` (which controls abandoned uploads). Deploy the backend
+and its cron configuration to enable this in production. No production cleanup
+is run by the tests.
+
+Expiry hides and locks an order, then allows at least five minutes for in-flight
+requests and media workers to drain. Cleanup processes up to ten orders per
+invocation and waits for active media jobs and unexpired direct uploads.
+Deletion removes original photos, thumbnails, PDFs, print files, proof pages,
+correction attachments, ZIP archives, upload chunks/receipts, submission data,
+order-linked notifications and audit records, and client/printer access records.
+Shared form definitions, edition covers and staff accounts are preserved.
+Both GridFS and Blob storage are covered, including legacy local upload files.
+
+File references remain on a hidden order until file deletion succeeds. Failures
+are retried on subsequent runs; `deleted`, `pending` and `failed` counts are
+returned without customer data. A database lease prevents duplicate workers,
+and an optimistic version change prevents a stale request reopening an order.
+Shortening retention can expire old orders on the next run; increasing retention
+does not restore records already claimed for deletion.
+
+The service erases application-owned records and files. Independently managed
+database/provider backups, exported security-audit destinations, sent messages,
+and previously downloaded copies have their own retention policies and are not
+removed by this service.
+
+Verification: `node --test tests/orderRetention.integration.test.js` and the
+frontend `tests/browser/designer-kanban-live.spec.js` use disposable databases.

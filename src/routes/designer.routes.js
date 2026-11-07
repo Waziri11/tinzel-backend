@@ -1,3 +1,4 @@
+import { designerColumnFilter } from '../services/designerBoardService.js';
 import { permits,requirePermission } from '../services/authorizationService.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import {scheduleProofPreparation,afterProofResponse} from '../services/proofPreparationService.js';
@@ -58,7 +59,11 @@ router.get('/orders', async (req, res) => {
       }
     }
 
-    if (req.query.status && req.query.status !== 'all') {
+    if (req.query.column) {
+      const column = designerColumnFilter(req.query.column);
+      if (!column) return res.status(400).json({ message: 'Unknown board column' });
+      Object.assign(filter, column);
+    } else if (req.query.status && req.query.status !== 'all') {
       if (req.query.status === 'active') {
         filter.status = { $nin: ['delivered', 'closed'] };
       } else {
@@ -76,7 +81,7 @@ router.get('/orders', async (req, res) => {
     const [orders, total] = await Promise.all([
       Order.find(filter)
         .select('submissionId trackingId clientName formTitle status currentDraftVersion updatedAt assignedDesigner')
-        .sort({ updatedAt: -1 })
+        .sort({ updatedAt: -1, _id: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
         .lean(),

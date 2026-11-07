@@ -1,3 +1,4 @@
+import { cleanExpiredOrders } from '../services/orderRetentionService.js';
 import {verifyStaffToken} from '../middlewares/auth.middleware.js';
 import { Router } from 'express';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -28,6 +29,11 @@ function isAuthorizedCronRequest(req) {
 }
 
 const router = Router();
+router.get('/internal/order-retention', async (req, res) => {
+  if (!isAuthorizedCronRequest(req)) return res.sendStatus(401);
+  try { res.json(await cleanExpiredOrders()); }
+  catch { res.status(503).json({ message: 'Retention worker temporarily unavailable' }); }
+});
 router.get('/internal/media-jobs', async (req, res) => {
   if (!isAuthorizedCronRequest(req)) return res.sendStatus(401);
   try {

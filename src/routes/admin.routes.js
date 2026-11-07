@@ -1,3 +1,4 @@
+import { RETENTION_KEY, DEFAULT_RETENTION_DAYS, validRetentionDays } from '../services/orderRetentionPolicy.js';
 import { STAFF_VERIFICATION_KEY, DEFAULT_STAFF_VERIFICATION_HOURS, validStaffVerificationHours } from '../services/staffVerificationPolicy.js';
 import { requireRecentVerification } from '../services/accessSessionService.js';
 import { TrustedStaffDevice } from '../models/TrustedStaffDevice.model.js';
@@ -257,6 +258,7 @@ router.get('/config', async (req, res) => {
   try {
     const configs = await SystemConfig.find();
     if (!configs.some(config => config.key === STAFF_VERIFICATION_KEY)) configs.push({ key: STAFF_VERIFICATION_KEY, value: DEFAULT_STAFF_VERIFICATION_HOURS });
+    if (!configs.some(config => config.key === RETENTION_KEY)) configs.push({ key: RETENTION_KEY, value: DEFAULT_RETENTION_DAYS });
     const simulatedNotifs = await getNotificationHistory({ limit: 50 });
     return res.status(200).json({ success: true, configs, simulatedNotifications: simulatedNotifs });
   } catch (error) {
@@ -265,6 +267,7 @@ router.get('/config', async (req, res) => {
 });
 
 const CONFIG_KEY_VALIDATORS = {
+  [RETENTION_KEY]: validRetentionDays,
   [STAFF_VERIFICATION_KEY]: validStaffVerificationHours,
   printer_preferred_language: (v) => ['en','sw'].includes(v),
   printer_whatsapp_phone: (v) => typeof v === 'string' && /^\+?[\d\s-]{9,20}$/.test(v.trim()),

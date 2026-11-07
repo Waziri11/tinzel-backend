@@ -55,6 +55,23 @@ for(let n=1;n<=2;n++){
 await StaffUser.create({name:'Unassigned designer',email:'unassigned@example.test',role:'designer',isEligibleForAssignment:false,passwordHash});
 const printOrder=await Order.findOne({trackingId:'TNZ-SECURITY-2'});
 printOrder.status='printing_sent';printOrder.printDocument={url:`/api/public/drafts/${printOrder.draftVersions[0].assetId}`,uploadedAt:new Date(),managerAuthorisedAt:new Date()};printOrder.printingDetails={printerPhone:'0712000099'};printOrder.workflowEvents=[{key:'synthetic-print',type:'print_dispatched'}];await printOrder.save();
+// Kanban/retention acceptance fixtures use this disposable database only.
+testApp.post('/__test__/kanban-fixtures', async (_req, res) => {
+  const rows = Array.from({length: 12}, (_, i) => ({trackingId:`TNZ-BOARD-NEW-${String(i).padStart(2,'0')}`,status:'assigned'}));
+  rows.push({trackingId:'TNZ-BOARD-MANAGER',status:'revision_requested',revisionRequests:[{roundNumber:1,draftVersionNumber:1,source:'manager',requestedBy:{type:'manager'}}]},
+    {trackingId:'TNZ-BOARD-CLIENT',status:'revision_requested',revisionRequests:[{roundNumber:1,draftVersionNumber:1,source:'client',requestedBy:{type:'client'}}]},
+    {trackingId:'TNZ-BOARD-DONE',status:'closed'});
+  const created = [];
+  for (const row of rows) created.push(await Order.create({...row,submissionId:row.trackingId,formId:form._id,formTitle:'Kanban test edition',clientName:row.trackingId,clientWhatsApp:'test',assignedDesigner:designer._id}));
+  const completed = created.at(-1);
+  await Order.collection.updateOne({_id:completed._id},{$set:{completedAt:new Date(Date.now()-8*86400000)}});
+  res.json({completedId:String(completed._id)});
+});
+testApp.post('/__test__/retention-run', async (_req, res) => {
+  const {cleanExpiredOrders}=await import('../src/services/orderRetentionService.js');
+  const now=new Date();await cleanExpiredOrders({now});
+  res.json(await cleanExpiredOrders({now:new Date(+now+6*60000)}));
+});
 // Consume the real protected-proof queue against this disposable database as a dedicated worker.
 const {runProofJobs}=await import('../src/services/proofWorkerService.js');
 let proofRun=null;
