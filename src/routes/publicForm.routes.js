@@ -1,3 +1,4 @@
+import { getPublicPaymentDetails } from '../services/paymentOptionsService.js';
 import { requirePhone } from '../utils/phone.js';
 import {authorizePrivatePhoto} from '../services/privateMediaAccessService.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
@@ -355,7 +356,7 @@ router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos
         clientWhatsApp: order.clientWhatsApp,
         photosCount: uploadedPhotos.length,
       },
-      lipaNambaInstructions: form.lipaNambaInstructions,
+      ...await getPublicPaymentDetails(form.lipaNambaInstructions),
     });
   } catch (error) {
     return res.status(error.status || 500).json({ success: false, message: error.message });

@@ -1,3 +1,4 @@
+import { getPublicPaymentDetails } from '../services/paymentOptionsService.js';
 import { parseRevisionUpload, saveRevisionAudio, deleteRevisionAudio, streamRevisionAudio } from '../services/revisionAudioService.js';
 import { formatTanzanianPhone } from '../services/smsService.js';
 import { normalizePhone } from '../utils/phone.js';
@@ -264,7 +265,7 @@ router.get('/order', verifyClientToken, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
-    const sanitized = sanitizeOrderForClient(order);
+    const sanitized = { ...sanitizeOrderForClient(order), ...await getPublicPaymentDetails(order.formId?.lipaNambaInstructions) };
     return res.status(200).json({ success: true, csrf:req.accessSession.csrf, order: sanitized });
   } catch (error) {
     return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });

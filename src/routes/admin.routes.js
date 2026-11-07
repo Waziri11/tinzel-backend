@@ -1,3 +1,4 @@
+import { PAYMENT_OPTIONS_KEY, validPaymentOptions, cleanPaymentOptions } from '../services/paymentOptionsService.js';
 import { normalizePhone, requirePhone } from '../utils/phone.js';
 import { RETENTION_KEY, DEFAULT_RETENTION_DAYS, validRetentionDays } from '../services/orderRetentionPolicy.js';
 import { STAFF_VERIFICATION_KEY, DEFAULT_STAFF_VERIFICATION_HOURS, validStaffVerificationHours } from '../services/staffVerificationPolicy.js';
@@ -268,6 +269,7 @@ router.get('/config', async (req, res) => {
 });
 
 const CONFIG_KEY_VALIDATORS = {
+  [PAYMENT_OPTIONS_KEY]: validPaymentOptions,
   [RETENTION_KEY]: validRetentionDays,
   [STAFF_VERIFICATION_KEY]: validStaffVerificationHours,
   printer_preferred_language: (v) => ['en','sw'].includes(v),
@@ -289,7 +291,7 @@ router.put('/config', (req, res, next) => req.body?.key === STAFF_VERIFICATION_K
     if (!CONFIG_KEY_VALIDATORS[key](value)) {
       return res.status(400).json({ success: false, message: `Invalid value for ${key}` });
     }
-    const cleanValue = ['printer_whatsapp_phone', 'support_phone'].includes(key) && value !== '' ? requirePhone(value) : typeof value === 'string' ? value.trim() : value;
+    const cleanValue = key === PAYMENT_OPTIONS_KEY ? cleanPaymentOptions(value) : ['printer_whatsapp_phone', 'support_phone'].includes(key) && value !== '' ? requirePhone(value) : typeof value === 'string' ? value.trim() : value;
     const previous = await SystemConfig.findOne({ key }).lean();
     const config = await SystemConfig.findOneAndUpdate(
       { key },

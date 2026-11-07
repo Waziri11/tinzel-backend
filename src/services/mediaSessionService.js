@@ -1,3 +1,4 @@
+import { getPublicPaymentDetails } from './paymentOptionsService.js';
 import { requirePhone } from '../utils/phone.js';
 import { workflowEvent } from './workflowEvents.js';
 import mongoose from 'mongoose';
@@ -175,7 +176,7 @@ export async function cancelSelection(id, token, clientId) {
 export async function finalizeSession(id, token, body) {
   if (body.clientPreferredLanguage !== undefined && !['en','sw'].includes(body.clientPreferredLanguage)) throw mediaError(400,'Choose English or Kiswahili');
   let session = await getSession(id, token);
-  if (session.result) {const {kickWorkflowNotifications}=await import('./workflowNotificationService.js');await kickWorkflowNotifications(session.orderId);return session.result;}
+  if (session.result) {const {kickWorkflowNotifications}=await import('./workflowNotificationService.js');await kickWorkflowNotifications(session.orderId);return { ...session.result, ...await getPublicPaymentDetails(session.finalization?.lipaNambaInstructions ?? session.result.lipaNambaInstructions) };}
   if (!session.finalization) {
     const form = await MagazineForm.findOne({ _id: session.formId, isActive: true, isArchived: false }).lean();
     if (!form) throw mediaError(404, 'Magazine form is no longer available');
@@ -208,7 +209,7 @@ export async function finalizeSession(id, token, body) {
     action: 'ORDER_SUBMITTED', orderId: order._id, details: { submissionId: order.submissionId, photosCount: order.uploadedPhotos.length, formSlug: session.slug } } }, { upsert: true });
   const result = { success: true, order: { submissionId: order.submissionId, formTitle: order.formTitle,
     clientName: order.clientName, clientWhatsApp: order.clientWhatsApp, status: order.status,
-    photosCount: order.uploadedPhotos.length, price: snap.price, currency: snap.currency }, lipaNambaInstructions: snap.lipaNambaInstructions };
+    photosCount: order.uploadedPhotos.length, price: snap.price, currency: snap.currency }, ...await getPublicPaymentDetails(snap.lipaNambaInstructions) };
   await UploadSession.updateOne({ _id: id }, { $set: { state: 'submitted', result } });
   const { kickWorkflowNotifications } = await import('./workflowNotificationService.js');
   await kickWorkflowNotifications(order._id);

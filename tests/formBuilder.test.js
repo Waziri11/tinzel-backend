@@ -16,7 +16,6 @@ test('Form Builder: draft publication requires complete Tinzel settings', () => 
     currency: 'TZS',
     sections: [{ sectionId: 'section_1', title: 'Questions' }],
     fields: [{ fieldId: 'field_1', label: 'Name' }],
-    lipaNambaInstructions: { tillNumber: '123', accountName: 'Tinzel', instructions: 'Pay here' },
   });
   assert.deepEqual(complete, []);
 });
@@ -25,6 +24,7 @@ test('Form Builder: new forms default to draft while existing active forms remai
   const draft = new MagazineForm({ title: 'Draft', slug: 'draft', price: 1 });
   const published = new MagazineForm({ title: 'Published', slug: 'published', price: 1, isActive: true });
   assert.equal(draft.isActive, false);
+  assert.equal(draft.lipaNambaInstructions.tillNumber, '');
   assert.equal(published.isActive, true);
 });
 

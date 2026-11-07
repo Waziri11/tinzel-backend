@@ -40,7 +40,7 @@ export const requireStatus = (order, allowed, action) => {
 export const validatePayment = ({ lipaNambaReference, amountPaid }) => {
   const reference = clean(lipaNambaReference);
   const amount = Number(amountPaid);
-  if (!reference) throw new ManagerWorkflowError('A genuine Lipa Namba payment reference is required.');
+  if (!reference) throw new ManagerWorkflowError('A genuine payment reference is required.');
   if (!Number.isFinite(amount) || amount <= 0) throw new ManagerWorkflowError('Amount paid must be greater than zero.');
   return { reference, amount };
 };

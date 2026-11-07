@@ -140,14 +140,11 @@ const magazineFormSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    // Legacy details are retained for existing forms until global options are saved.
     lipaNambaInstructions: {
-      tillNumber: { type: String, default: '55667788' },
-      accountName: { type: String, default: 'Tinzel Media Ltd' },
-      instructions: {
-        type: String,
-        default:
-          'Lipa kupitia M-Pesa / Tigo Pesa / Airtel Money ukitumia Lipa Namba (Till Number). Weka jina lako kama reference.',
-      },
+      tillNumber: { type: String, default: '' },
+      accountName: { type: String, default: '' },
+      instructions: { type: String, default: '' },
     },
     sections: {
       type: [formSectionSchema],

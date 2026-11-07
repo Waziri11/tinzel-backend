@@ -25,9 +25,6 @@ export const validateFormForPublication = (form) => {
       errors.push(`${field.label} must have between 3 and 10 rating levels`);
     }
   }
-  if (!text(form?.lipaNambaInstructions?.tillNumber)) errors.push('Lipa Namba is required');
-  if (!text(form?.lipaNambaInstructions?.accountName)) errors.push('Payment account name is required');
-  if (!text(form?.lipaNambaInstructions?.instructions)) errors.push('Payment instructions are required');
 
   return errors;
 };
