@@ -61,8 +61,8 @@ test('handoff messages identify the customer and order and distinguish designer 
   const event={version:3,revisionId:'round-2'};
   for(const lang of ['en','sw'])for(const type of ['client_revision_requested','client_approved','printing_in_progress','order_closed']) {
     const content=workflowMessage(type,order,event,{name:'Manager A',role:'manager',channel:'sms'},lang,'https://tinzel.stryxis.com/staff/post-design');
-    for(const value of ['Neema','TNZ-99','Birthday Magazine']) assert.ok(content.message.includes(value));
-    assert.doesNotMatch(content.message,/Manager A|SUB-99|Role:|Wadhifa:|Responsibilities|Majukumu/);
+    for(const value of ['Neema','Birthday Magazine']) assert.ok(content.message.includes(value));
+    assert.doesNotMatch(content.message,/Manager A|SUB-99|TNZ-99|Role:|Wadhifa:|Responsibilities|Majukumu/);
     if(type==='client_approved') assert.match(content.message,lang==='en'?/customer approved version 3/:/Mteja ameidhinisha toleo la 3/);
   }
   const designer=workflowMessage('client_approved',order,event,{name:'Designer A',role:'designer'},'en','https://tinzel.stryxis.com/staff/design/orders/99');
@@ -117,4 +117,14 @@ test('legacy submission email subjects and bodies identify the customer without 
     assert.match(content.text, /Christine Christoph/);
     assert.match(content.text, /Birthday Magazine/);
   }
+});
+
+test('staff workflow messages identify the sender without order references', () => {
+ for (const role of ['manager', 'admin', 'designer']) for (const lang of ['en', 'sw']) {
+  for (const type of ['order_submitted', 'assignment_queued', 'order_assigned', 'draft_uploaded', 'draft_returned', 'client_revision_requested', 'client_approved', 'print_document_uploaded', 'printing_completed', 'order_closed']) {
+   const content = workflowMessage(type, {clientName:'Asha Mushi',formTitle:'Wedding',trackingId:'TNZ-2026-0123',submissionId:'SUB-2026-123'}, {version:2}, {role,channel:'in_system'}, lang, '');
+   assert.match(content.message, /Asha Mushi/);
+   assert.doesNotMatch(content.message, /TNZ-|SUB-/);
+  }
+ }
 });

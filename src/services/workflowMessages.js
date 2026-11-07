@@ -57,7 +57,7 @@ export function workflowMessage(type, order, event, recipient, lang, actionUrl) 
   if (recipient.role !== 'client' && key !== 'order_submitted') {
     lines.push([order.clientName, order.formTitle].filter(Boolean).join(' · '));
   }
-  if (ref && type !== 'print_dispatched') lines.push(ref);
+  if (ref && type !== 'print_dispatched' && !['manager', 'admin', 'designer'].includes(recipient.role)) lines.push(ref);
   if (type === 'payment_verified') {
     const { amountPaid, lipaNambaReference } = order.paymentDetails || {};
     if (amountPaid > 0) lines.push(`TZS ${amountPaid.toLocaleString(sw ? 'sw-TZ' : 'en-TZ')}`);

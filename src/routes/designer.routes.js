@@ -325,7 +325,7 @@ router.get('/orders/:id/photo-folder.zip', async (req, res) => {
   const controller = new AbortController();
   res.on('close', () => controller.abort());
   res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Disposition', `attachment; filename="${photoArchiveFileName(req.order.trackingId || req.order.clientName, req.query.folder)}"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${photoArchiveFileName(req.order.clientName || 'Magazine', req.query.folder)}"`);
   try { await createPhotoArchive(req.order, req.query.folder, res, controller.signal); }
   catch (error) { if (res.headersSent) res.destroy(error); else res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ message: error.message }); }
 });

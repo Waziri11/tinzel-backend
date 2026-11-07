@@ -1,3 +1,4 @@
+import { securityEventsWithOrderNames } from '../services/securityEventOrderNames.js';
 import {Router} from 'express';
 import mongoose from 'mongoose';
 import {verifyStaffToken,requireRoles} from '../middlewares/auth.middleware.js';
@@ -16,7 +17,8 @@ router.get('/downloads',requireRoles('admin','manager'),async(req,res,next)=>{tr
  if(req.query.alerts==='1')query.action='PREVIEW_HARVEST_ALERT';
  if(req.query.orderId){const order=await findOrder(String(req.query.orderId));if(!order)return res.json({events:[]});query.orderId=String(order._id);}if(req.query.actorId)query.actorId=String(req.query.actorId);
  if(req.query.before && !Number.isNaN(Date.parse(req.query.before)))query.createdAt={$lt:new Date(req.query.before)};
- res.json({events:await SecurityEvent.find(query).sort({createdAt:-1}).limit(100).lean()});
+ const events = await SecurityEvent.find(query).sort({createdAt:-1}).limit(100).lean();
+ res.json({events:await securityEventsWithOrderNames(events)});
 }catch(e){next(e);}});
 router.post('/orders/:id/revoke-client', requireRoles('admin','manager'), requireRecentVerification, async (req, res, next) => {
   try {
