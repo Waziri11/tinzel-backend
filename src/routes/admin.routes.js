@@ -1,3 +1,4 @@
+import { normalizePhone, requirePhone } from '../utils/phone.js';
 import { RETENTION_KEY, DEFAULT_RETENTION_DAYS, validRetentionDays } from '../services/orderRetentionPolicy.js';
 import { STAFF_VERIFICATION_KEY, DEFAULT_STAFF_VERIFICATION_HOURS, validStaffVerificationHours } from '../services/staffVerificationPolicy.js';
 import { requireRecentVerification } from '../services/accessSessionService.js';
@@ -270,11 +271,11 @@ const CONFIG_KEY_VALIDATORS = {
   [RETENTION_KEY]: validRetentionDays,
   [STAFF_VERIFICATION_KEY]: validStaffVerificationHours,
   printer_preferred_language: (v) => ['en','sw'].includes(v),
-  printer_whatsapp_phone: (v) => typeof v === 'string' && /^\+?[\d\s-]{9,20}$/.test(v.trim()),
+  printer_whatsapp_phone: (v) => Boolean(normalizePhone(v)),
   printer_name: (v) => typeof v === 'string' && v.trim().length <= 120,
   printer_email: (v) => typeof v === 'string' && (v === '' || emailPattern.test(v.trim())),
   payment_instructions: (v) => typeof v === 'string' && v.length <= 2000,
-  support_phone: (v) => typeof v === 'string' && (v === '' || /^\+?[\d\s-]{9,20}$/.test(v.trim())),
+  support_phone: (v) => v === '' || Boolean(normalizePhone(v)),
   support_email: (v) => typeof v === 'string' && (v === '' || emailPattern.test(v.trim())),
   default_max_workload: (v) => Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= 20,
 };
@@ -288,7 +289,7 @@ router.put('/config', (req, res, next) => req.body?.key === STAFF_VERIFICATION_K
     if (!CONFIG_KEY_VALIDATORS[key](value)) {
       return res.status(400).json({ success: false, message: `Invalid value for ${key}` });
     }
-    const cleanValue = typeof value === 'string' ? value.trim() : value;
+    const cleanValue = ['printer_whatsapp_phone', 'support_phone'].includes(key) && value !== '' ? requirePhone(value) : typeof value === 'string' ? value.trim() : value;
     const previous = await SystemConfig.findOne({ key }).lean();
     const config = await SystemConfig.findOneAndUpdate(
       { key },

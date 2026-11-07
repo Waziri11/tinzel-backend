@@ -1,3 +1,4 @@
+import { requirePhone } from '../utils/phone.js';
 import { workflowEvent } from './workflowEvents.js';
 import mongoose from 'mongoose';
 import { createHash, timingSafeEqual } from 'node:crypto';
@@ -191,7 +192,7 @@ export async function finalizeSession(id, token, body) {
     const finalization = {
       order: { _id: session.orderId, mediaSessionId: id, submissionId: `SUB-${new Date().getFullYear()}-${session.orderId.toString().toUpperCase()}`,
         formId: form._id, formTitle: form.title, clientName: String(body.clientName).trim(),
-        clientPreferredLanguage: body.clientPreferredLanguage || 'sw', clientWhatsApp: String(body.clientWhatsApp).trim(), clientEmail: String(body.clientEmail || '').trim(),
+        clientPreferredLanguage: body.clientPreferredLanguage || 'sw', clientWhatsApp: requirePhone(body.clientWhatsApp), clientEmail: String(body.clientEmail || '').trim(),
         submittedData: body.answers || {}, submittedFields: form.fields.map(({ fieldId, label, sectionId, order }) => ({ fieldId, label, sectionId, order })),
         uploadedPhotos: photos, status: 'awaiting_payment' },
       price: form.price, currency: form.currency, lipaNambaInstructions: form.lipaNambaInstructions,
@@ -201,7 +202,7 @@ export async function finalizeSession(id, token, body) {
     if (!session.finalization) throw mediaError(409, 'Photo selection changed. Please submit again.');
   }
   const snap = session.finalization;
-  const initialOrder = {...snap.order, workflowEvents:[workflowEvent(snap.order,'order_submitted',`submission:${id}`)]};
+  const initialOrder = {...snap.order, clientWhatsApp: requirePhone(snap.order.clientWhatsApp), workflowEvents:[workflowEvent(snap.order,'order_submitted',`submission:${id}`)]};
   const order = await Order.findOneAndUpdate({ _id: session.orderId }, { $setOnInsert: initialOrder }, { upsert: true, returnDocument: 'after', runValidators: true });
   await AuditLog.updateOne({ _id: session.auditId }, { $setOnInsert: { actor: { type: 'client', name: order.clientName },
     action: 'ORDER_SUBMITTED', orderId: order._id, details: { submissionId: order.submissionId, photosCount: order.uploadedPhotos.length, formSlug: session.slug } } }, { upsert: true });

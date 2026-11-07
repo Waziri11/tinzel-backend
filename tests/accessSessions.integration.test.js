@@ -1,3 +1,4 @@
+import { normalizePhone } from '../src/utils/phone.js';
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import mongoose from 'mongoose';
@@ -15,7 +16,7 @@ after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r
 async function call(path,body,{cookie,csrf,origin='http://127.0.0.1:5177',method=body?'POST':'GET'}={}){const response=await fetch(base+path,{method,headers:{'Content-Type':'application/json',Origin:origin,...(cookie?{Cookie:cookie}:{}),...(csrf?{'X-CSRF-Token':csrf}:{})},body:body?JSON.stringify(body):undefined});return {status:response.status,data:await response.json().catch(()=>({})),cookie:response.headers.get('set-cookie')?.split(';')[0]};}
 test('privileged login requires OTP; cookie session enforces CSRF and replay prevention',async()=>{
  const login=await call('/api/staff/login',{email:user.email,password:'TestPassword!123',channel:'email'});
- assert.equal(login.data.channel,'sms');assert.equal(otpSink.get(digest(login.data.challengeId)).destination,user.phone);
+ assert.equal(login.data.channel,'sms');assert.equal(otpSink.get(digest(login.data.challengeId)).destination,normalizePhone(user.phone));
  assert.equal(login.status,200);assert.equal(login.data.otpRequired,true);assert.equal(login.cookie,undefined);
  const code=otpSink.get(digest(login.data.challengeId)).code;
  assert.equal((await call('/api/staff/otp/verify',{challengeId:login.data.challengeId,code:'000000'})).status,401);
@@ -44,7 +45,7 @@ test('OTP permits five attempts, rejects reuse, expires, and invalidates older c
  const second=await issueChallenge(args);await AccessChallenge.updateOne({_id:digest(second.challengeId)},{$set:{expiresAt:new Date(0)}});
  await assert.rejects(consumeChallenge(second.challengeId,'123456','test',args.ip),/expired/);
  await RateLimitBucket.deleteMany({_id:{$regex:'otp-send-minute:test:attempt-fixture'}});
- const third=await issueChallenge({...args,channel:'sms'});const thirdCode=otpSink.get(digest(third.challengeId)).code;
+ const third=await issueChallenge({...args,channel:'sms',destination:'0712000095'});const thirdCode=otpSink.get(digest(third.challengeId)).code;
  const race=await Promise.allSettled([consumeChallenge(third.challengeId,thirdCode,'test',args.ip),consumeChallenge(third.challengeId,thirdCode,'test',args.ip)]);
  assert.equal(race.filter(r=>r.status==='fulfilled').length,1);
 });
@@ -54,9 +55,9 @@ test('resend shares channel limits and replaces the previous challenge',async()=
  const {RateLimitBucket}=await import('../src/middlewares/rateLimiter.js');
  const args={subjectId:'resend-fixture',purpose:'test',channel:'email',destination:'fixture@example.test',ip:'resend-ip'};
  const first=await issueChallenge(args),code=otpSink.get(digest(first.challengeId)).code;
- await assert.rejects(issueChallenge({...args,channel:'sms'}),e=>e.status===429);
+ await assert.rejects(issueChallenge({...args,channel:'sms',destination:'0712000095'}),e=>e.status===429);
  await RateLimitBucket.deleteOne({_id:'otp-send-minute:test:resend-fixture'});
- const second=await issueChallenge({...args,channel:'sms'});
+ const second=await issueChallenge({...args,channel:'sms',destination:'0712000095'});
  await assert.rejects(consumeChallenge(first.challengeId,code,'test',args.ip));
  assert.equal(otpSink.has(digest(first.challengeId)),false);
  assert.equal((await consumeChallenge(second.challengeId,otpSink.get(digest(second.challengeId)).code,'test',args.ip)).channel,'sms');
@@ -80,7 +81,7 @@ test('contact replacement requires recent identity verification and new destinat
  assert.equal((await StaffUser.findById(user._id)).email,user.email);
  const code=otpSink.get(digest(started.data.challengeId)).code;
  assert.equal((await call('/api/staff/contact/verify',{challengeId:started.data.challengeId,code},options)).status,200);
- assert.equal((await StaffUser.findById(user._id)).phone,'0712000088');
+ assert.equal((await StaffUser.findById(user._id)).phone,'+255712000088');
  assert.equal((await call('/api/staff/me',null,options)).status,401);
 });
 
@@ -105,9 +106,9 @@ test('staff resend and step-up force SMS; legacy email codes cannot authenticate
  await RateLimitBucket.deleteOne({_id:`otp-send-minute:login:${person._id}`});
  const login=await call('/api/staff/login',{email:person.email,password:'TestPassword!123'});assert.equal(login.data.channel,'sms');
  await RateLimitBucket.deleteOne({_id:`otp-send-minute:login:${person._id}`});
- const resend=await call('/api/staff/otp/resend',{challengeId:login.data.challengeId,channel:'email'});assert.equal(resend.data.channel,'sms');assert.equal(otpSink.get(digest(resend.data.challengeId)).destination,person.phone);
+ const resend=await call('/api/staff/otp/resend',{challengeId:login.data.challengeId,channel:'email'});assert.equal(resend.data.channel,'sms');assert.equal(otpSink.get(digest(resend.data.challengeId)).destination,normalizePhone(person.phone));
  const token=await createSession('staff',person,{verifiedAt:new Date()});const session=await AccessSession.findById(digest(token));
- const step=await call('/api/staff/step-up',{channel:'email'},{cookie:`tinzel_staff=${token}`,csrf:session.csrf});assert.equal(step.data.channel,'sms');assert.equal(otpSink.get(digest(step.data.challengeId)).destination,person.phone);
+ const step=await call('/api/staff/step-up',{channel:'email'},{cookie:`tinzel_staff=${token}`,csrf:session.csrf});assert.equal(step.data.channel,'sms');assert.equal(otpSink.get(digest(step.data.challengeId)).destination,normalizePhone(person.phone));
 });
 
 test('SMS verification remembers only this submission and browser, across tracking IDs and ordinary sign-out', async () => {

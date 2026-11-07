@@ -1,3 +1,4 @@
+import { requirePhone } from '../utils/phone.js';
 import { Router } from 'express';
 import { randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
@@ -12,7 +13,6 @@ import { digest, cookieValue, setSessionCookie, issueChallenge, consumeChallenge
 import { authLimits, captcha, captchaConfig, normalizedEmail, assertUncompromisedPassword } from '../services/authProtectionService.js';
 import { authEvent, securityAlert, revokeAccountAccess, failedChallengeEvent } from '../services/authActivityService.js';
 import { passwordErrors, validStaffPhone, finishStaffCredentialDelivery } from '../services/staffCredentialService.js';
-import { formatTanzanianPhone } from '../services/smsService.js';
 const router = Router();
 const route = fn => async (req, res, next) => { try { await fn(req, res); } catch (error) { next(error); } };
 const fail = (status, message) => Object.assign(new Error(message), { status });
@@ -102,7 +102,7 @@ router.post('/security/assisted-recovery', verifyStaffToken, requireRoles('admin
   if (identityConfirmed !== true || typeof evidence !== 'string' || evidence.trim().length < 20 || evidence.length > 500 || !validStaffPhone(phone)) throw fail(400, 'Confirm identity, record the verification reference, and enter a valid replacement phone.');
   const user = await StaffUser.findOne({ email: normalizedEmail(email), role: { $in: ['manager', 'designer'] }, isActive: true, deletedAt: null });
   if (!user) throw fail(400, 'Choose an active manager or designer account.');
-  const destination = formatTanzanianPhone(phone);
+  const destination = requirePhone(phone);
   const challenge = await issueChallenge({ subjectId: String(user._id), purpose: 'assisted-contact', channel: 'sms', destination, ip: req.ip, scope: { ...snapshot(user), sessionId: req.accessSession._id, actorId: String(req.user._id), evidence: evidence.trim() }, language: user.preferredLanguage });
   await AuditLog.create({ actor: { type: 'admin', id: String(req.user._id), name: req.user.name }, action: 'AUTH_ASSISTED_RECOVERY_REQUESTED', details: { staffId: String(user._id), evidence: evidence.trim() }, ipAddress: req.ip });
   res.json(challenge);
@@ -111,7 +111,7 @@ router.post('/security/assisted-recovery/verify', verifyStaffToken, requireRoles
   const challenge = await consumeChallenge(req.body.challengeId, req.body.code, 'assisted-contact', req.ip);
   const user = await StaffUser.findById(challenge.subjectId);
   if (challenge.scope.sessionId !== req.accessSession._id || challenge.scope.actorId !== String(req.user._id) || !['manager', 'designer'].includes(user?.role) || !current(user, challenge.scope)) throw fail(401, 'Recovery has expired. Start again.');
-  const updated = await StaffUser.findOneAndUpdate(activeFilter(user, challenge.scope), { $set: { phone: challenge.destination }, $inc: { tokenVersion: 1 } }, { returnDocument: 'after' });
+  const updated = await StaffUser.findOneAndUpdate(activeFilter(user, challenge.scope), { $set: { phone: requirePhone(challenge.destination) }, $inc: { tokenVersion: 1 } }, { returnDocument: 'after' });
   if (!updated) throw fail(409, 'The account changed. Start recovery again.');
   await revokeAccountAccess(user._id);
   await AuditLog.create({ actor: { type: 'admin', id: String(req.user._id), name: req.user.name }, action: 'AUTH_ASSISTED_RECOVERY_COMPLETED', details: { staffId: String(user._id), evidence: challenge.scope.evidence }, ipAddress: req.ip });

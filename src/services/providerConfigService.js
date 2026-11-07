@@ -1,3 +1,4 @@
+import { requirePhone } from '../utils/phone.js';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import mongoose from 'mongoose';
 import { ProviderConfig } from '../models/ProviderConfig.model.js';
@@ -157,12 +158,7 @@ export function validateProviderValue(field, value) {
     throw Object.assign(new Error('Enter a valid SMTP hostname.'), {
       status: 400,
     });
-  if (field.endsWith('_PHONE_NUMBER') || field === 'TWILIO_WHATSAPP_NUMBER') {
-    if (!/^(whatsapp:)?\+\d{8,15}$/.test(v))
-      throw Object.assign(new Error('Use an international phone number.'), {
-        status: 400,
-      });
-  }
+  if (field.endsWith('_PHONE_NUMBER') || field === 'TWILIO_WHATSAPP_NUMBER') return requirePhone(v.replace(/^whatsapp:/i, ''));
   if (field === 'TWILIO_STATUS_CALLBACK_URL') {
     let url;
     try {

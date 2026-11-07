@@ -1,3 +1,4 @@
+import { normalizePhone } from '../utils/phone.js';
 export const ACTIVE_ORDER_STATUSES = [
   'awaiting_payment',
   'payment_verified',
@@ -91,4 +92,4 @@ export const validateDelivery = ({ recipientName, confirmationMethod, recipientF
   return result;
 };
 
-export const isConfiguredPhone = (value) => /^\+[1-9]\d{8,14}$/.test(clean(value));
+export const isConfiguredPhone = value => Boolean(normalizePhone(value));

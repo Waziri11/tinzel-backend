@@ -156,7 +156,7 @@ test('Client OTP: sends only SMS to the registered number and redacts the stored
   assert.equal(result.channel, 'sms');
   const notifs = getSimulatedNotifications();
   assert.equal(notifs.length, 1);
-  assert.equal(notifs[0].to, mockOrder.clientWhatsApp);
+  assert.equal(notifs[0].to, '+255714000111');
   assert.doesNotMatch(notifs[0].message, /991122/);
   assert.match(notifs[0].message, /\[REDACTED-OTP\]/);
 });

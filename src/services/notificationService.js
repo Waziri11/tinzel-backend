@@ -1,3 +1,4 @@
+import { normalizePhone, requirePhone } from '../utils/phone.js';
 import {providerValue,providerOverride,refreshProviderSettings,redactProviderText} from './providerConfigService.js';
 import { notificationFrontendUrl, notificationTrackingUrl } from './notificationUrls.js';
 import { clientOtpMessage } from './accountMessages.js';
@@ -349,16 +350,7 @@ const getTwilioClient = () => {
  * Normalizes phone numbers to E.164 format for Twilio.
  * Defaults local 07... numbers to Tanzania (+255) if no country code provided.
  */
-export const normalizePhoneNumber = (phone) => {
-  if (!phone) return '';
-  let cleaned = phone.trim().replace(/[\s\-()]/g, '');
-  if (cleaned.startsWith('+')) return cleaned;
-  if (cleaned.startsWith('0')) {
-    const defaultCountry = process.env.DEFAULT_COUNTRY_CODE || '255';
-    return `+${defaultCountry}${cleaned.slice(1)}`;
-  }
-  return `+${cleaned}`;
-};
+export const normalizePhoneNumber = phone => normalizePhone(phone) || '';
 
 /**
  * Universal dispatcher supporting Email (Google SMTP), SMS (Twilio), WhatsApp (Twilio),
@@ -382,6 +374,7 @@ export const sendNotification = async ({
   fallbackToSms = true,
   skipPersistence = false,
 }) => {
+  if (channel === 'sms' || channel === 'whatsapp') to = requirePhone(to);
   await refreshProviderSettings();
   const timestamp = new Date().toISOString();
   const sensitive = template === 'staff_credentials' || template === 'client_otp';

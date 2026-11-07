@@ -1,3 +1,4 @@
+import { requirePhone, samePhone } from '../utils/phone.js';
 import staffSecurityRoutes from './staffSecurity.routes.js';
 import { authLimits, captcha, assertUncompromisedPassword } from '../services/authProtectionService.js';
 import { authEvent, securityAlert, revokeAccountAccess, completeSignIn, failedChallengeEvent } from '../services/authActivityService.js';
@@ -112,14 +113,14 @@ router.post('/step-up/verify',verifyStaffToken,async(req,res,next)=>{try{
  await AccessSession.updateOne({_id:req.accessSession._id},{$set:{verifiedAt:new Date()}});res.json({success:true});
 }catch(e){next(e);}});
 router.post('/contact',verifyStaffToken,requireRecentVerification,async(req,res,next)=>{try{
- const channel=req.body.channel;const destination=String(req.body.destination||'').trim();
+ const channel=req.body.channel;const destination=requirePhone(req.body.destination);
  if(channel!=='sms'||!validStaffPhone(destination))return res.status(400).json({message:'SMS verification requires a valid phone number'});
  res.json(await issueChallenge({subjectId:String(req.user._id),purpose:'contact',channel,destination,ip:req.ip,scope:{sessionId:req.accessSession._id},language:req.user.preferredLanguage}));
 }catch(e){next(e);}});
 router.post('/contact/verify',verifyStaffToken,requireRecentVerification,async(req,res,next)=>{try{
  const challenge=await consumeChallenge(req.body.challengeId,req.body.code,'contact',req.ip);
  if(challenge.channel!=='sms' || challenge.scope.sessionId!==req.accessSession._id)return res.sendStatus(403);
- const updated=await StaffUser.findOneAndUpdate({_id:req.user._id,tokenVersion:req.user.tokenVersion,isActive:true,deletedAt:null,phone:req.user.phone},{$set:{phone:challenge.destination},$inc:{tokenVersion:1}},{returnDocument:'after'});
+ const updated=await StaffUser.findOneAndUpdate({_id:req.user._id,tokenVersion:req.user.tokenVersion,isActive:true,deletedAt:null,phone:req.user.phone},{$set:{phone:requirePhone(challenge.destination)},$inc:{tokenVersion:1}},{returnDocument:'after'});
  if(!updated)return res.status(409).json({message:'The account changed. Start verification again.'});
  await revokeAccountAccess(req.user._id);
  await authEvent(req,'AUTH_CONTACT_CHANGED',updated);await securityAlert(updated,'AUTH_CONTACT_CHANGED',req.user.phone);
@@ -151,9 +152,9 @@ router.patch('/profile', verifyStaffToken, async (req, res) => {
   const { name, phone } = req.body || {};
   if (Object.keys(req.body || {}).some(key => !['name', 'phone'].includes(key))) return res.status(400).json({message:'Only name and phone may be changed.'});
   if (typeof name !== 'string' || !name.trim() || name.trim().length > 120 || !validStaffPhone(phone)) return res.status(400).json({message:'Provide a name and valid phone number.'});
-  if(phone!==req.user.phone)return res.status(403).json({message:'Verify a new phone through the security contact workflow.'});
+  if(!samePhone(phone,req.user.phone))return res.status(403).json({message:'Verify a new phone through the security contact workflow.'});
   try {
-    const user = await StaffUser.findOneAndUpdate({_id:req.user._id,isActive:true,deletedAt:null}, {$set:{name:name.trim(),phone:phone.trim()}}, {new:true});
+    const user = await StaffUser.findOneAndUpdate({_id:req.user._id,isActive:true,deletedAt:null,phone:req.user.phone,tokenVersion:req.user.tokenVersion}, {$set:{name:name.trim()}}, {new:true});
     if (!user) return res.status(401).json({message:'Account unavailable.'});
     await AuditLog.create({actor:{type:user.role,id:user._id,name:user.name},action:'STAFF_PROFILE_UPDATED',details:{staffId:user._id}});
     res.json({success:true,user:{id:user._id,name:user.name,phone:user.phone,email:user.email,role:user.role,preferredLanguage:user.preferredLanguage}});

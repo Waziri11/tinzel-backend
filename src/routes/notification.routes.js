@@ -1,9 +1,9 @@
+import { phoneMatchPattern } from '../utils/phone.js';
 import {redactProviderDiagnostics} from '../services/providerConfigService.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import { Router } from 'express';
 import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.js';
 import { verifyTwilioWebhook } from '../middlewares/twilioWebhook.middleware.js';
-import { escapeRegex } from '../utils/regexUtils.js';
 
 export function escapeXml(value) {
   return String(value ?? '')
@@ -206,12 +206,7 @@ router.post('/webhooks/twilio-inbound', verifyTwilioWebhook, async (req, res) =>
     // Attempt to match active client orders by phone
     let linkedOrderId = null;
     if (normalizedSender) {
-      const safeSuffix = escapeRegex(cleanFromPhone.slice(-9));
-      const clientOrder = safeSuffix
-        ? await Order.findOne({
-            clientWhatsApp: { $regex: new RegExp(safeSuffix + '$') },
-          }).sort({ createdAt: -1 })
-        : null;
+      const clientOrder = await Order.findOne({ clientWhatsApp: phoneMatchPattern(normalizedSender) }).sort({ createdAt: -1 });
       if (clientOrder) {
         linkedOrderId = clientOrder._id;
       }

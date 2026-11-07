@@ -65,7 +65,7 @@ test('printer authorization rejects replacement, recipient change, cancellation,
  const fresh=await Order.findById(order._id);const invitation=await createPrinterInvitation(fresh,'security-print',{reissue:true});
  const path=`/api/printer/invitations/${invitation._id}`;
  await RateLimitBucket.deleteOne({_id:`otp-send-minute:printer:${order._id}`});
- const challenge=await (await post(path+'/otp',{phone:'0712999999'})).json();const message=otpSink.get(digest(challenge.challengeId));assert.equal(message.destination,'0712000001');
+ const challenge=await (await post(path+'/otp',{phone:'0712999999'})).json();const message=otpSink.get(digest(challenge.challengeId));assert.equal(message.destination,'+255712000001');
  const verified=await post(path+'/verify',{challengeId:challenge.challengeId,code:message.code});const cookie=verified.headers.get('set-cookie').split(';')[0];
  const download=()=>fetch(base+path+'/file',{headers:{Cookie:cookie}});
  for(const [field,value,original] of [['printingDetails.printerPhone','0712999999',fresh.printingDetails.printerPhone],['status','cancelled',fresh.status],['printDocument.uploadedAt',new Date(0),fresh.printDocument.uploadedAt]]){

@@ -1,3 +1,4 @@
+import { normalizePhone } from '../utils/phone.js';
 import {permits} from '../services/authorizationService.js';
 import staffManagementRoutes from './staffManagement.routes.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
@@ -55,7 +56,7 @@ router.get('/designers', async (_req, res) => {
 router.get('/settings', async (_req, res) => {
   try {
     const printerConfig = await SystemConfig.findOne({ key: 'printer_whatsapp_phone' }).lean();
-    const printerPhone = typeof printerConfig?.value === 'string' ? printerConfig.value.trim() : '';
+    const printerPhone = normalizePhone(printerConfig?.value) || '';
     return res.json({
       success: true,
       printer: { phone: isConfiguredPhone(printerPhone) ? printerPhone : '', configured: isConfiguredPhone(printerPhone) },
@@ -470,7 +471,7 @@ router.post('/orders/:id/authorise-print', async (req, res) => {
 
     // Get Printer WhatsApp Number from System Config
     const printerConfig = await SystemConfig.findOne({ key: 'printer_whatsapp_phone' });
-    const printerPhone = typeof printerConfig?.value === 'string' ? printerConfig.value.trim() : '';
+    const printerPhone = normalizePhone(printerConfig?.value) || '';
     if (!isConfiguredPhone(printerPhone)) {
       throw new ManagerWorkflowError('The administrator must configure a verified printer WhatsApp number before dispatch.');
     }

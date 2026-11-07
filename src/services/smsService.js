@@ -1,3 +1,4 @@
+import { requirePhone } from '../utils/phone.js';
 import {providerValue,refreshProviderSettings,redactProviderText,redactProviderDiagnostics} from './providerConfigService.js';
 import dotenv from 'dotenv';
 
@@ -17,32 +18,11 @@ export const NEXTSMS_TIMEOUT_MS = Number(process.env.NEXTSMS_TIMEOUT_MS) || 1000
  * @returns {string} Formatted Tanzanian phone number starting with '255'
  */
 export const formatTanzanianPhone = (phone) => {
-  if (typeof phone !== 'string' || !phone.trim()) {
-    const error = new Error('A valid recipient phone number ("to") is required.');
-    error.status = 400;
-    throw error;
+  const canonical = requirePhone(phone);
+  if (!canonical.startsWith('+255')) {
+    throw Object.assign(new Error('SMS verification is currently available only for Tanzanian (+255) numbers.'), { status: 400 });
   }
-
-  // Remove '+' signs, spaces, hyphens, parentheses, and dots
-  let cleaned = phone.trim().replace(/[+\s\-().]/g, '');
-
-  // Convert local Tanzanian format starting with '0' (e.g. 0712345678 -> 255712345678)
-  if (cleaned.startsWith('0')) {
-    cleaned = `255${cleaned.slice(1)}`;
-  } else if (!cleaned.startsWith('255') && /^\d{9}$/.test(cleaned)) {
-    // Convert 9-digit local subscriber number (e.g. 712345678 -> 255712345678)
-    cleaned = `255${cleaned}`;
-  }
-
-  if (!/^255\d{9}$/.test(cleaned)) {
-    const error = new Error(
-      'Invalid Tanzanian phone number format. Expected a number starting with 255 (e.g., 255712345678 or 0712345678).'
-    );
-    error.status = 400;
-    throw error;
-  }
-
-  return cleaned;
+  return canonical.slice(1);
 };
 
 /**

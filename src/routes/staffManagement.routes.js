@@ -1,3 +1,4 @@
+import { requirePhone, samePhone } from '../utils/phone.js';
 import {requireRecentVerification} from '../services/accessSessionService.js';
 import { Router } from 'express';
 import mongoose from 'mongoose';
@@ -185,7 +186,7 @@ router.post('/staff', async (req, res) => {
       _id: staffId,
       ...credentials,
       role,
-      phone: typeof phone === 'string' ? phone.trim() : '',
+      phone: requirePhone(phone),
       maxActiveWorkload:
         role === 'designer' && maxActiveWorkload !== undefined
           ? Number(maxActiveWorkload)
@@ -289,7 +290,7 @@ router.put('/staff/:id', async (req, res) => {
       user.name = name.trim();
     }
     if(typeof email==='string' && email.trim().toLowerCase()!==user.email)return res.status(403).json({message:'The account holder must verify contact changes through Account security.'});
-    if(phone!==undefined && phone!==user.phone)return res.status(403).json({message:'The account holder must verify contact changes through Account security.'});
+    if(phone!==undefined && !samePhone(phone,user.phone))return res.status(403).json({message:'The account holder must verify contact changes through Account security.'});
     if (email !== undefined) {
       if (typeof email !== 'string' || !emailPattern.test(email.trim()))
         return res
@@ -310,7 +311,7 @@ router.put('/staff/:id', async (req, res) => {
         return res
           .status(400)
           .json({ success: false, message: 'Phone must be text' });
-      user.phone = phone.trim();
+      // Equivalent formatting must not invalidate existing contact-bound sessions.
     }
     if (isActive !== undefined) {
       if (typeof isActive !== 'boolean')

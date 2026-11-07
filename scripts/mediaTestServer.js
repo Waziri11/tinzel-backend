@@ -48,6 +48,7 @@ const {proofPdf}=await import('../tests/fixtures/proofPdf.js');
 const {enqueueProof}=await import('../src/services/proofReaderService.js');
 const form=await MagazineForm.findOne({slug:'acceptance-magazine'});
 const designer=await StaffUser.findOne({role:'designer'});
+for (const sequence of [9998, 9999]) await Order.create({ submissionId: `SUB-PHONE-BROWSER-${sequence}`, trackingId: `TNZ-2026-${sequence}`, clientName: 'Phone browser fixture', clientWhatsApp: '0712 000 081', formId: form._id, formTitle: 'Acceptance magazine', status: 'awaiting_payment' });
 for(let n=1;n<=2;n++){
  const id=new mongoose.Types.ObjectId();const assetId=await saveDraftPdf({buffer:proofPdf(),originalname:'synthetic.pdf'},id,1);
  const order=await Order.create({_id:id,submissionId:`SUB-SECURITY-${n}`,trackingId:`TNZ-SECURITY-${n}`,clientName:`Synthetic Client ${n}`,clientWhatsApp:`071200001${n}`,formId:form._id,assignedDesigner:designer._id,status:'client_review',currentDraftVersion:1,draftVersions:[{versionNumber:1,assetId,managerReview:{status:'approved'}}]});await enqueueProof(order._id,1);

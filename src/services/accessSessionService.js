@@ -1,3 +1,5 @@
+import { requirePhone } from '../utils/phone.js';
+import { formatTanzanianPhone } from './smsService.js';
 import {randomBytes,createHash,createHmac,randomInt,timingSafeEqual} from 'node:crypto';
 import {AccessSession,AccessChallenge} from '../models/AccessSession.model.js';
 import {getJwtSecret} from '../middlewares/auth.middleware.js';
@@ -46,6 +48,7 @@ export async function readSession(req,kind){
 export async function requireRecentVerification(req,res,next){if(!req.accessSession?.verifiedAt || Date.now()-new Date(req.accessSession.verifiedAt)>600000)return res.status(403).json({errorCode:'OTP_REQUIRED',message:'Verify your identity before continuing'});next();}
 async function limit(scope,key,maxAttempts,windowMs){const r=await consumeRateLimit({scope,key,maxAttempts,windowMs,failClosed:true});if(!r.allowed)throw Object.assign(new Error('Please wait before requesting another code'),{status:429});}
 export async function issueChallenge({subjectId,purpose,channel,destination,ip,scope,id=randomBytes(32).toString('hex'),language='en'}){
+ if (channel === 'sms') { destination = requirePhone(destination); formatTanzanianPhone(destination); }
  assertDeliveryConfiguration();if(!['email','sms'].includes(channel)||!destination)throw Object.assign(new Error('Choose a configured email or SMS destination'),{status:400});
  await limit('otp-send-minute',`${purpose}:${subjectId}`,1,60000);
  await limit('otp-send-account',subjectId,5,900000);await limit('otp-send-ip',ip,20,900000);

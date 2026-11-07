@@ -1,9 +1,9 @@
+import { normalizePhone } from '../utils/phone.js';
 import { staffCredentialMessage } from './accountMessages.js';
 import { randomInt, randomBytes, createCipheriv, createDecipheriv, randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import { waitUntil } from '@vercel/functions';
-import { formatTanzanianPhone } from './smsService.js';
 import { StaffUser } from '../models/StaffUser.model.js';
 import { Notification } from '../models/Notification.model.js';
 import { sendNotification, getNotificationSettings, isTriggerChannelEnabled } from './notificationService.js';
@@ -48,7 +48,7 @@ export async function initialCredentialFields(staffId,generation=1,now=new Date(
     credentialDelivery:{sms:{status:'queued',attempts:0},email:{status:'queued',attempts:0}},
     credentialJob:{generation,state:'pending',runAfter:now,payload:{iv:iv.toString('base64'),tag:cipher.getAuthTag().toString('base64'),ciphertext:ciphertext.toString('base64')}}};
 }
-export const validStaffPhone=value=>{try{formatTanzanianPhone(value);return true;}catch{return false;}};
+export const validStaffPhone = value => Boolean(normalizePhone(value));
 export function publicStaff(user) {
   const source=typeof user.toObject==='function'?user.toObject():{...user};
   delete source.passwordHash;delete source.credentialJob;

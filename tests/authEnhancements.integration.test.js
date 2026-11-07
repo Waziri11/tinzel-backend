@@ -130,7 +130,7 @@ test('assisted recovery requires a verified admin, evidence, a target-phone OTP,
   const code = otpSink.get(digest(started.data.challengeId)).code; assert.equal((await StaffUser.findById(user._id)).phone, user.phone);
   const old = await session(user);
   const verified = await call('/security/assisted-recovery/verify', { challengeId: started.data.challengeId, code }, auth); assert.equal(verified.status, 200);
-  const updated = await StaffUser.findById(user._id); assert.equal(updated.phone, '255712000055'); assert.equal(updated.role, 'manager'); assert.equal(updated.isActive, true);
+  const updated = await StaffUser.findById(user._id); assert.equal(updated.phone, '+255712000055'); assert.equal(updated.role, 'manager'); assert.equal(updated.isActive, true);
   assert.equal((await call('/me', null, old)).status, 401);
   assert.equal(await AuditLog.countDocuments({ action: 'AUTH_ASSISTED_RECOVERY_COMPLETED', 'details.staffId': String(user._id) }), 1);
   assert.equal(await Notification.countDocuments({ recipientUser: user._id, 'metadata.action': 'AUTH_ASSISTED_RECOVERY' }), 4);

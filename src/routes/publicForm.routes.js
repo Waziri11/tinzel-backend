@@ -1,3 +1,4 @@
+import { requirePhone } from '../utils/phone.js';
 import {authorizePrivatePhoto} from '../services/privateMediaAccessService.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import { Router } from 'express';
@@ -198,6 +199,8 @@ router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos
       });
     }
 
+    const normalizedPhone = requirePhone(clientWhatsApp);
+
     // Parse submitted form data if JSON encoded
     let parsedData = formDataRaw;
     if (typeof formDataRaw.answers === 'string') {
@@ -311,7 +314,7 @@ router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos
       formId: form._id,
       formTitle: form.title,
       clientName: clientName.trim(),
-      clientWhatsApp: clientWhatsApp.trim(),
+      clientWhatsApp: normalizedPhone,
       clientEmail: clientEmail ? clientEmail.trim() : '',
       clientPreferredLanguage: req.body.clientPreferredLanguage || 'sw',
       submittedData: parsedData,

@@ -1,3 +1,5 @@
+import { formatTanzanianPhone } from '../services/smsService.js';
+import { normalizePhone } from '../utils/phone.js';
 import {setSessionCookie,cookieValue,digest} from '../services/accessSessionService.js';
 import {AccessSession} from '../models/AccessSession.model.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
@@ -66,7 +68,7 @@ const requestOtpLimiter = createRateLimiter({
   scope: 'client-request-otp',
   maxAttempts: 5,
   windowMs: 10 * 60 * 1000,
-  keyGenerator: (req) => `${req.ip || 'ip'}:${String(req.body?.trackingId || '').trim().toUpperCase()}`,
+  keyGenerator: (req) => `${req.ip || 'ip'}:${trackingLookupKey(req.body?.trackingId)}`,
   message: 'Too many OTP requests. Please wait a few minutes before requesting another code.',
 });
 
@@ -74,35 +76,32 @@ const verifyOtpLimiter = createRateLimiter({
   scope: 'client-verify-otp',
   maxAttempts: 10,
   windowMs: 10 * 60 * 1000,
-  keyGenerator: (req) => `${req.ip || 'ip'}:${String(req.body?.trackingId || '').trim().toUpperCase()}`,
+  keyGenerator: (req) => `${req.ip || 'ip'}:${trackingLookupKey(req.body?.trackingId)}`,
   message: 'Too many OTP verification attempts. Please wait before trying again.',
 });
 
 const UNIFORM_LOOKUP_ERROR =
   'Unable to verify tracking details. Please check your Tracking/Submission ID and registered phone number.';
 
-export function normalizeClientPhone(rawPhone) {
-  const digits = String(rawPhone || '')
-    .trim()
-    .replace(/[\s\-().+]/g, '');
-  if (!/^\d{9,15}$/.test(digits)) {
-    return null;
-  }
-  if (digits.length === 10 && digits.startsWith('0')) {
-    return `255${digits.slice(1)}`;
-  }
-  if (digits.length === 9 && /^[67]/.test(digits)) {
-    return `255${digits}`;
-  }
-  return digits;
+// Preserve the existing digits-only binding for remembered devices and OTPs.
+export const normalizeClientPhone = raw => normalizePhone(raw)?.slice(1) || null;
+
+export function trackingLookupKey(rawId) {
+  const id = typeof rawId === 'string' ? rawId.trim().toUpperCase() : '';
+  const match = /^TNZ-(\d{4})-(\d{1,20})$/.exec(id);
+  return match ? `TNZ-${match[1]}-${match[2].replace(/^0+(?=\d)/, '')}` : id.slice(0, 100);
 }
 
-async function findOrderByTrackingOrSubmissionId(rawId) {
-  const cleanId = String(rawId || '').trim().toUpperCase();
-  if (!cleanId) return null;
-  return Order.findOne({
-    $or: [{ trackingId: cleanId }, { submissionId: cleanId }],
-  });
+export async function findOrderByTrackingOrSubmissionId(rawId) {
+  const cleanId = typeof rawId === 'string' ? rawId.trim().toUpperCase() : '';
+  if (!cleanId || cleanId.length > 100) return null;
+  const exact = await Order.findOne({ $or: [{ trackingId: cleanId }, { submissionId: cleanId }] });
+  if (exact) return exact;
+  const match = /^TNZ-(\d{4})-(\d{1,20})$/.exec(cleanId);
+  if (!match) return null;
+  const sequence = match[2].replace(/^0+(?=\d)/, '');
+  const candidates = await Order.find({ trackingId: new RegExp(`^TNZ-${match[1]}-0*${sequence}$`) }).limit(2);
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 const DEVICE_TRUST_MS = 30 * 24 * 60 * 60 * 1000;
@@ -162,6 +161,8 @@ router.post('/request-otp', requestOtpLimiter, async (req, res) => {
     }
 
     if (await trustsSubmission(req, order)) return await startTrackingSession(res, order);
+
+    formatTanzanianPhone(clientWhatsApp);
 
     // Generate cryptographically random 6-digit OTP and store only its keyed HMAC-SHA256 hash
     const otpCode = randomInt(100000, 1000000).toString();

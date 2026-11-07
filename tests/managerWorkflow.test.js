@@ -30,5 +30,5 @@ test('dispatch and delivery require real operational evidence', () => {
   assert.throws(() => validateDispatch({ carrier: 'Courier', trackingReference: '', deliveryAddress: 'Dar' }), /tracking reference/);
   assert.throws(() => validateDelivery({ recipientName: 'Asha', confirmationMethod: '', recipientFeedback: 'Received' }), /Choose how/);
   assert.equal(isConfiguredPhone('+255712345678'), true);
-  assert.equal(isConfiguredPhone('0712345678'), false);
+  assert.equal(isConfiguredPhone('0712345678'), true);
 });
