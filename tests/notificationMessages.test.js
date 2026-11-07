@@ -4,6 +4,21 @@ import { notificationFrontendUrl, notificationBackendUrl, notificationTrackingUr
 import { staffCredentialMessage, clientOtpMessage } from '../src/services/accountMessages.js';
 import { workflowMessage } from '../src/services/workflowMessages.js';
 
+test('customer journey messages explain the next step and preserve staff instructions', () => {
+  const order = { trackingId: 'TNZ-TEST', clientName: 'Test customer', formTitle: 'Birthday Magazine' };
+  for (const lang of ['en', 'sw']) for (const type of ['order_submitted', 'payment_verified', 'draft_released', 'printing_in_progress', 'order_dispatched', 'order_closed']) {
+    const message = workflowMessage(type, order, { version: 2 }, { role: 'client', channel: 'email' }, lang, 'https://tinzel.gifts/track');
+    assert.doesNotMatch(message.message, /assigned|manager|approval loop|upload the print|meneja|kupangiwa/i);
+    assert.match(message.html, lang === 'en' ? /Track my order/ : /Fuatilia oda yangu/);
+    assert.match(message.message, /TNZ-TEST/);
+  }
+  const review = workflowMessage('draft_released', order, { version: 2 }, { role: 'client' }, 'en', '');
+  assert.match(review.message, /check every page/);
+  assert.match(review.message, /Approve it for printing/);
+  const staff = workflowMessage('client_approved', order, { version: 2 }, { role: 'designer' }, 'en', '');
+  assert.match(staff.message, /Upload the print file/);
+});
+
 const saved = Object.fromEntries(['FRONTEND_URL','BACKEND_URL','NODE_ENV','VERCEL'].map(key => [key,process.env[key]]));
 afterEach(() => { for (const [key,value] of Object.entries(saved)) { if(value === undefined) delete process.env[key]; else process.env[key] = value; } });
 

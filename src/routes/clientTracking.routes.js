@@ -71,7 +71,7 @@ const requestOtpLimiter = createRateLimiter({
   maxAttempts: 5,
   windowMs: 10 * 60 * 1000,
   keyGenerator: (req) => `${req.ip || 'ip'}:${trackingLookupKey(req.body?.trackingId)}`,
-  message: 'Too many OTP requests. Please wait a few minutes before requesting another code.',
+  message: 'You have requested several SMS codes. Please wait a few minutes before trying again.',
 });
 
 const verifyOtpLimiter = createRateLimiter({
@@ -79,7 +79,7 @@ const verifyOtpLimiter = createRateLimiter({
   maxAttempts: 10,
   windowMs: 10 * 60 * 1000,
   keyGenerator: (req) => `${req.ip || 'ip'}:${trackingLookupKey(req.body?.trackingId)}`,
-  message: 'Too many OTP verification attempts. Please wait before trying again.',
+  message: 'You have tried several codes. Please wait a few minutes before trying again.',
 });
 
 const UNIFORM_LOOKUP_ERROR =
@@ -194,12 +194,12 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res) => {
   try {
     const { trackingId, otp } = req.body;
     if (!trackingId || !otp) {
-      return res.status(400).json({ success: false, message: 'Tracking ID and OTP code are required' });
+      return res.status(400).json({ success: false, message: 'Enter your order number and the code from your SMS.' });
     }
 
     const order = await findOrderByTrackingOrSubmissionId(trackingId);
     if (!order || !order.otp || !order.otp.code || order.otp.binding !== trackingBinding(order)) {
-      return res.status(400).json({ success: false, message: 'No active OTP request found' });
+      return res.status(400).json({ success: false, message: 'Please request a new SMS code to view your order.' });
     }
 
     if ((order.otp.attempts || 0) >= MAX_OTP_ATTEMPTS) {
@@ -207,14 +207,14 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res) => {
       await order.save();
       return res.status(429).json({
         success: false,
-        message: 'Maximum OTP attempts exceeded. Please request a new code.',
+        message: 'Too many incorrect codes. Please request a new SMS code.',
       });
     }
 
     if (new Date() > new Date(order.otp.expiresAt)) {
       order.otp = undefined;
       await order.save();
-      return res.status(400).json({ success: false, message: 'OTP has expired. Please request a new one' });
+      return res.status(400).json({ success: false, message: 'Your SMS code has expired. Please request a new code.' });
     }
 
     if (!verifyOtpCode(order._id, order.otp.code, otp)) {
@@ -224,12 +224,12 @@ router.post('/verify-otp', verifyOtpLimiter, async (req, res) => {
         await order.save();
         return res.status(429).json({
           success: false,
-          message: 'Maximum OTP attempts exceeded. Please request a new code.',
+          message: 'Too many incorrect codes. Please request a new SMS code.',
         });
       }
       order.otp.attempts = nextAttempts;
       await order.save();
-      return res.status(400).json({ success: false, message: 'Invalid OTP code' });
+      return res.status(400).json({ success: false, message: 'That SMS code is incorrect. Please check it and try again.' });
     }
 
     // Clear OTP after successful verification
@@ -279,7 +279,7 @@ router.get('/draft/view', verifyClientToken, async (req, res) => {
     const allowed = ['client_review', 'revision_requested', 'client_approved', 'print_document_prep', 'print_manager_review', 'printing_sent', 'printing_in_progress', 'printing_completed', 'dispatched', 'delivered', 'closed'];
     const draft = order.draftVersions.find((item) => item.versionNumber === order.currentDraftVersion);
     if (!allowed.includes(order.status) || !draft || draft.managerReview?.status !== 'approved') {
-      return res.status(404).json({ success: false, message: 'No magazine proof is currently available' });
+      return res.status(404).json({ success: false, message: 'Your magazine preview is not ready yet. Please check back later.' });
     }
     return streamDraftPdf(res, draft);
   } catch (error) { return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.message }); }
@@ -296,7 +296,7 @@ router.post('/approve-draft', verifyClientToken, async (req, res) => {
     if (order.status !== 'client_review') {
       return res.status(400).json({
         success: false,
-        message: `Cannot approve magazine in current status: ${order.status}. Must be in 'client_review'.`,
+        message: 'Your magazine is not currently waiting for your review. Please refresh to see the latest update.',
       });
     }
 
@@ -307,7 +307,7 @@ router.post('/approve-draft', verifyClientToken, async (req, res) => {
     if (!currentVersion || !currentVersion.managerReview || currentVersion.managerReview.status !== 'approved') {
       return res.status(400).json({
         success: false,
-        message: 'No released draft version is currently awaiting your approval',
+        message: 'There is no magazine preview waiting for your approval. Please refresh to see the latest update.',
       });
     }
 
@@ -338,7 +338,7 @@ router.post('/approve-draft', verifyClientToken, async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: 'Whole magazine approved successfully! It has now proceeded to print document preparation.',
+      message: 'Thank you! We will now prepare your magazine for printing.',
       order: sanitizeOrderForClient(order),
     });
   } catch (error) {
@@ -364,7 +364,7 @@ router.post('/request-revision', verifyClientToken, parseRevisionUpload, async (
     if (order.status !== 'client_review') {
       return res.status(400).json({
         success: false,
-        message: 'Order is not currently in client review stage',
+        message: 'Your magazine is not currently waiting for your review. Please refresh to see the latest update.',
       });
     }
     assertExpectedVersion(order, req.body.expectedVersion);
@@ -419,7 +419,7 @@ router.post('/request-revision', verifyClientToken, parseRevisionUpload, async (
 
     return res.status(200).json({
       success: true,
-      message: 'Revision request submitted. Your designer will review the feedback and update the draft.',
+      message: 'We have received your changes. We will let you know when your updated magazine is ready to review.',
       order: sanitizeOrderForClient(order),
     });
   } catch (error) {

@@ -23,6 +23,16 @@ const copy = {
   order_closed: ['Magazine delivered', 'Jarida limewasilishwa', 'Delivery confirmed. The order is complete.', 'Jarida limepokelewa. Oda imekamilika.'],
 };
 
+// Customer updates describe their magazine and next action, without staff handoff instructions.
+const customerCopy = {
+  client_submission: ['We have your order', 'Tumepokea oda yako', 'Your magazine details are saved. Follow the payment instructions on your order so we can get started.', 'Taarifa za jarida lako zimehifadhiwa. Fuata maelekezo ya malipo kwenye oda yako ili tuanze kazi.'],
+  payment_verified: ['Payment received', 'Malipo yamepokelewa', 'Thank you! Your payment is confirmed. We will start work on your magazine next.', 'Asante! Malipo yako yamethibitishwa. Hatua inayofuata ni kuanza kubuni jarida lako.'],
+  draft_released: ['Your magazine is ready to review', 'Jarida lako liko tayari kwa mapitio yako', 'Open your magazine preview (version {version}) and check every page. Approve it for printing or tell us what you would like changed.', 'Fungua jarida lako (toleo la {version}) na upitie kila ukurasa. Idhinisha uchapishaji au tuambie marekebisho unayotaka.'],
+  printing_in_progress: ['Your magazine is being printed', 'Jarida lako linachapishwa', 'We are printing your magazine. Next, we will get it ready for delivery.', 'Tunachapisha jarida lako. Hatua inayofuata ni kuliandaa kwa uwasilishaji.'],
+  order_dispatched: ['Your magazine is on its way', 'Jarida lako liko njiani', 'Your magazine is on its way to you. Track your order for delivery updates.', 'Jarida lako liko njiani kukufikia. Fuatilia oda yako kupata taarifa za uwasilishaji.'],
+  order_closed: ['Your magazine has been delivered', 'Jarida lako limewasilishwa', 'Your order is complete. Thank you for choosing Tinzel!', 'Oda yako imekamilika. Asante kwa kuchagua Tinzel!'],
+};
+
 const staffUpdates = {
   client_revision_requested: 'revision_update',
   client_approved: 'approval_update',
@@ -37,7 +47,7 @@ export function workflowMessage(type, order, event, recipient, lang, actionUrl) 
   let key = (staff && staffUpdates[type]) || type;
   if (type === 'order_submitted' && recipient.role === 'client') key = 'client_submission';
   if (type === 'print_dispatched' && recipient.channel !== 'whatsapp') key = 'print_sms';
-  const words = copy[key];
+  const words = (recipient.role === 'client' && customerCopy[key]) || copy[key];
   if (!words) throw new Error('Unsupported workflow notification');
 
   const ref = order.trackingId || '';
@@ -61,5 +71,5 @@ export function workflowMessage(type, order, event, recipient, lang, actionUrl) 
     const specs = order.printDocument?.specs || {}, unknown = sw ? 'Haijawekwa' : 'Not recorded';
     lines.push(`${sw ? 'Toleo lililoidhinishwa' : 'Approved version'}: ${values.version}`, `${sw ? 'Nakala' : 'Copies'}: ${specs.quantity ?? unknown}`, `${sw ? 'Karatasi' : 'Paper'}: ${specs.paperType || unknown}`, `${sw ? 'Kava' : 'Cover'}: ${specs.coverFinish || unknown}`, `${sw ? 'Ufungaji' : 'Binding'}: ${specs.binding || unknown}`);
   }
-  return messageContent(words[sw ? 1 : 0], lines.filter(Boolean).join('\n'), language(lang), recipient.channel === 'in_system' ? null : actionUrl);
+  return messageContent(words[sw ? 1 : 0], lines.filter(Boolean).join('\n'), language(lang), recipient.channel === 'in_system' ? null : actionUrl, recipient.role === 'client' ? (sw ? 'Fuatilia oda yangu' : 'Track my order') : undefined);
 }
