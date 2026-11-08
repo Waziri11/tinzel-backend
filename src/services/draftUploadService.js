@@ -6,6 +6,7 @@ import { activeRevisionRequest, assertExpectedVersion } from './revisionRequestS
 import { enqueueProof } from './proofReaderService.js';
 import { privateDraftStorage, BLOB_PART_BYTES } from './privateDraftStorage.js';
 import { draftCommittedEvent } from './draftOutboxService.js';
+import { keepLatestDraft } from './draftReplacementPolicy.js';
 
 export const DRAFT_CHUNK_BYTES = 1024 * 1024;
 export const MAX_DRAFT_BYTES = 500 * 1024 * 1024;
@@ -126,6 +127,7 @@ export async function finishDraftUpload(session, user, confirmation = {}) {
   // The order is the durable receipt if the final response/session update was interrupted.
   let order=await Order.findById(session.orderId);
   let committed=order?.draftVersions.find((v)=>String(v.uploadSessionId)===String(session._id));
+  if (!committed && (session.state === 'complete' || order?.supersededDrafts.some(v => String(v.uploadSessionId) === String(session._id)))) throw draftError(409, 'This upload has been replaced by a newer magazine version. Open the current version.');
   if(committed){const {kickWorkflowNotifications}=await import('./workflowNotificationService.js');await kickWorkflowNotifications(order._id);await DraftUpload.updateOne({_id:session._id},{$set:{state:'complete',version:committed.versionNumber}});await enqueueProof(order._id,committed.versionNumber);return {success:true,order,version:committed.versionNumber};}
   const claimed=await DraftUpload.findOneAndUpdate({_id:session._id,expiresAt:{$gt:new Date()},$or:[{state:'open'},{state:'finalizing',leaseUntil:{$lt:new Date()}}]},{$set:{state:'finalizing',leaseUntil:new Date(Date.now()+60000)}},{returnDocument:'after'});
   if(!claimed)throw draftError(409,'Upload is being finalized. Retry shortly to retrieve its result.');
@@ -137,6 +139,7 @@ export async function finishDraftUpload(session, user, confirmation = {}) {
     order.draftVersions.push({versionNumber:version,...(claimed.provider === 'blob' ? { storageProvider: 'blob', blobPath: claimed.blobPath } : { assetId: claimed.assetId }),uploadSessionId:claimed._id,originalName:claimed.name,mimeType:'application/pdf',size:claimed.size,revisionRequestId:active?._id,uploadedBy:user._id,uploadedAt:new Date(),designerNotes:claimed.designerNotes,managerReview:{status:'pending'}});
     if(active){active.status='submitted_for_review';active.submittedVersionNumber=version;active.submittedAt=new Date();}
     order.currentDraftVersion=version;order.status='draft_manager_review';
+    keepLatestDraft(order);
     order.draftEvents.push(draftCommittedEvent(version,user,claimed._id));
     await order.save();committed=order.draftVersions.at(-1);
     await DraftUpload.updateOne({_id:claimed._id},{$set:{state:'complete',version}});
@@ -153,8 +156,8 @@ export async function finishDraftUpload(session, user, confirmation = {}) {
 export async function cleanExpiredDraftUploads() {
   const sessions=await DraftUpload.find({state:{$ne:'complete'},expiresAt:{$lt:new Date()},$or:[{state:{$ne:'finalizing'}},{leaseUntil:{$lt:new Date()}}]}).limit(10);
   for(const session of sessions){
-    const receipt=await Order.findOne({'draftVersions.uploadSessionId':session._id}).select('draftVersions.versionNumber draftVersions.uploadSessionId');
-    if(receipt){const version=receipt.draftVersions.find((v)=>String(v.uploadSessionId)===String(session._id)).versionNumber;await DraftUpload.updateOne({_id:session._id},{$set:{state:'complete',version}});continue;}
+    const receipt=await Order.findOne({$or:[{'draftVersions.uploadSessionId':session._id},{'supersededDrafts.uploadSessionId':session._id}]}).select('draftVersions.versionNumber draftVersions.uploadSessionId supersededDrafts.versionNumber supersededDrafts.uploadSessionId');
+    if(receipt){const version=[...receipt.draftVersions,...receipt.supersededDrafts].find((v)=>String(v.uploadSessionId)===String(session._id)).versionNumber;await DraftUpload.updateOne({_id:session._id},{$set:{state:'complete',version}});continue;}
     await DraftUpload.updateOne({_id:session._id},{$set:{state:'expired'}});
     if (session.provider === 'blob') await privateDraftStorage.remove(session.blobPath).catch((error)=>{if(error.status!==404)throw error;});
     await collection('files').deleteOne({_id:session.assetId});await collection('chunks').deleteMany({files_id:session.assetId});

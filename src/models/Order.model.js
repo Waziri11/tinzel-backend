@@ -235,6 +235,13 @@ const orderSchema = new mongoose.Schema(
       type: String,
     },
     draftVersions: [draftVersionSchema],
+    supersededDrafts: { type: [new mongoose.Schema({
+      versionNumber: Number, assetId: mongoose.Schema.Types.ObjectId, storageProvider: String,
+      blobPath: String, fileUrl: String, previewPages: [String],
+      uploadSessionId: mongoose.Schema.Types.ObjectId, supersededAt: Date,
+    })], default: [] },
+    draftCleanupOwner: String,
+    draftCleanupLeaseUntil: Date,
     clientPreferredLanguage: { type: String, enum: ['en', 'sw'], default: 'sw' },
     workflowEvents: { type: [mongoose.Schema.Types.Mixed], default: [] },
     draftEvents: { type: [new mongoose.Schema({ key: String, version: Number, state: String, actor: mongoose.Schema.Types.Mixed, createdAt: Date, completedAt: Date, attempts: Number, owner: String, leaseUntil: Date, runAfter: Date, error: String }, { _id: false })], default: [] },
@@ -312,7 +319,7 @@ const orderSchema = new mongoose.Schema(
   }
 );
 
-orderSchema.set('toJSON',{transform:(_doc,ret)=>{delete ret.workflowEvents;delete ret.draftEvents;delete ret.retentionDeletingAt;delete ret.retentionLeaseUntil;delete ret.retentionOwner;return ret;}});
+orderSchema.set('toJSON',{transform:(_doc,ret)=>{delete ret.workflowEvents;delete ret.draftEvents;delete ret.retentionDeletingAt;delete ret.retentionLeaseUntil;delete ret.retentionOwner;delete ret.supersededDrafts;delete ret.draftCleanupOwner;delete ret.draftCleanupLeaseUntil;return ret;}});
 installWorkflowEvents(orderSchema);
 installExpressOrder(orderSchema);
 installOrderRetention(orderSchema);

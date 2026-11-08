@@ -5,6 +5,7 @@ import { permits,requirePermission } from '../services/authorizationService.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
 import {scheduleProofPreparation,afterProofResponse} from '../services/proofPreparationService.js';
 import { enqueueProof } from '../services/proofReaderService.js';
+import { keepLatestDraft } from '../services/draftReplacementPolicy.js';
 import express, { Router } from 'express';
 import { DraftUpload } from '../models/DraftUpload.model.js';
 import { DRAFT_CHUNK_BYTES, createDraftUpload, getDraftUpload, draftUploadStatus, writeDraftChunk, finishDraftUpload, prepareDraftUpload, checkpointDraftUpload } from '../services/draftUploadService.js';
@@ -447,6 +448,7 @@ router.post(
       }
 
       order.currentDraftVersion = nextVersion;
+      keepLatestDraft(order);
       // PRD Gate: draft enters draft_manager_review and is NOT yet visible to client!
       order.status = 'draft_manager_review';
       await order.save();

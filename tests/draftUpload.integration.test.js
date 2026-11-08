@@ -229,3 +229,41 @@ test('private Blob sessions commit once without proxying PDF bytes and keep dura
   await request(abandonedOrder,`/${abandoned.id}`,undefined,'DELETE');await DraftUpload.updateOne({_id:abandoned.id},{$set:{expiresAt:new Date(Date.now()-1000)}});await cleanExpiredDraftUploads();assert.equal(removed,abandoned.pathname);assert.equal(await DraftUpload.findById(abandoned.id),null);
  }finally{for(const m of mocks)m.mock.restore();if(oldProvider===undefined)delete process.env.DRAFT_UPLOAD_PROVIDER;else process.env.DRAFT_UPLOAD_PROVIDER=oldProvider;delete process.env.DRAFT_BLOB_READ_WRITE_TOKEN;}
 });
+
+test('successful replacement keeps only the latest PDF; incomplete submission and old retries cannot remove or resurrect it', async () => {
+  const order = await newOrder(), bytes = proofPdf();
+  const first = (await request(order, '', input(bytes.length))).data;
+  await part(order, first, 0, bytes);
+  assert.equal((await request(order, `/${first.id}/complete`, {})).status, 200);
+  await Order.updateOne({ _id: order._id }, { $set: { status: 'in_design' } });
+  const second = (await request(order, '', { ...input(bytes.length), expectedVersion: 1 })).data;
+  assert.equal((await request(order, `/${second.id}/complete`, {})).status, 409);
+  assert.deepEqual((await Order.findById(order._id)).draftVersions.map(v => v.versionNumber), [1]);
+  await part(order, second, 0, bytes);
+  const replacement = await request(order, `/${second.id}/complete`, {});
+  assert.equal(replacement.status, 200);
+  assert.equal(replacement.data.order.supersededDrafts, undefined);
+  assert.equal(replacement.data.order.draftCleanupOwner, undefined);
+  assert.equal((await request(order, `/${second.id}/complete`, {})).status, 200);
+  assert.equal((await request(order, `/${first.id}/complete`, {})).status, 409);
+  const saved = await Order.findById(order._id);
+  assert.deepEqual(saved.draftVersions.map(v => v.versionNumber), [2]);
+  assert.deepEqual(saved.supersededDrafts.map(v => v.versionNumber), [1]);
+  assert.ok(await mongoose.connection.db.collection('draftFiles.files').findOne({ _id: saved.supersededDrafts[0].assetId }));
+});
+
+test('legacy multipart upload also replaces the prior PDF only after successful submission', async () => {
+  const order = await newOrder();
+  const send = async (version, bytes) => {
+    const body = new FormData(); body.append('draftFile', new Blob([bytes], { type: 'application/pdf' }), 'magazine.pdf'); body.append('expectedVersion', String(version));
+    return fetch(`${base}/api/designer/orders/${order._id}/upload-draft`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body });
+  };
+  assert.equal((await send(0, proofPdf())).status, 200);
+  await Order.updateOne({ _id: order._id }, { $set: { status: 'in_design' } });
+  assert.equal((await send(1, Buffer.from('invalid'))).status, 400);
+  assert.deepEqual((await Order.findById(order._id)).draftVersions.map(v => v.versionNumber), [1]);
+  assert.equal((await send(1, proofPdf())).status, 200);
+  const saved = await Order.findById(order._id);
+  assert.deepEqual(saved.draftVersions.map(v => v.versionNumber), [2]);
+  assert.deepEqual(saved.supersededDrafts.map(v => v.versionNumber), [1]);
+});

@@ -163,6 +163,9 @@ function sanitizeResponseNode(node) {
   if ('credentialJob' in raw) delete ensureClone().credentialJob;
   if ('passwordHash' in raw) delete ensureClone().passwordHash;
   if ('workflowEvents' in raw) delete ensureClone().workflowEvents;
+  for (const key of ['supersededDrafts', 'draftCleanupOwner', 'draftCleanupLeaseUntil']) {
+    if (key in raw) delete ensureClone()[key];
+  }
   if ('draftEvents' in raw) {
     delete ensureClone().draftEvents;
   }

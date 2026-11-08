@@ -14,6 +14,8 @@ const PDF_RANGE_BYTES=1024*1024;
 const bucket = () => new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'proofPages' });
 export const proofJobId = (orderId, version, page = 0) => `proof:${orderId}:${version}:${page}`;
 export async function enqueueProof(orderId, version, page = 0, priority = 50) {
+  // Delayed outbox events and finishing workers must not recreate retired previews.
+  if (!await Order.exists({ _id: orderId, 'draftVersions.versionNumber': version })) return null;
   const id=proofJobId(orderId,version,page);
   try {
     return await MediaJob.findOneAndUpdate({ _id: id }, {

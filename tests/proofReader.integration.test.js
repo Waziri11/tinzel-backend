@@ -35,7 +35,7 @@ async function upload(version,extra={}) {
   return request(`/api/designer/orders/${order._id}/upload-draft`,'designer',body);
 }
 const annotation={page:1,kind:'text',rects:[{x:.1,y:.2,width:.3,height:.1}],selectedText:'Magazine',text:'Correct this heading'};
-test('protected magazine review completes upload, render, manager and client corrections, replacement, and history',async()=>{
+test('protected magazine review completes upload, render, manager and client corrections, replacement, and latest-only access',async()=>{
   assert.equal((await upload(0)).status,200);
   const original=await request(`/api/designer/orders/${order._id}`,'designer');
   assert.equal(original.data.order.draftVersions[0].assetId,undefined);
@@ -85,10 +85,10 @@ test('protected magazine review completes upload, render, manager and client cor
   assert.equal((await request('/api/client/request-revision','client',{expectedVersion:2,items:[]})).status,400);
   await request(`/api/designer/orders/${order._id}/returns/${clientRound._id}/items/${clientRound.items[0]._id}`,'designer',{response:'Photograph replaced'},'PATCH');
   assert.equal((await upload(2,{revisionRequestId:clientRound._id,verifyAll:'true'})).status,200);
-  assert.equal((await request(path('client',2),'client')).status,200);
+  assert.equal((await request(path('client',2),'client')).status,404);
   assert.equal((await request(path('client',3),'client')).status,404);
   const historical = await request('/api/client/order','client');
-  assert.deepEqual(historical.data.order.draftVersions.map((v)=>v.versionNumber),[2]);
+  assert.deepEqual(historical.data.order.draftVersions.map((v)=>v.versionNumber),[]);
   assert.equal((await request(`/api/manager/orders/${order._id}/review-draft`,'manager',{action:'release_to_client',expectedVersion:3})).status,200);
   assert.equal((await request(path('client',2),'client')).status,404);
   assert.equal((await request(path('client',2)+'/pages/0','client')).status,404);
@@ -96,15 +96,17 @@ test('protected magazine review completes upload, render, manager and client cor
   assert.equal((await request(path('staff',3))).data.annotations.length,0);
 });
 
-test('reader checks authentication, assignment, immutable historical annotations, and preparation retry',async()=>{
+test('reader checks authentication, assignment, retired versions, and current preparation retry',async()=>{
+  await runMediaJobs({maxJobs:5,proofFilter:{orderId:order._id,version:3}});
+  const current=path('staff',3);
   assert.equal((await fetch(base+path())).status,401);
   const other=await StaffUser.create({name:'Other',email:'other@example.test',role:'designer',passwordHash:'unused'});tokens.other=await generateToken(other,{verifiedAt:new Date()});
-  assert.equal((await request(path(),'other')).status,403);
-  await MediaJob.updateOne({_id:`proof:${order._id}:1:0`},{$set:{state:'failed',attempts:3}});
-  const reopened=(await request(path())).data;assert.equal(reopened.state,'ready');assert.equal(reopened.coverReady,true);assert.equal(reopened.diagnostics.length,1);
-  assert.equal((await request(path()+'/retry','manager',{})).status,200);
-  assert.equal((await MediaJob.findById(`proof:${order._id}:1:0`)).state,'queued');
-  const record=await Order.findById(order._id);const a=record.proofAnnotations[0];assert.equal((await request(path()+`/annotations/${a._id}`,'manager',undefined,'DELETE')).status,403);
+  assert.equal((await request(current,'other')).status,403);
+  await MediaJob.updateOne({_id:`proof:${order._id}:3:0`},{$set:{state:'failed',attempts:3}});
+  const reopened=(await request(current)).data;assert.equal(reopened.state,'ready');assert.equal(reopened.coverReady,true);assert.equal(reopened.diagnostics.length,1);
+  assert.equal((await request(current+'/retry','manager',{})).status,200);
+  assert.equal((await MediaJob.findById(`proof:${order._id}:3:0`)).state,'queued');
+  const record=await Order.findById(order._id);const a=record.proofAnnotations[0];assert.equal((await request(path()+`/annotations/${a._id}`,'manager',undefined,'DELETE')).status,404);
 });
 
 
@@ -155,7 +157,7 @@ test('detected image anchors are authoritative, tracked, private and upgraded wi
  const addressed=(await request(url)).data.annotations[0];assert.equal(addressed.reviewStatus,'addressed');assert.equal(addressed.correction.designerResponse,'Replaced the photograph');
  assert.equal((await request(url+`/annotations/${annotationId}`,'manager',undefined,'DELETE')).status,403);
  const replacement=new FormData();replacement.append('draftFile',new Blob([imageProofPdf()],{type:'application/pdf'}),'replacement.pdf');replacement.append('expectedVersion','1');replacement.append('revisionRequestId',String(round._id));replacement.append('verifyAll','true');assert.equal((await request(`/api/designer/orders/${record._id}/upload-draft`,'designer',replacement)).status,200);
- assert.equal((await request(url+'/annotations','manager',payload)).status,403);assert.equal((await request(`/api/proofs/staff/${record._id}/2/annotations`,'manager',payload)).status,400);
+ assert.equal((await request(url+'/annotations','manager',payload)).status,404);assert.equal((await request(`/api/proofs/staff/${record._id}/2/annotations`,'manager',payload)).status,400);
 });
 
  test('harvesting limits survive new view identifiers and forwarded IPs',async()=>{
@@ -164,7 +166,7 @@ test('detected image anchors are authoritative, tracked, private and upgraded wi
  const id=`proof-reader:staff:${tokens.managerId}`;
  await RateLimitBucket.updateOne({_id:id},{$set:{count:240,expiresAt:new Date(Date.now()+60000)}},{upsert:true});
  for(const ip of ['192.0.2.1','192.0.2.2']){
- const response=await fetch(base+path()+`?view=${randomUUID()}`,{headers:{Authorization:`Bearer ${tokens.manager}`,'X-Forwarded-For':ip}});
+ const response=await fetch(base+path('staff',3)+`?view=${randomUUID()}`,{headers:{Authorization:`Bearer ${tokens.manager}`,'X-Forwarded-For':ip}});
  assert.equal(response.status,429);
  }
  assert.ok(await SecurityEvent.exists({action:'PREVIEW_HARVEST_ALERT',actorId:String(tokens.managerId)}));

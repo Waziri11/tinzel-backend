@@ -56,7 +56,7 @@ async function purgeFilesAndRecords(order, owner) {
   const originals = new Set(assets.filter(a => a.provider === 'blob').map(a => a.blobPath || blobPath(a._id)));
   for (const session of sessions) for (const entry of session.entries) if (entry.provider === 'blob') originals.add(blobPath(entry._id));
   for (const pathname of originals) await del(pathname);
-  const drafts = order.draftVersions || [];
+  const drafts = [...(order.draftVersions || []), ...(order.supersededDrafts || [])];
   const printUrl = order.printDocument?.url;
   const privatePaths = new Set([...drafts.filter(d => d.storageProvider === 'blob').map(d => d.blobPath), ...uploads.filter(u => u.provider === 'blob').map(u => u.blobPath)]);
   if (printUrl?.startsWith('tinzel/drafts/')) privatePaths.add(printUrl);
@@ -112,6 +112,7 @@ export async function cleanExpiredOrders({ limit = 10, now = new Date() } = {}) 
     const owner = randomUUID();
     const order = await Order.collection.findOneAndUpdate({ _id: candidate._id, __v: candidate.__v, $and: [
       { $or: [{ retentionLeaseUntil: null }, { retentionLeaseUntil: { $lte: now } }] },
+      { $or: [{ draftCleanupLeaseUntil: null }, { draftCleanupLeaseUntil: { $lte: now } }] },
       { $or: [{ retentionDeletingAt: { $ne: null } }, { status: { $in: TERMINAL_STATUSES }, completedAt: { $lte: cutoff } }] },
     ] }, { $set: { retentionDeletingAt: candidate.retentionDeletingAt || now, retentionOwner: owner, retentionLeaseUntil: new Date(+now + 10 * 60000) }, $inc: { __v: 1 } }, { returnDocument: 'after' });
     if (!order) continue;
