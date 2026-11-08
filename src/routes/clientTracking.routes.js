@@ -346,6 +346,35 @@ router.post('/approve-draft', verifyClientToken, async (req, res) => {
   }
 });
 
+// Clients can supply or update their delivery location after approval, until dispatch.
+router.patch('/delivery-location', verifyClientToken, async (req, res) => {
+  try {
+    const location = typeof req.body?.location === 'string' ? req.body.location.trim() : '';
+    if (!location || location.length > 1000) {
+      return res.status(400).json({ success: false, message: 'Enter a delivery location of up to 1,000 characters.' });
+    }
+    const order = await Order.findById(req.clientAuth.orderId);
+    if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+    const status = order.status === 'on_hold' ? order.previousStatusBeforeHold : order.status;
+    if (!['client_approved', 'print_document_prep', 'print_manager_review', 'printing_sent', 'printing_in_progress', 'printing_completed'].includes(status)) {
+      return res.status(409).json({ success: false, message: 'Delivery locations can be updated after approval and before dispatch. Refresh your order to see the latest update.' });
+    }
+    order.clientDeliveryDetails = { location, updatedAt: new Date() };
+    await order.save();
+    await AuditLog.create({
+      actor: { type: 'client', name: order.clientName },
+      action: 'CLIENT_DELIVERY_LOCATION_SAVED',
+      orderId: order._id,
+    });
+    return res.json({ success: true, clientDeliveryDetails: order.clientDeliveryDetails });
+  } catch (error) {
+    return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({
+      success: false,
+      message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message,
+    });
+  }
+});
+
 router.get('/revisions/:requestId/items/:itemId/audio', verifyClientToken, async (req, res, next) => {
   try { await streamRevisionAudio(req, res, await Order.findById(req.clientAuth.orderId), true); } catch (error) { next(error); }
 });

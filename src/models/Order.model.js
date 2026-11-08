@@ -281,6 +281,10 @@ const orderSchema = new mongoose.Schema(
       managerVerifiedAt: Date,
       notes: String,
     },
+    clientDeliveryDetails: {
+      location: { type: String, trim: true, maxlength: 1000, default: '' },
+      updatedAt: Date,
+    },
     dispatchDetails: {
       authorisedBy: {
         type: mongoose.Schema.Types.ObjectId,

@@ -170,6 +170,10 @@ export const sanitizeOrderForClient = (order) => {
     approvedVersionNumber: obj.approvedVersionNumber,
     draftVersions,
     revisionRequests,
+    clientDeliveryDetails: {
+      location: obj.clientDeliveryDetails?.location || '',
+      updatedAt: obj.clientDeliveryDetails?.updatedAt || null,
+    },
     ...(dispatchDetails ? { dispatchDetails } : {}),
     ...(deliveryDetails ? { deliveryDetails } : {}),
     createdAt: obj.createdAt,
