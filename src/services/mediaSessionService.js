@@ -9,7 +9,7 @@ import { UploadSession, MediaAsset, MediaJob } from '../models/Media.model.js';
 import { MagazineForm } from '../models/MagazineForm.model.js';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
-import { validateFormAnswers } from './formResponseService.js';
+import { normalizeListAnswers, validateFormAnswers } from './formResponseService.js';
 import { assertNoActiveImageContent } from './uploadService.js';
 import { mediaError } from './mediaErrors.js';
 
@@ -196,7 +196,7 @@ export async function finalizeSession(id, token, body) {
       order: { ...pricing, _id: session.orderId, mediaSessionId: id, submissionId: `SUB-${new Date().getFullYear()}-${session.orderId.toString().toUpperCase()}`,
         formId: form._id, formTitle: form.title, clientName: String(body.clientName).trim(),
         clientPreferredLanguage: body.clientPreferredLanguage || 'sw', clientWhatsApp: requirePhone(body.clientWhatsApp), clientEmail: String(body.clientEmail || '').trim(),
-        submittedData: body.answers || {}, submittedFields: form.fields.map(({ fieldId, label, sectionId, order }) => ({ fieldId, label, sectionId, order })),
+        submittedData: normalizeListAnswers(form.fields, body.answers || {}), submittedFields: form.fields.map(({ fieldId, label, type, sectionId, order }) => ({ fieldId, label, type, sectionId, order })),
         uploadedPhotos: photos, status: 'awaiting_payment' },
       price: pricing.totalPrice, currency: pricing.currency, lipaNambaInstructions: form.lipaNambaInstructions,
     };

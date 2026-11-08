@@ -169,6 +169,7 @@ const orderSchema = new mongoose.Schema(
     submittedFields: [{
       fieldId: String,
       label: String,
+      type: { type: String },
       sectionId: String,
       order: Number,
     }],

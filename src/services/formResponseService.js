@@ -4,11 +4,31 @@ const hasValue = (value) => {
   return value !== undefined && value !== null && String(value).trim() !== '';
 };
 
+export const normalizeListAnswers = (fields, answers) => {
+  if (!answers || typeof answers !== 'object' || Array.isArray(answers)) return answers;
+  const normalized = { ...answers };
+  for (const field of fields || []) {
+    if (field.type === 'list' && Array.isArray(normalized[field.fieldId])) {
+      normalized[field.fieldId] = normalized[field.fieldId].map(item => item.trim()).filter(Boolean);
+    }
+  }
+  return normalized;
+};
+
 export const validateFormAnswers = (fields, answers, uploadedPhotos = []) => {
   const errors = [];
   const safeAnswers = answers && typeof answers === 'object' ? answers : {};
 
   for (const field of fields || []) {
+    if (field.type === 'list') {
+      const items = safeAnswers[field.fieldId];
+      if (items != null && (!Array.isArray(items) || items.some(item => typeof item !== 'string'))) {
+        errors.push(`${field.label} must be a list of text items`);
+      } else if (field.required && !items?.some(item => item.trim())) {
+        errors.push(`${field.label} is required`);
+      }
+      continue;
+    }
     if (field.type === 'photo_upload' || field.type === 'photo_group') {
       const count = uploadedPhotos.filter((photo) => photo.fieldId === field.fieldId).length;
       const minimum = Number(field.validationRules?.minPhotos || 0);

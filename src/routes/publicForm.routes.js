@@ -10,7 +10,7 @@ import { AuditLog } from '../models/AuditLog.model.js';
 import { uploadPhotos, boundPhotoRequest } from '../services/uploadService.js';
 import { respondMediaError } from '../services/mediaErrors.js';
 import { generateSubmissionId, generateUniqueSubmissionId } from '../services/workflowService.js';
-import { validateFormAnswers } from '../services/formResponseService.js';
+import { normalizeListAnswers, validateFormAnswers } from '../services/formResponseService.js';
 import { findCoverImage, openCoverImageStream } from '../services/coverStorageService.js';
 import { storeOrderPhoto, findOrderPhoto, openOrderPhotoStream } from '../services/photoStorageService.js';
 import { verifySignedMediaRequest } from '../services/mediaSignService.js';
@@ -321,10 +321,11 @@ router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos
       clientWhatsApp: normalizedPhone,
       clientEmail: clientEmail ? clientEmail.trim() : '',
       clientPreferredLanguage: req.body.clientPreferredLanguage || 'sw',
-      submittedData: parsedData,
+      submittedData: normalizeListAnswers(form.fields, parsedData),
       submittedFields: (form.fields || []).map((field) => ({
         fieldId: field.fieldId,
         label: field.label,
+        type: field.type,
         sectionId: field.sectionId,
         order: field.order,
       })),
