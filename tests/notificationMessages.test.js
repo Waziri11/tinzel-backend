@@ -12,6 +12,11 @@ test('customer journey messages explain the next step and preserve staff instruc
     assert.match(message.html, lang === 'en' ? /Track my order/ : /Fuatilia oda yangu/);
     assert.match(message.message, /TNZ-TEST/);
   }
+  for (const lang of ['en', 'sw']) for (const [totalPrice, expected] of [[50000, 'TSh 25,000'], [70000, 'TSh 35,000']]) {
+    const message = workflowMessage('order_submitted', { ...order, totalPrice, isExpress: totalPrice === 70000 }, {}, { role: 'client', channel: 'sms' }, lang, '');
+    assert.ok(message.message.includes(expected));
+    assert.doesNotMatch(message.message, /\{deposit\}|Pay half|Lipa nusu/);
+  }
   const review = workflowMessage('draft_released', order, { version: 2 }, { role: 'client' }, 'en', '');
   assert.match(review.message, /check every page/);
   assert.match(review.message, /Approve it for printing/);

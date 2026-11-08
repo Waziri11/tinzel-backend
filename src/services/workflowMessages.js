@@ -1,3 +1,4 @@
+import { requiredDeposit } from './paymentPolicy.js';
 import { messageContent } from './accountMessages.js';
 
 const copy = {
@@ -25,7 +26,7 @@ const copy = {
 
 // Customer updates describe their magazine and next action, without staff handoff instructions.
 const customerCopy = {
-  client_submission: ['We have your order', 'Tumepokea oda yako', 'Your magazine details are saved. Follow the payment instructions on your order so we can get started.', 'Taarifa za jarida lako zimehifadhiwa. Fuata maelekezo ya malipo kwenye oda yako ili tuanze kazi.'],
+  client_submission: ['We have your order', 'Tumepokea oda yako', 'Your magazine details are saved. Pay {deposit} as your deposit using the payment instructions on your order. We will begin designing your magazine once this payment is confirmed.', 'Taarifa za jarida lako zimehifadhiwa. Lipa {deposit} kama malipo ya awali kwa kufuata maelekezo kwenye oda yako. Tutaanza kubuni jarida lako malipo haya yakithibitishwa.'],
   payment_verified: ['Payment received', 'Malipo yamepokelewa', 'Thank you! Your payment is confirmed. We will start work on your magazine next.', 'Asante! Malipo yako yamethibitishwa. Hatua inayofuata ni kuanza kubuni jarida lako.'],
   draft_released: ['Your magazine is ready to review', 'Jarida lako liko tayari kwa mapitio yako', 'Open your magazine preview (version {version}) and check every page. Approve it for printing or tell us what you would like changed.', 'Fungua jarida lako (toleo la {version}) na upitie kila ukurasa. Idhinisha uchapishaji au tuambie marekebisho unayotaka.'],
   printing_in_progress: ['Your magazine is being printed', 'Jarida lako linachapishwa', 'We are printing your magazine. Next, we will get it ready for delivery.', 'Tunachapisha jarida lako. Hatua inayofuata ni kuliandaa kwa uwasilishaji.'],
@@ -52,6 +53,12 @@ export function workflowMessage(type, order, event, recipient, lang, actionUrl) 
 
   const ref = order.trackingId || '';
   const values = { ref, client: order.clientName, magazine: order.formTitle || (sw ? 'jarida' : 'magazine details'), version: event.version || 1 };
+  const total = order.totalPrice ?? order.formId?.price ?? order.price;
+  const currency = order.currency || order.formId?.currency || 'TZS';
+  const currencyLabel = ['TZS', 'TSH'].includes(currency.toUpperCase()) ? 'TSh' : currency;
+  values.deposit = total != null && Number.isFinite(Number(total)) && Number(total) >= 0
+    ? `${currencyLabel} ${requiredDeposit(order).toLocaleString('en-TZ')}`
+    : (sw ? 'kiasi kilichoonyeshwa kwenye oda yako' : 'the amount shown on your order');
   const body = words[sw ? 3 : 2].replace(/\{(\w+)\}/g, (_, name) => values[name]);
   const lines = [body];
   if (order.isExpress) {
@@ -59,7 +66,7 @@ export function workflowMessage(type, order, event, recipient, lang, actionUrl) 
     lines.unshift(sw ? 'EXPRESS — Oda ya kipaumbele.' : 'EXPRESS — Priority order.');
     lines.push(due
       ? `${sw ? 'Muda wa mwisho' : 'Due'}: ${due} EAT. ${sw ? 'Jumapili haihesabiwi.' : 'Sundays excluded.'}`
-      : (sw ? 'Saa 24 baada ya malipo kuthibitishwa; Jumapili haihesabiwi. Ada ya Express: TSh 20,000.' : '24 hours from payment confirmation; Sundays excluded. Express fee: TSh 20,000.'));
+      : (sw ? 'Saa 24 baada ya malipo ya awali kuthibitishwa; Jumapili haihesabiwi. Ada ya Express: TSh 20,000.' : '24 hours from deposit confirmation; Sundays excluded. Express fee: TSh 20,000.'));
   }
   if (recipient.role !== 'client' && key !== 'order_submitted') {
     lines.push([order.clientName, order.formTitle].filter(Boolean).join(' · '));

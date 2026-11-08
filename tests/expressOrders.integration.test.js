@@ -62,17 +62,18 @@ test('both submission paths save the server price; session retries cannot change
   assert.equal(standard.data.order.price, 50000); assert.equal(standard.data.order.expressFee, 0);
 });
 
-test('full express payment starts the clock once, auto-assignment preserves it, and alerts name express', async () => {
+test('50% express deposit starts the clock once, auto-assignment preserves it, and alerts name express', async () => {
   const path = `/api/manager/orders/${expressId}/verify-payment`;
-  assert.equal((await call(path, { lipaNambaReference: 'EXPRESS-TEST', amountPaid: 50000 }, auth.manager)).status, 400);
+  assert.equal((await call(path, { lipaNambaReference: 'EXPRESS-TEST', amountPaid: 34999 }, auth.manager)).status, 400);
   assert.equal((await Order.findById(expressId)).expressStartedAt, undefined);
-  const paid = await call(path, { lipaNambaReference: 'EXPRESS-TEST', amountPaid: 70000 }, auth.manager);
+  const paid = await call(path, { lipaNambaReference: 'EXPRESS-TEST', amountPaid: 35000 }, auth.manager);
   assert.equal(paid.status, 200, JSON.stringify(paid.data));
   const saved = await Order.findById(expressId);
   assert.equal(saved.status, 'assigned');
+  assert.equal(saved.paymentDetails.amountPaid, 35000);
   assert.equal(+saved.expressStartedAt, +saved.paymentDetails.verifiedAt);
   assert.equal(+saved.expressDueAt, +expressDeadline(saved.paymentDetails.verifiedAt));
-  const retry = await call(path, { lipaNambaReference: 'EXPRESS-TEST', amountPaid: 70000 }, auth.manager);
+  const retry = await call(path, { lipaNambaReference: 'EXPRESS-TEST', amountPaid: 35000 }, auth.manager);
   assert.equal(retry.data.order.expressDueAt, saved.expressDueAt.toISOString());
   saved.status = 'in_design'; await saved.save();
   assert.equal((await Order.findById(expressId)).expressDueAt.toISOString(), retry.data.order.expressDueAt);
@@ -102,5 +103,20 @@ test('express sorts ahead of newer standard orders before pagination in every ph
       assert.equal(returns.data.returns[0].orderId, expressId);
       assert.equal(returns.data.returns[0].isExpress, true);
     }
+  }
+});
+
+test('standard and legacy orders accept a half deposit, reject less, and still allow full payment', async () => {
+  for (const legacy of [false, true]) {
+    const order = await Order.create({ submissionId: randomUUID(), clientName: 'Deposit fixture', clientWhatsApp: '0712000003', formId: form._id, status: 'awaiting_payment', ...(legacy ? {} : { totalPrice: 50000, basePrice: 50000, expressFee: 0, currency: 'TZS' }) });
+    const path = `/api/manager/orders/${order._id}/verify-payment`;
+    const tooLittle = await call(path, { lipaNambaReference: 'DEPOSIT-TEST', amountPaid: 24999 }, auth.manager);
+    assert.equal(tooLittle.status, 400);
+    assert.match(tooLittle.data.message, /50% deposit/);
+    assert.equal((await Order.findById(order._id)).status, 'awaiting_payment');
+    const paid = await call(path, { lipaNambaReference: 'DEPOSIT-TEST', amountPaid: legacy ? 50000 : 25000 }, auth.manager);
+    assert.equal(paid.status, 200, JSON.stringify(paid.data));
+    assert.equal(paid.data.order.status, 'assigned');
+    assert.equal(paid.data.order.expressStartedAt, undefined);
   }
 });

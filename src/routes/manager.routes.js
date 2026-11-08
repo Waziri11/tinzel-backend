@@ -1,4 +1,5 @@
 import { EXPRESS_ORDER_SORT } from '../services/expressOrderService.js';
+import { requiredDeposit } from '../services/paymentPolicy.js';
 import { normalizePhone } from '../utils/phone.js';
 import {permits} from '../services/authorizationService.js';
 import staffManagementRoutes from './staffManagement.routes.js';
@@ -217,7 +218,7 @@ router.get('/orders/:id', async (req, res) => {
 router.post('/orders/:id/verify-payment', async (req, res) => {
   try {
     const { reference, amount } = validatePayment(req.body);
-    const order = await Order.findById(req.params.id);
+    const order = await Order.findById(req.params.id).populate('formId', 'price currency');
 
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
@@ -241,8 +242,9 @@ router.post('/orders/:id/verify-payment', async (req, res) => {
       });
     }
 
-    if (order.isExpress && amount < order.totalPrice) {
-      return res.status(400).json({ success: false, message: `Express orders require the full payment of TZS ${order.totalPrice.toLocaleString('en-TZ')}, including the express fee.` });
+    const deposit = requiredDeposit(order);
+    if (amount < deposit) {
+      return res.status(400).json({ success: false, message: `A 50% deposit of ${order.currency || order.formId?.currency || 'TZS'} ${deposit.toLocaleString('en-TZ')} is required to begin design.` });
     }
 
     // Generate tracking ID ONLY NOW (strict PRD rule)
