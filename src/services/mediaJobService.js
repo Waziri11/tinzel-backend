@@ -14,15 +14,16 @@ import { MediaAsset, MediaJob, UploadSession, ProofPage } from '../models/Media.
 import { Order } from '../models/Order.model.js';
 import { digest, blobPath } from './mediaSessionService.js';
 import { openAssetStream } from './mediaReadService.js';
-import { photoArchiveEntries } from '../utils/photoArchive.js';
+import { allPhotoArchiveEntries, photoArchiveEntries, photoFolderName } from '../utils/photoArchive.js';
 import { mediaError } from './mediaErrors.js';
 
 const bucket = (name) => new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: name });
 
 export async function enqueueArchive(order, folder) {
-  const photos = order.uploadedPhotos.filter((p) => p.folderName === folder || (!p.folderName && folder === 'General Photos'));
-  if (!photos.length) throw mediaError(404, 'This folder has no photos');
-  const id = `archive:${digest(JSON.stringify([String(order._id), folder, photos.map((p) => [p.url, p.originalName, p.size])]))}`;
+  const photos = (order.uploadedPhotos || []).filter(p => folder === null || photoFolderName(p) === folder);
+  if (!photos.length) throw mediaError(404, folder === null ? 'This order has no photos' : 'This folder has no photos');
+  const entries = folder === null ? allPhotoArchiveEntries(order, '') : photoArchiveEntries(photos, folder, '');
+  const id = `archive:${digest(JSON.stringify([2, String(order._id), folder, entries, photos.map(p => p.size)]))}`;
   const job = await MediaJob.findOneAndUpdate({ _id: id }, { $setOnInsert: { kind: 'archive', orderId: order._id, folder, priority: 1 } }, { upsert: true, returnDocument: 'after' }).lean();
   if (job.state === 'expired') return MediaJob.findOneAndUpdate({ _id: id }, { $set: { state: 'queued', attempts: 0, runAfter: new Date() } }, { returnDocument: 'after' }).lean();
   return job;
@@ -70,7 +71,9 @@ async function buildPreview(job, signal) {
 }
 
 export async function createPhotoArchive(order, folder, destination, signal) {
-  const entries = photoArchiveEntries(order.uploadedPhotos, folder, path.join(process.cwd(), 'uploads', 'photos'));
+  const uploadsDir = path.join(process.cwd(), 'uploads', 'photos');
+  const entries = folder === null ? allPhotoArchiveEntries(order, uploadsDir) : photoArchiveEntries(order.uploadedPhotos, folder, uploadsDir);
+  if (!entries.length) throw mediaError(404, 'There are no photos to download');
   const assetIds = entries.filter((e) => e.assetId).map((e) => e.assetId);
   const gridIds = entries.filter((e) => e.gridFsId).map((e) => new mongoose.Types.ObjectId(e.gridFsId));
   const [assets, files] = await Promise.all([

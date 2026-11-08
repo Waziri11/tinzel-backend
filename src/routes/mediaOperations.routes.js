@@ -18,7 +18,7 @@ export async function archiveStatus(job, user, order) {
   if (!available.matchedCount) return { jobId: job._id, state: 'expired' };
   const token = randomBytes(32).toString('hex');
   await MediaDownloadTicket.create({ _id: digest(token), staffId: user._id, orderId: order._id, jobId: job._id, expiresAt: new Date(Date.now() + 10 * 60000) });
-  return { jobId: job._id, state: 'ready', url: `/api/media-download/${token}` };
+  return { jobId: job._id, state: 'ready', fileName: photoArchiveFileName(order.clientName, job.folder), url: `/api/media-download/${token}` };
 }
 function isAuthorizedCronRequest(req) {
   const secret = process.env.CRON_SECRET;
@@ -55,7 +55,7 @@ router.get('/media-download/:token', verifyStaffToken, async (req, res) => {
     if (job?.state !== 'ready') return res.sendStatus(409);
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Cache-Control', 'private, no-store');
-    res.setHeader('Content-Disposition', `attachment; filename="${photoArchiveFileName(order.trackingId || order.clientName, job.folder)}"`);
+    res.attachment(photoArchiveFileName(order.clientName, job.folder));
     const stream = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'mediaArchives' }).openDownloadStream(new mongoose.Types.ObjectId(job.outputId));
     res.on('close', () => stream.destroy());
     await pipeline(stream, res);

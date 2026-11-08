@@ -309,8 +309,9 @@ router.patch('/orders/:id/returns/:requestId/items/:itemId', requirePermission('
 // New clients prepare a cached archive and use a normal browser download.
 router.post('/orders/:id/photo-folder-download', async (req, res, next) => {
   try {
-    if (typeof req.body.folder !== 'string') return res.status(400).json({ message: 'Choose a photo folder' });
-    const job = await enqueueArchive(req.order, req.body.folder);
+    const allPhotos = req.body.scope === 'all';
+    if (!allPhotos && (typeof req.body.folder !== 'string' || !req.body.folder.trim())) return res.status(400).json({ message: 'Choose a photo folder' });
+    const job = await enqueueArchive(req.order, allPhotos ? null : req.body.folder.trim());
     res.status(job.state === 'ready' ? 200 : 202).json(await archiveStatus(job, req.user, req.order));
   } catch (error) { next(error); }
 });

@@ -57,6 +57,37 @@ await StaffUser.create({name:'Unassigned designer',email:'unassigned@example.tes
 const printOrder=await Order.findOne({trackingId:'TNZ-SECURITY-2'});
 printOrder.status='printing_sent';printOrder.printDocument={url:`/api/public/drafts/${printOrder.draftVersions[0].assetId}`,uploadedAt:new Date(),managerAuthorisedAt:new Date()};printOrder.printingDetails={printerPhone:'0712000099'};printOrder.workflowEvents=[{key:'synthetic-print',type:'print_dispatched'}];await printOrder.save();
 // Kanban/retention acceptance fixtures use this disposable database only.
+testApp.post('/__test__/designer-image-fixtures', async (req, res) => {
+  const { createHash } = await import('node:crypto');
+  const { MediaAsset } = await import('../src/models/Media.model.js');
+  const { default: sharp } = await import('sharp');
+  const photos = [];
+  const originals = [];
+  if (req.query.empty !== '1') {
+    for (const [index, fieldId] of ['couple', 'couple', 'family'].entries()) {
+      const bytes = await sharp({ create: { width: 240, height: 180, channels: 3, background: ['#b99a54', '#946d63', '#6b8b78'][index] } }).png().toBuffer();
+      const id = new mongoose.Types.ObjectId();
+      const output = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'orderPhotos' }).openUploadStreamWithId(id, 'portrait.png', { contentType: 'image/png' });
+      await new Promise((resolve, reject) => { output.on('finish', resolve); output.on('error', reject); output.end(bytes); });
+      if (index === 1) await MediaAsset.create({ _id: String(id), name: 'portrait.png', provider: 'gridfs', contentType: 'image/png', size: bytes.length, fieldId });
+      photos.push({ fieldId, folderName: fieldId === 'couple' ? 'Couple photos' : 'Family photos', originalName: 'portrait.png', size: bytes.length,
+        url: index === 1 ? `/api/public/media/assets/${id}` : `/api/public/photos/${id}` });
+      originals.push(createHash('sha256').update(bytes).digest('hex'));
+    }
+  }
+  const order = await Order.create({ submissionId: `SUB-IMAGES-${new mongoose.Types.ObjectId()}`, clientName: 'Asha Mushi', clientWhatsApp: 'test',
+    formId: form._id, formTitle: 'Our story', assignedDesigner: designer._id, status: 'assigned',
+    submittedFields: [{ fieldId: 'story', label: 'Our story', type: 'textarea', order: 0 }, { fieldId: 'couple', label: 'Couple photos', type: 'photo_group', order: 1 },
+      { fieldId: 'family', label: 'Family photos', type: 'photo_upload', order: 2 }, { fieldId: 'list', label: 'Favourite memories', type: 'list', order: 3 }],
+    submittedData: { story: 'We met in Dar es Salaam.', couple: ['photo metadata should not appear in text'], family: 'image placeholder', list: ['First meeting', 'Our wedding'] },
+    uploadedPhotos: photos,
+  });
+  res.json({ orderId: String(order._id), originals });
+});
+testApp.post('/__test__/image-archive-worker', async (_req, res) => {
+  const { runMediaJobs } = await import('../src/services/mediaJobService.js');
+  res.json(await runMediaJobs({ maxJobs: 10, budgetMs: 10000, kinds: ['archive'] }));
+});
 testApp.post('/__test__/kanban-fixtures', async (_req, res) => {
   const rows = Array.from({length: 12}, (_, i) => ({trackingId:`TNZ-BOARD-NEW-${String(i).padStart(2,'0')}`,status:'assigned'}));
   rows.push({trackingId:'TNZ-BOARD-MANAGER',status:'revision_requested',revisionRequests:[{roundNumber:1,draftVersionNumber:1,source:'manager',requestedBy:{type:'manager'}}]},

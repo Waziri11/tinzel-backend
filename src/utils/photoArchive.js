@@ -7,16 +7,18 @@ export const photoFolderName = (photo) =>
 
 const safePart = (value, fallback) =>
   String(value || '')
-    .replace(/[\\/\u0000-\u001f\u007f]/g, '_')
-    .replace(/^\.+$/, '')
-    .trim() || fallback;
+    .normalize('NFC')
+    .replace(/[\\/<>:"|?*\u0000-\u001f\u007f]/g, '_')
+    .trim()
+    .replace(/^\.+|[. ]+$/g, '')
+    .slice(0, 100)
+    .replace(/[. ]+$/g, '')
+    .replace(/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?=\.|$)/i, '_$1') || fallback;
 
-export const photoArchiveEntries = (photos, requestedFolder, uploadsDir) => {
-  const folder = safePart(requestedFolder, 'General Photos');
+const entriesForPhotos = (photos, folder, uploadsDir) => {
   const usedNames = new Set();
 
   return (photos || [])
-    .filter((photo) => photoFolderName(photo) === requestedFolder)
     .map((photo, index) => {
       const url = typeof photo.url === 'string' ? photo.url : '';
       const isDiskPhoto = /^\/uploads\/photos\/[a-zA-Z0-9._-]+$/.test(url);
@@ -57,7 +59,37 @@ export const photoArchiveEntries = (photos, requestedFolder, uploadsDir) => {
     });
 };
 
+export const photoArchiveEntries = (photos, requestedFolder, uploadsDir) =>
+  entriesForPhotos((photos || []).filter(photo => photoFolderName(photo) === requestedFolder), safePart(requestedFolder, 'General Photos'), uploadsDir);
+
+// A field ID distinguishes different questions even when their labels are identical.
+// Older submissions without field IDs retain their original photo folders.
+export const allPhotoArchiveEntries = (order, uploadsDir) => {
+  const fields = order.submittedFields?.length ? order.submittedFields : order.formId?.fields || [];
+  const definitions = new Map(fields.map(field => [field.fieldId, field]));
+  const groups = new Map();
+  for (const photo of order.uploadedPhotos || []) {
+    const key = photo.fieldId ? `field:${photo.fieldId}` : `folder:${photoFolderName(photo)}`;
+    if (!groups.has(key)) {
+      const field = definitions.get(photo.fieldId);
+      groups.set(key, { label: field?.label || photoFolderName(photo), order: field?.order ?? Number.MAX_SAFE_INTEGER, photos: [] });
+    }
+    groups.get(key).photos.push(photo);
+  }
+  const root = safePart(order.clientName, 'Unnamed customer');
+  const usedFolders = new Set();
+  return [...groups.values()].sort((a, b) => a.order - b.order).flatMap(group => {
+    const label = safePart(group.label, 'General Photos');
+    let folder = label;
+    let copy = 2;
+    while (usedFolders.has(folder.toLowerCase())) folder = `${label} (${copy++})`;
+    usedFolders.add(folder.toLowerCase());
+    return entriesForPhotos(group.photos, `${root}/${folder}`, uploadsDir);
+  });
+};
+
 export const photoArchiveFileName = (trackingId, folder) => {
+  if (folder === null) return `${safePart(trackingId, 'Unnamed customer')}.zip`;
   const slug = (value) => String(value || '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
