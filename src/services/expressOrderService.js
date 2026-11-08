@@ -1,14 +1,15 @@
 export const EXPRESS_FEE = 20000;
 export const EXPRESS_HOURS = 24;
+export const STANDARD_HOURS = 72;
 export const EXPRESS_ORDER_SORT = { isExpress: -1, expressDueAt: 1, updatedAt: -1, _id: -1 };
 const HOUR = 60 * 60 * 1000;
 const EAT_OFFSET = 3 * HOUR;
 
 // Every hour Monday–Saturday counts. Sundays are excluded in Africa/Dar_es_Salaam.
-export function expressDeadline(start) {
+function workingDeadline(start, hours) {
   let cursor = new Date(start).getTime();
-  if (!Number.isFinite(cursor)) throw new TypeError('Invalid express start time');
-  let remaining = EXPRESS_HOURS * HOUR;
+  if (!Number.isFinite(cursor)) throw new TypeError('Invalid order start time');
+  let remaining = hours * HOUR;
   while (remaining > 0) {
     const local = new Date(cursor + EAT_OFFSET);
     const midnight = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() + 1) - EAT_OFFSET;
@@ -21,6 +22,9 @@ export function expressDeadline(start) {
   }
   return new Date(cursor);
 }
+
+export const expressDeadline = start => workingDeadline(start, EXPRESS_HOURS);
+export const standardDeadline = start => workingDeadline(start, STANDARD_HOURS);
 
 export function orderPricing(form, selection = false) {
   if (![true, false, 'true', 'false'].includes(selection)) {
@@ -46,6 +50,8 @@ export function publicOrderPricing(order, fallback = {}) {
     currency: order.currency || fallback.currency || 'TZS',
     expressStartedAt: order.expressStartedAt,
     expressDueAt: order.expressDueAt,
+    standardStartedAt: order.standardStartedAt,
+    standardDueAt: order.standardDueAt,
     completedAt: order.completedAt,
   };
 }
@@ -56,6 +62,10 @@ export function installExpressOrder(schema) {
     if (this.isExpress && this.paymentDetails?.verifiedAt && !this.expressStartedAt) {
       this.expressStartedAt = this.paymentDetails.verifiedAt;
       this.expressDueAt = expressDeadline(this.expressStartedAt);
+    }
+    if (!this.isExpress && this.paymentDetails?.verifiedAt) {
+      this.standardStartedAt ||= this.paymentDetails.verifiedAt;
+      this.standardDueAt ||= standardDeadline(this.standardStartedAt);
     }
   });
 }

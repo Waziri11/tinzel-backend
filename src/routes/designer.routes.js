@@ -87,7 +87,7 @@ router.get('/orders', async (req, res) => {
 
     const [orders, total] = await Promise.all([
       Order.find(filter)
-        .select('submissionId trackingId clientName formTitle status currentDraftVersion updatedAt assignedDesigner isExpress expressStartedAt expressDueAt completedAt')
+        .select('submissionId trackingId clientName formTitle status currentDraftVersion updatedAt assignedDesigner isExpress expressStartedAt expressDueAt standardStartedAt standardDueAt completedAt')
         .sort(EXPRESS_ORDER_SORT)
         .skip((page - 1) * limit)
         .limit(limit)
@@ -225,6 +225,8 @@ router.get('/returns', async (req, res) => {
                 isExpress: '$isExpress',
                 expressStartedAt: '$expressStartedAt',
                 expressDueAt: '$expressDueAt',
+                standardStartedAt: '$standardStartedAt',
+                standardDueAt: '$standardDueAt',
                 completedAt: '$completedAt',
                 currentDraftVersion: '$currentDraftVersion',
                 assignedDesigner: '$assignedDesignerDoc',

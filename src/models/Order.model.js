@@ -208,6 +208,8 @@ const orderSchema = new mongoose.Schema(
     currency: String,
     expressStartedAt: Date,
     expressDueAt: Date,
+    standardStartedAt: Date,
+    standardDueAt: Date,
     assignedDesigner: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'StaffUser',

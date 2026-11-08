@@ -13,7 +13,7 @@ const { Order } = await import('../src/models/Order.model.js');
 const { Notification } = await import('../src/models/Notification.model.js');
 const { AccessSession } = await import('../src/models/AccessSession.model.js');
 const { createSession, digest } = await import('../src/services/accessSessionService.js');
-const { expressDeadline } = await import('../src/services/expressOrderService.js');
+const { expressDeadline, standardDeadline } = await import('../src/services/expressOrderService.js');
 let db, server, base, form, auth, designer, expressId;
 before(async () => {
   db = await MongoMemoryServer.create(); await mongoose.connect(db.getUri());
@@ -118,5 +118,27 @@ test('standard and legacy orders accept a half deposit, reject less, and still a
     assert.equal(paid.status, 200, JSON.stringify(paid.data));
     assert.equal(paid.data.order.status, 'assigned');
     assert.equal(paid.data.order.expressStartedAt, undefined);
+    const saved = await Order.findById(order._id);
+    assert.equal(+saved.standardStartedAt, +saved.paymentDetails.verifiedAt);
+    assert.equal(+saved.standardDueAt, +standardDeadline(saved.paymentDetails.verifiedAt));
+    const retry = await call(path, { lipaNambaReference: 'DEPOSIT-TEST', amountPaid: 50000 }, auth.manager);
+    assert.equal(retry.data.order.standardDueAt, saved.standardDueAt.toISOString());
+    saved.status = 'in_design'; await saved.save();
+    const manager = await call('/api/manager/orders?scope=all&limit=100', undefined, auth.manager);
+    const design = await call('/api/designer/orders?column=new&limit=100', undefined, auth.designer);
+    for (const response of [manager, design]) {
+      const row = response.data.orders.find(row => row._id === String(saved._id));
+      assert.equal(row.standardStartedAt, saved.standardStartedAt.toISOString());
+      assert.equal(row.standardDueAt, saved.standardDueAt.toISOString());
+    }
+    const { generateClientToken } = await import('../src/middlewares/auth.middleware.js');
+    const token = await generateClientToken(saved);
+    const tracking = await call('/api/client/order', undefined, { Cookie: `tinzel_client=${token}` });
+    assert.equal(tracking.data.order.standardDueAt, saved.standardDueAt.toISOString());
+    saved.status = 'revision_requested';
+    saved.revisionRequests = [{ roundNumber: 1, draftVersionNumber: 1, source: 'manager', requestedBy: { type: 'manager' }, items: [{ text: 'Correction' }] }];
+    await saved.save();
+    const returns = await call('/api/designer/returns?limit=100', undefined, auth.designer);
+    assert.equal(returns.data.returns.find(row => row.orderId === String(saved._id)).standardDueAt, saved.standardDueAt.toISOString());
   }
 });

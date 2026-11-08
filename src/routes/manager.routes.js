@@ -139,7 +139,7 @@ router.get('/orders', async (req, res) => {
 
     const [orderDocs, total, statusCounts] = await Promise.all([
       Order.find(query)
-      .select('submissionId trackingId formId formTitle clientName clientWhatsApp clientEmail status previousStatusBeforeHold assignedDesigner currentDraftVersion revisionRequests printDocument printingDetails dispatchDetails holdReason uploadedPhotos updatedAt createdAt isExpress basePrice expressFee totalPrice currency expressStartedAt expressDueAt completedAt')
+      .select('submissionId trackingId formId formTitle clientName clientWhatsApp clientEmail status previousStatusBeforeHold assignedDesigner currentDraftVersion revisionRequests printDocument printingDetails dispatchDetails holdReason uploadedPhotos updatedAt createdAt isExpress basePrice expressFee totalPrice currency expressStartedAt expressDueAt standardStartedAt standardDueAt completedAt')
       .populate('assignedDesigner', 'name email currentActiveWorkload')
       .populate('formId', 'title slug price currency')
       .sort(EXPRESS_ORDER_SORT)

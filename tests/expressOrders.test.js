@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { expressDeadline, orderPricing } from '../src/services/expressOrderService.js';
+import { expressDeadline, standardDeadline, orderPricing } from '../src/services/expressOrderService.js';
 import { workflowMessage } from '../src/services/workflowMessages.js';
 
 test('24 hours counts every Monday–Saturday hour and excludes Sundays in Tanzania', () => {
@@ -24,6 +24,16 @@ test('server calculates express pricing and rejects invalid choices', () => {
   assert.equal(orderPricing(form, 'true').expressFee, 20000);
   for (const value of [null, 1, {}, 'yes']) assert.throws(() => orderPricing(form, value), { status: 400 });
   assert.throws(() => orderPricing({ ...form, currency: 'USD' }, true), { status: 400 });
+});
+
+test('standard gets 72 counting hours, excluding Tanzania Sundays', () => {
+  for (const [start, end] of [
+    ['2026-11-09T10:15:00+03:00', '2026-11-12T10:15:00+03:00'],
+    ['2026-11-06T10:15:00+03:00', '2026-11-10T10:15:00+03:00'],
+    ['2026-11-05T00:00:00+03:00', '2026-11-08T00:00:00+03:00'],
+    ['2026-11-08T23:59:00+03:00', '2026-11-12T00:00:00+03:00'],
+  ]) assert.equal(standardDeadline(start).toISOString(), new Date(end).toISOString());
+  assert.throws(() => standardDeadline('bad'));
 });
 
 test('every staff notification channel identifies express and its deadline in both languages', () => {
