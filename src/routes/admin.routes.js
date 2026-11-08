@@ -3,6 +3,7 @@ import { normalizePhone, requirePhone } from '../utils/phone.js';
 import { RETENTION_KEY, DEFAULT_RETENTION_DAYS, validRetentionDays } from '../services/orderRetentionPolicy.js';
 import { STAFF_VERIFICATION_KEY, DEFAULT_STAFF_VERIFICATION_HOURS, validStaffVerificationHours } from '../services/staffVerificationPolicy.js';
 import { requireRecentVerification } from '../services/accessSessionService.js';
+import { requestSubmissionDeletion } from '../services/submissionDeletionService.js';
 import { TrustedStaffDevice } from '../models/TrustedStaffDevice.model.js';
 import staffManagementRoutes from './staffManagement.routes.js';
 import { Router } from 'express';
@@ -253,6 +254,19 @@ router.delete('/forms/:id', async (req, res) => {
 
 // Admin-only for all remaining routes (staff, system config, audit logs)
 router.use(verifyStaffToken, requireRoles('admin'));
+
+router.delete('/submissions/:id', requireRecentVerification, async (req, res, next) => {
+  try {
+    if (req.body?.confirmation !== 'DELETE') {
+      return res.status(400).json({ message: 'Confirm permanent deletion of this submission.' });
+    }
+    const result = await requestSubmissionDeletion(req.params.id, req.user, req.ip);
+    return res.status(result.state === 'deleted' ? 200 : 202).json({
+      success: true, ...result,
+      message: 'Submission removed. File cleanup will finish after active work stops.',
+    });
+  } catch (error) { next(error); }
+});
 
 router.use(staffManagementRoutes);
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
