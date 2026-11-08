@@ -54,6 +54,13 @@ export function workflowMessage(type, order, event, recipient, lang, actionUrl) 
   const values = { ref, client: order.clientName, magazine: order.formTitle || (sw ? 'jarida' : 'magazine details'), version: event.version || 1 };
   const body = words[sw ? 3 : 2].replace(/\{(\w+)\}/g, (_, name) => values[name]);
   const lines = [body];
+  if (order.isExpress) {
+    const due = order.expressDueAt && new Date(order.expressDueAt).toLocaleString(sw ? 'sw-TZ' : 'en-GB', { timeZone: 'Africa/Dar_es_Salaam', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+    lines.unshift(sw ? 'EXPRESS — Oda ya kipaumbele.' : 'EXPRESS — Priority order.');
+    lines.push(due
+      ? `${sw ? 'Muda wa mwisho' : 'Due'}: ${due} EAT. ${sw ? 'Jumapili haihesabiwi.' : 'Sundays excluded.'}`
+      : (sw ? 'Saa 24 baada ya malipo kuthibitishwa; Jumapili haihesabiwi. Ada ya Express: TSh 20,000.' : '24 hours from payment confirmation; Sundays excluded. Express fee: TSh 20,000.'));
+  }
   if (recipient.role !== 'client' && key !== 'order_submitted') {
     lines.push([order.clientName, order.formTitle].filter(Boolean).join(' · '));
   }
@@ -71,5 +78,5 @@ export function workflowMessage(type, order, event, recipient, lang, actionUrl) 
     const specs = order.printDocument?.specs || {}, unknown = sw ? 'Haijawekwa' : 'Not recorded';
     lines.push(`${sw ? 'Toleo lililoidhinishwa' : 'Approved version'}: ${values.version}`, `${sw ? 'Nakala' : 'Copies'}: ${specs.quantity ?? unknown}`, `${sw ? 'Karatasi' : 'Paper'}: ${specs.paperType || unknown}`, `${sw ? 'Kava' : 'Cover'}: ${specs.coverFinish || unknown}`, `${sw ? 'Ufungaji' : 'Binding'}: ${specs.binding || unknown}`);
   }
-  return messageContent(words[sw ? 1 : 0], lines.filter(Boolean).join('\n'), language(lang), recipient.channel === 'in_system' ? null : actionUrl, recipient.role === 'client' ? (sw ? 'Fuatilia oda yangu' : 'Track my order') : undefined);
+  return messageContent((order.isExpress ? 'EXPRESS · ' : '') + words[sw ? 1 : 0], lines.filter(Boolean).join('\n'), language(lang), recipient.channel === 'in_system' ? null : actionUrl, recipient.role === 'client' ? (sw ? 'Fuatilia oda yangu' : 'Track my order') : undefined);
 }

@@ -1,3 +1,4 @@
+import { EXPRESS_ORDER_SORT } from '../services/expressOrderService.js';
 import { streamRevisionAudio } from '../services/revisionAudioService.js';
 import { designerColumnFilter } from '../services/designerBoardService.js';
 import { permits,requirePermission } from '../services/authorizationService.js';
@@ -85,8 +86,8 @@ router.get('/orders', async (req, res) => {
 
     const [orders, total] = await Promise.all([
       Order.find(filter)
-        .select('submissionId trackingId clientName formTitle status currentDraftVersion updatedAt assignedDesigner')
-        .sort({ updatedAt: -1, _id: -1 })
+        .select('submissionId trackingId clientName formTitle status currentDraftVersion updatedAt assignedDesigner isExpress expressStartedAt expressDueAt completedAt')
+        .sort(EXPRESS_ORDER_SORT)
         .skip((page - 1) * limit)
         .limit(limit)
         .lean(),
@@ -146,7 +147,7 @@ router.get('/returns', async (req, res) => {
 
     const [aggResult] = await Order.aggregate([
       { $match: baseMatch },
-      { $sort: { updatedAt: -1 } },
+      { $sort: EXPRESS_ORDER_SORT },
       {
         $lookup: {
           from: 'staffusers',
@@ -220,6 +221,10 @@ router.get('/returns', async (req, res) => {
                 clientWhatsApp: '$clientWhatsApp',
                 formTitle: '$formTitle',
                 orderStatus: '$status',
+                isExpress: '$isExpress',
+                expressStartedAt: '$expressStartedAt',
+                expressDueAt: '$expressDueAt',
+                completedAt: '$completedAt',
                 currentDraftVersion: '$currentDraftVersion',
                 assignedDesigner: '$assignedDesignerDoc',
                 roundNumber: '$revisionRequests.roundNumber',

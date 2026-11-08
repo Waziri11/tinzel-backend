@@ -1,3 +1,4 @@
+import { orderPricing, publicOrderPricing } from './expressOrderService.js';
 import { getPublicPaymentDetails } from './paymentOptionsService.js';
 import { requirePhone } from '../utils/phone.js';
 import { workflowEvent } from './workflowEvents.js';
@@ -190,13 +191,14 @@ export async function finalizeSession(id, token, body) {
     const photos = active.map((e) => photoDescriptor(byId.get(e._id)));
     const errors = validateFormAnswers(form.fields, body.answers || {}, photos);
     if (errors.length) throw mediaError(400, errors[0]);
+    const pricing = orderPricing(form, body.isExpress);
     const finalization = {
-      order: { _id: session.orderId, mediaSessionId: id, submissionId: `SUB-${new Date().getFullYear()}-${session.orderId.toString().toUpperCase()}`,
+      order: { ...pricing, _id: session.orderId, mediaSessionId: id, submissionId: `SUB-${new Date().getFullYear()}-${session.orderId.toString().toUpperCase()}`,
         formId: form._id, formTitle: form.title, clientName: String(body.clientName).trim(),
         clientPreferredLanguage: body.clientPreferredLanguage || 'sw', clientWhatsApp: requirePhone(body.clientWhatsApp), clientEmail: String(body.clientEmail || '').trim(),
         submittedData: body.answers || {}, submittedFields: form.fields.map(({ fieldId, label, sectionId, order }) => ({ fieldId, label, sectionId, order })),
         uploadedPhotos: photos, status: 'awaiting_payment' },
-      price: form.price, currency: form.currency, lipaNambaInstructions: form.lipaNambaInstructions,
+      price: pricing.totalPrice, currency: pricing.currency, lipaNambaInstructions: form.lipaNambaInstructions,
     };
     await UploadSession.updateOne({ _id: id, state: 'open', revision: session.revision }, { $set: { state: 'finalizing', finalization }, $inc: { revision: 1 } });
     session = await getSession(id, token);
@@ -209,7 +211,7 @@ export async function finalizeSession(id, token, body) {
     action: 'ORDER_SUBMITTED', orderId: order._id, details: { submissionId: order.submissionId, photosCount: order.uploadedPhotos.length, formSlug: session.slug } } }, { upsert: true });
   const result = { success: true, order: { submissionId: order.submissionId, formTitle: order.formTitle,
     clientName: order.clientName, clientWhatsApp: order.clientWhatsApp, status: order.status,
-    photosCount: order.uploadedPhotos.length, price: snap.price, currency: snap.currency }, ...await getPublicPaymentDetails(snap.lipaNambaInstructions) };
+    photosCount: order.uploadedPhotos.length, ...publicOrderPricing(order, snap) }, ...await getPublicPaymentDetails(snap.lipaNambaInstructions) };
   await UploadSession.updateOne({ _id: id }, { $set: { state: 'submitted', result } });
   const { kickWorkflowNotifications } = await import('./workflowNotificationService.js');
   await kickWorkflowNotifications(order._id);

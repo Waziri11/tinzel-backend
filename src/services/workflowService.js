@@ -1,3 +1,4 @@
+import { publicOrderPricing } from './expressOrderService.js';
 import { randomInt } from 'node:crypto';
 import { Counter } from '../models/Counter.model.js';
 import { Order } from '../models/Order.model.js';
@@ -160,8 +161,7 @@ export const sanitizeOrderForClient = (order) => {
     status: obj.status,
     previousStatusBeforeHold: obj.previousStatusBeforeHold,
     holdReason: obj.holdReason,
-    price: obj.formId?.price ?? obj.price,
-    currency: obj.formId?.currency ?? obj.currency ?? 'TZS',
+    ...publicOrderPricing(obj, obj.formId || obj),
     lipaNambaInstructions: obj.formId?.lipaNambaInstructions ?? null,
     submittedData: obj.submittedData,
     submittedFields: obj.submittedFields,

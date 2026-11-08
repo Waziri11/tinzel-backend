@@ -1,3 +1,4 @@
+import { orderPricing, publicOrderPricing } from '../services/expressOrderService.js';
 import { getPublicPaymentDetails } from '../services/paymentOptionsService.js';
 import { requirePhone } from '../utils/phone.js';
 import {authorizePrivatePhoto} from '../services/privateMediaAccessService.js';
@@ -191,7 +192,8 @@ router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos
       return res.status(404).json({ success: false, message: 'Magazine form not found' });
     }
 
-    const { clientName, clientWhatsApp, clientEmail, ...formDataRaw } = req.body;
+    const { clientName, clientWhatsApp, clientEmail, isExpress, ...formDataRaw } = req.body;
+    const pricing = orderPricing(form, isExpress);
 
     if (!clientName || !clientWhatsApp) {
       return res.status(400).json({
@@ -311,6 +313,7 @@ router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos
     const submissionId = await generateUniqueSubmissionId();
 
     const order = await Order.create({
+      ...pricing,
       submissionId,
       formId: form._id,
       formTitle: form.title,
@@ -349,8 +352,7 @@ router.post('/forms/:slug/submit', boundPhotoRequest, uploadPhotos.array('photos
       order: {
         submissionId: order.submissionId,
         formTitle: form.title,
-        price: form.price,
-        currency: form.currency,
+        ...publicOrderPricing(order, form),
         status: order.status,
         clientName: order.clientName,
         clientWhatsApp: order.clientWhatsApp,

@@ -1,3 +1,4 @@
+import { EXPRESS_ORDER_SORT } from '../services/expressOrderService.js';
 import { normalizePhone } from '../utils/phone.js';
 import {permits} from '../services/authorizationService.js';
 import staffManagementRoutes from './staffManagement.routes.js';
@@ -136,10 +137,10 @@ router.get('/orders', async (req, res) => {
 
     const [orderDocs, total, statusCounts] = await Promise.all([
       Order.find(query)
-      .select('submissionId trackingId formId formTitle clientName clientWhatsApp clientEmail status previousStatusBeforeHold assignedDesigner currentDraftVersion revisionRequests printDocument printingDetails dispatchDetails holdReason uploadedPhotos updatedAt createdAt')
+      .select('submissionId trackingId formId formTitle clientName clientWhatsApp clientEmail status previousStatusBeforeHold assignedDesigner currentDraftVersion revisionRequests printDocument printingDetails dispatchDetails holdReason uploadedPhotos updatedAt createdAt isExpress basePrice expressFee totalPrice currency expressStartedAt expressDueAt completedAt')
       .populate('assignedDesigner', 'name email currentActiveWorkload')
       .populate('formId', 'title slug price currency')
-      .sort({ updatedAt: -1 })
+      .sort(EXPRESS_ORDER_SORT)
       .skip((page - 1) * limit)
       .limit(limit),
       Order.countDocuments(query),
@@ -238,6 +239,10 @@ router.post('/orders/:id/verify-payment', async (req, res) => {
         success: false,
         message: `Order status is '${order.status}'. Payment can only be verified when 'awaiting_payment'.`,
       });
+    }
+
+    if (order.isExpress && amount < order.totalPrice) {
+      return res.status(400).json({ success: false, message: `Express orders require the full payment of TZS ${order.totalPrice.toLocaleString('en-TZ')}, including the express fee.` });
     }
 
     // Generate tracking ID ONLY NOW (strict PRD rule)

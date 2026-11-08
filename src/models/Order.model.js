@@ -1,4 +1,5 @@
 import { installOrderRetention } from '../services/orderRetentionPolicy.js';
+import { installExpressOrder } from '../services/expressOrderService.js';
 import mongoose from 'mongoose';
 import { installWorkflowEvents } from '../services/workflowEvents.js';
 
@@ -199,6 +200,13 @@ const orderSchema = new mongoose.Schema(
       amountPaid: Number,
       receiptNumber: String,
     },
+    isExpress: { type: Boolean, default: false },
+    basePrice: { type: Number, min: 0 },
+    expressFee: { type: Number, min: 0 },
+    totalPrice: { type: Number, min: 0 },
+    currency: String,
+    expressStartedAt: Date,
+    expressDueAt: Date,
     assignedDesigner: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'StaffUser',
@@ -305,7 +313,10 @@ const orderSchema = new mongoose.Schema(
 
 orderSchema.set('toJSON',{transform:(_doc,ret)=>{delete ret.workflowEvents;delete ret.draftEvents;delete ret.retentionDeletingAt;delete ret.retentionLeaseUntil;delete ret.retentionOwner;return ret;}});
 installWorkflowEvents(orderSchema);
+installExpressOrder(orderSchema);
 installOrderRetention(orderSchema);
+orderSchema.index({ isExpress: -1, expressDueAt: 1, updatedAt: -1, _id: -1 });
+orderSchema.index({ assignedDesigner: 1, isExpress: -1, expressDueAt: 1, updatedAt: -1, _id: -1 });
 orderSchema.index({ 'workflowEvents.state': 1, 'workflowEvents.runAfter': 1 });
 orderSchema.index({ status: 1, updatedAt: -1 });
 orderSchema.index({ status: 1, completedAt: 1 });
