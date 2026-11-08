@@ -42,7 +42,7 @@ async function fixture(client = false) {
     const response = await fetch(base + path(role) + suffix, { method, headers: { Authorization: `Bearer ${role === 'client' ? clientToken : tokens[role]}`, 'Content-Type': Buffer.isBuffer(body) ? 'application/octet-stream' : 'application/json' }, body: body === undefined ? undefined : Buffer.isBuffer(body) ? body : JSON.stringify(body) });
     return { status: response.status, data: response.headers.get('content-type')?.includes('application/json') ? await response.json() : Buffer.from(await response.arrayBuffer()), headers: response.headers };
   };
-  return { order, call };
+  return { order, call, clientToken };
 }
 const target = { page: 1, kind: 'area', rects: [{ x: .1, y: .1, width: .2, height: .2 }], text: '', clientMutationId: randomUUID() };
 async function attach(call, bytes = image, extra = {}) {
@@ -156,4 +156,62 @@ test('an interrupted multi-part image resumes from confirmed chunks', async () =
   const resume = await call('/attachments', body); assert.deepEqual(resume.data.received.map(p => p.n), [0]);
   assert.equal((await call(`/attachments/${session.id}/chunks/1`, bytes.subarray(session.chunkBytes), 'PUT')).status, 200);
   assert.equal((await call(`/attachments/${session.id}/complete`, {})).status, 200);
+});
+
+const audio = Buffer.alloc(16044);
+audio.write('RIFF'); audio.writeUInt32LE(audio.length - 8, 4); audio.write('WAVEfmt ', 8); audio.writeUInt32LE(16, 16);
+audio.writeUInt16LE(1, 20); audio.writeUInt16LE(1, 22); audio.writeUInt32LE(8000, 24); audio.writeUInt32LE(16000, 28);
+audio.writeUInt16LE(2, 32); audio.writeUInt16LE(16, 34); audio.write('data', 36); audio.writeUInt32LE(16000, 40);
+const audioInfo = { name: 'voice-note.wav', contentType: 'audio/wav' };
+
+test('audio-only page comments save privately, submit as a required correction, and play for assigned staff', async () => {
+  const { order, call, clientToken } = await fixture(true), other = await fixture(true);
+  const { id, complete } = await attach(call, audio, audioInfo);
+  assert.equal(complete.status, 200, JSON.stringify(complete.data));
+  assert.equal(complete.data.contentType, 'audio/wav');
+  const input = { ...target, clientMutationId: randomUUID(), attachmentIds: [id] };
+  const saved = await call('/annotations', input);
+  assert.equal(saved.status, 200); assert.equal(saved.data.annotations[0].attachments[0].contentType, 'audio/wav');
+  assert.equal((await call('/annotations', input)).data.annotations.length, 1);
+  const playback = await call(`/attachments/${id}`);
+  assert.equal(playback.status, 200); assert.equal(playback.headers.get('content-type'), 'audio/wav');
+  assert.match(playback.headers.get('cache-control'), /no-store/); assert.deepEqual(playback.data, audio);
+  assert.equal((await other.call(`/attachments/${id}`)).status, 404);
+  assert.equal((await call(`/attachments/${id}`, undefined, 'GET', 'designer')).status, 404);
+  assert.equal((await call(`/attachments/${id}`, undefined, 'GET', 'manager')).status, 404);
+  const submitted = await fetch(base + '/api/client/request-revision', { method: 'POST', headers: { Authorization: `Bearer ${clientToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ expectedVersion: 1, items: [] }) });
+  const body = await submitted.json(); assert.equal(submitted.status, 200, JSON.stringify(body));
+  assert.equal(body.order.revisionRequests[0].items[0].status, 'open');
+  assert.match(body.order.revisionRequests[0].items[0].text, /Listen to attached audio/);
+  assert.equal(body.order.revisionRequests[0].items[0].annotationId, saved.data.annotations[0]._id);
+  for (const role of ['manager', 'designer']) assert.deepEqual((await call(`/attachments/${id}`, undefined, 'GET', role)).data, audio);
+  await ProofAttachment.updateOne({ _id: id }, { $set: { expiresAt: new Date(0) } }); await cleanProofAttachments();
+  assert.ok(await ProofAttachment.exists({ _id: id }));
+  assert.equal((await Order.findById(order._id)).proofAnnotations.length, 1);
+});
+
+test('audio accompanies five images, but multiple audio messages and spoofed or oversized uploads are rejected', async () => {
+  const { call } = await fixture(); const ids = [];
+  for (let n = 0; n < 5; n++) ids.push((await attach(call)).id);
+  const sound = await attach(call, audio, audioInfo); ids.push(sound.id);
+  assert.equal((await call('/annotations', { ...target, attachmentIds: ids })).status, 200);
+  const one = await attach(call, audio, audioInfo), two = await attach(call, audio, audioInfo);
+  assert.equal((await call('/annotations', { ...target, clientMutationId: randomUUID(), attachmentIds: [one.id, two.id] })).status, 400);
+  assert.equal((await ProofAttachment.findById(one.id)).state, 'ready');
+  assert.equal((await ProofAttachment.findById(two.id)).state, 'ready');
+  assert.equal((await call('/attachments', { clientId: randomUUID(), ...audioInfo, size: 3 * 1024 * 1024 + 1 })).status, 400);
+  assert.equal((await attach(call, image, audioInfo)).complete.status, 400);
+  assert.equal((await attach(call, audio, { ...audioInfo, name: 'script.html' })).complete.status, 400);
+});
+
+test('discarded audio comments release their private audio bytes', async () => {
+  const { call } = await fixture(true);
+  const { id } = await attach(call, audio, audioInfo);
+  const asset = await ProofAttachment.findById(id);
+  const saved = await call('/annotations', { ...target, attachmentIds: [id] });
+  assert.equal((await call(`/annotations/${saved.data.annotations[0]._id}`, undefined, 'DELETE')).status, 200);
+  await cleanProofAttachments();
+  assert.equal(await ProofAttachment.exists({ _id: id }), null);
+  assert.equal(await mongoose.connection.db.collection('proofAttachments.files').countDocuments({ _id: asset.imageId }), 0);
+  assert.equal((await call(`/attachments/${id}`)).status, 404);
 });

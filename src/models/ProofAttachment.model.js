@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 export const ProofAttachment = mongoose.model('ProofAttachment', new mongoose.Schema({
   orderId: { type: mongoose.Schema.Types.ObjectId, required: true },
   version: Number, source: String, authorId: String, clientId: String,
-  name: String, size: Number, contentType: String,
+  name: String, size: Number, contentType: String, storedContentType: String,
   state: { type: String, default: 'uploading' },
   imageId: mongoose.Schema.Types.ObjectId, thumbnailId: mongoose.Schema.Types.ObjectId,
   annotationId: mongoose.Schema.Types.ObjectId, width: Number, height: Number,

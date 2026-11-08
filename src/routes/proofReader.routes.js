@@ -148,8 +148,8 @@ function routes() {
   r.delete('/attachments/:attachmentId', attachmentRoute(async req => { await removeAttachment(req); return { success: true }; }));
   r.get('/attachments/:attachmentId', async (req, res, next) => {
     try {
-      const stream = await readAttachment(req, visibleAnnotations(req));
-      res.type('image/webp');
+      const { stream, contentType } = await readAttachment(req, visibleAnnotations(req));
+      res.type(contentType);
       res.on('close', () => stream.destroy());
       await pipeline(stream, res);
     } catch (error) { if (res.headersSent) res.destroy(error); else next(error); }
@@ -161,7 +161,7 @@ function routes() {
       if(kind==='image'){if(!Number.isInteger(page)||page<1||typeof req.body.imageRegionId!=='string')return res.status(400).json({message:'Choose a detected image on a valid page'});const geometry=await ProofPage.findOne({orderId:req.proofOrder._id,version:req.proofVersion,page}).select('imageRegions').lean();imageRegion=geometry?.imageRegions?.find(r=>r.id===req.body.imageRegionId);if(!imageRegion)return res.status(400).json({message:'Choose a detected image on this magazine page'});rects=[imageRegion.rect];}
       const text = String(req.body.text || '').trim();
       const attachmentIds = req.body.attachmentIds ?? [];
-      if (!Array.isArray(attachmentIds) || attachmentIds.length > 5 || new Set(attachmentIds).size !== attachmentIds.length || attachmentIds.some(id => typeof id !== 'string' || !mongoose.isValidObjectId(id))) return res.status(400).json({ message: 'Choose up to five uploaded images' });
+      if (!Array.isArray(attachmentIds) || attachmentIds.length > 6 || new Set(attachmentIds).size !== attachmentIds.length || attachmentIds.some(id => typeof id !== 'string' || !mongoose.isValidObjectId(id))) return res.status(400).json({ message: 'Choose up to five images and one audio message' });
       const clientMutationId=req.body.clientMutationId;
       if(clientMutationId!==undefined&&!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(clientMutationId))return res.status(400).json({message:'Invalid comment save reference'});
       const authorId=String(req.user?._id||req.proofOrder._id);

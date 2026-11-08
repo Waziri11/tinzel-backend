@@ -199,5 +199,5 @@ export function submitAnnotations(order, source, items = []) {
   const annotations = pendingAnnotations(order, source);
   const now = new Date();
   for (const annotation of annotations) annotation.submittedAt = now;
-  return [...items, ...annotations.map((a) => ({ text: a.text || 'Review attached images / Kagua picha zilizoambatishwa', pageReference: String(a.page), annotationId: a._id }))];
+  return [...items, ...annotations.map((a) => ({ text: a.text || (a.attachments?.some(file => file.contentType?.startsWith('audio/')) ? 'Listen to attached audio / Sikiliza sauti iliyoambatishwa' : 'Review attached images / Kagua picha zilizoambatishwa'), pageReference: String(a.page), annotationId: a._id }))];
 }
