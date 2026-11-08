@@ -4,6 +4,7 @@ import {
   extractPublicLoadData,
   normalizeGoogleFormData,
   importGoogleForm,
+  importSavedGoogleForm,
   validateGoogleFormUrl,
   GoogleFormsImportError,
 } from '../src/services/googleFormsImportService.js';
@@ -113,10 +114,10 @@ test('Google Forms importer maps grids, dates, ratings and image uploads while w
     [8, 'Unknown', null, 99],
   ]], null, 'Rich form'];
   const imported = normalizeGoogleFormData(richFixture);
-  assert.deepEqual(imported.fields.map((field) => field.type), ['grid_radio', 'date', 'rating', 'photo_group']);
+  assert.deepEqual(imported.fields.map((field) => field.type), ['grid_radio', 'date', 'rating', 'photo_group', 'photo_group']);
   assert.deepEqual(imported.fields[0].rows, ['First row', 'Second row']);
   assert.equal(imported.fields[2].ratingConfig.levelCount, 7);
-  assert.ok(imported.warnings.some((warning) => warning.includes('non-image file upload')));
+  assert.ok(imported.warnings.some((warning) => warning.includes('Only images are accepted')));
   assert.ok(imported.warnings.some((warning) => warning.includes('informational text block')));
   assert.ok(imported.warnings.some((warning) => warning.includes('image')));
   assert.ok(imported.warnings.some((warning) => warning.includes('unsupported')));
@@ -130,4 +131,47 @@ test('Google Forms importer reports simplified branching, quiz and email collect
   assert.ok(imported.warnings.some((warning) => warning.includes('section branching')));
   assert.ok(imported.warnings.some((warning) => warning.includes('Quiz grading')));
   assert.ok(imported.warnings.some((warning) => warning.includes('email collection')));
+});
+
+test('Google sign-in responses offer saved-form recovery without following the login redirect', async () => {
+  for (const response of [new Response('', { status: 401 }), new Response('', { status: 302, headers: { location: 'https://accounts.google.com/ServiceLogin' } })]) {
+    let calls = 0;
+    await assert.rejects(() => importGoogleForm('https://forms.gle/example', { fetchImpl: async () => { calls++; return response; } }), error => error.status === 422 && error.code === 'GOOGLE_FORM_SIGN_IN_REQUIRED' && /Import saved form/.test(error.message));
+    assert.equal(calls, 1);
+  }
+});
+
+test('saved forms preserve upload questions when Google omits file type metadata', () => {
+  const data = [null, ['Description', [
+    [1, 'Your name', null, 0, [[11, null, 1]]],
+    [2, 'Photos', null, 13, [[22, null, 1]]],
+  ]], null, 'Saved form'];
+  const imported = importSavedGoogleForm(data, 'https://forms.gle/example');
+  assert.equal(imported.fields.length, 2);
+  assert.equal(imported.fields[1].type, 'photo_group');
+  assert.equal(imported.fields[1].required, true);
+  assert.equal(imported.fields[1].validationRules.minPhotos, 1);
+  assert.ok(imported.warnings.some(w => /photo limits/.test(w)));
+});
+
+test('saved forms reject malformed and oversized data as import errors', () => {
+  for (const data of [null, {}, [], [null, ['', []], null, 'Empty'], [null, ['', [null]], null, 'Broken'], [null, ['', [[1, 'Name', null, 0, {}]]], null, 'Broken']]) {
+    assert.throws(() => importSavedGoogleForm(data), error => error instanceof GoogleFormsImportError && error.status === 400);
+  }
+  const huge = [null, ['x'.repeat(751 * 1024), [[1, 'Name', null, 0]]], null, 'Large'];
+  assert.throws(() => importSavedGoogleForm(huge), error => error.status === 413);
+  assert.throws(() => importSavedGoogleForm(fixture, 'https://example.com/private'), /Only HTTPS/);
+});
+
+test('bootstrap parsing preserves literal HTML entities in question text', () => {
+  const data = [null, ['', [[1, 'A &quot; B &amp; C', null, 0]]], null, 'Literal'];
+  assert.deepEqual(extractPublicLoadData(`FB_PUBLIC_LOAD_DATA_ = ${JSON.stringify(data)};`), data);
+});
+
+test('date-only array settings stay date-only rather than becoming datetime', () => {
+  const data = [null, ['', [
+    [1, 'Date', null, 9, [[11, null, 1, null, null, null, null, [0, 1]]]],
+    [2, 'Date and time', null, 9, [[22, null, 1, null, null, null, null, [1, 1]]]],
+  ]], null, 'Dates'];
+  assert.deepEqual(importSavedGoogleForm(data).fields.map(field => field.type), ['date', 'datetime']);
 });

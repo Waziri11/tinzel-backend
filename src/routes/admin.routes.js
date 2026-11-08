@@ -17,7 +17,7 @@ import { verifyStaffToken, requireRoles } from '../middlewares/auth.middleware.j
 import { getSimulatedNotifications, getNotificationHistory } from '../services/notificationService.js';
 import { availableFormSlug } from '../utils/formSlug.js';
 import { validateFormForPublication } from '../services/formPublicationService.js';
-import { importGoogleForm, GoogleFormsImportError } from '../services/googleFormsImportService.js';
+import { importGoogleForm, importSavedGoogleForm, GoogleFormsImportError } from '../services/googleFormsImportService.js';
 
 import { uploadCover } from '../services/uploadService.js';
 import { storeCoverImage } from '../services/coverStorageService.js';
@@ -109,10 +109,12 @@ router.post('/forms', async (req, res) => {
 
 router.post('/forms/import-google', async (req, res) => {
   try {
-    if (typeof req.body?.url !== 'string' || !req.body.url.trim()) {
+    const savedForm = Object.hasOwn(req.body || {}, 'formData');
+    if (!savedForm && (typeof req.body?.url !== 'string' || !req.body.url.trim())) {
       return res.status(400).json({ success: false, message: 'Google Form link is required' });
     }
-    const imported = await importGoogleForm(req.body.url.trim());
+    const sourceUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+    const imported = savedForm ? importSavedGoogleForm(req.body.formData, sourceUrl) : await importGoogleForm(sourceUrl);
     let form;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const slug = await availableFormSlug(imported.title, (candidate) => MagazineForm.exists({ slug: candidate }));
@@ -147,7 +149,7 @@ router.post('/forms/import-google', async (req, res) => {
     return res.status(201).json({ success: true, message: 'Google Form imported as a draft', form, warnings: imported.warnings });
   } catch (error) {
     if (error instanceof GoogleFormsImportError) {
-      return res.status(error.status).json({ success: false, message: error.message });
+      return res.status(error.status).json({ success: false, message: error.message, errorCode: error.code });
     }
     return res.status(500).json({ success: false, message: 'Google Form import failed' });
   }

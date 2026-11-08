@@ -12,10 +12,11 @@ const decodeHtmlEntities = (value) => value
   .replaceAll('&amp;', '&');
 
 export class GoogleFormsImportError extends Error {
-  constructor(message, status = 400) {
+  constructor(message, status = 400, code = 'GOOGLE_FORM_IMPORT_FAILED') {
     super(message);
     this.name = 'GoogleFormsImportError';
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -100,12 +101,13 @@ const fetchPublicFormHtml = async (sourceUrl, fetchImpl = fetch) => {
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = response.headers.get('location');
         if (!location) throw new GoogleFormsImportError('Google returned an invalid redirect', 502);
+        if (new URL(location, url).hostname === 'accounts.google.com') throw signInRequired();
         url = validateGoogleFormUrl(new URL(location, url).toString());
         continue;
       }
       if (!response.ok) {
         if ([401, 403].includes(response.status)) {
-          throw new GoogleFormsImportError('This Google Form is restricted. In Google Forms, publish it and allow anyone with the link to respond, then try again.', 422);
+          throw signInRequired();
         }
         if (response.status === 404) {
           throw new GoogleFormsImportError('Google Form was not found or is unpublished. Copy its responder link and try again.', 404);
@@ -127,6 +129,12 @@ const fetchPublicFormHtml = async (sourceUrl, fetchImpl = fetch) => {
     clearTimeout(timer);
   }
 };
+
+const signInRequired = () => new GoogleFormsImportError(
+  'Google requires sign-in to open this form. This can happen with file uploads, verified email collection, one-response limits, or restricted access. Open the responder link while signed in, save the page as HTML, then use Import saved form. For link import, publish the form and allow anyone with the link to respond without signing in.',
+  422,
+  'GOOGLE_FORM_SIGN_IN_REQUIRED'
+);
 
 export const extractPublicLoadData = (html) => {
   const marker = 'FB_PUBLIC_LOAD_DATA_';
@@ -153,7 +161,9 @@ export const extractPublicLoadData = (html) => {
       depth -= 1;
       if (depth === 0) {
         try {
-          return JSON.parse(decodeHtmlEntities(html.slice(start, index + 1)));
+          const raw = html.slice(start, index + 1);
+          // Script contents are already JSON; decoding first corrupts literal entities.
+          try { return JSON.parse(raw); } catch { return JSON.parse(decodeHtmlEntities(raw)); }
         } catch {
           throw new GoogleFormsImportError('Google Form data uses an unsupported format');
         }
@@ -219,12 +229,16 @@ export const normalizeGoogleFormData = (data, sourceUrl = '') => {
       const options = payloadOptions(item);
       const checkboxGrid = payloads.some((payload) => payload?.[4] === 1);
       addField(item, index, checkboxGrid ? 'grid_checkbox' : 'grid_radio', { rows, options });
-    } else if (type === 9) addField(item, index, item?.[4]?.[0]?.[7] ? 'datetime' : 'date');
-    else if (type === 10) addField(item, index, item?.[4]?.[0]?.[6] ? 'duration' : 'time');
+    } else if (type === 9) {
+      const config = item?.[4]?.[0]?.[7];
+      const includesTime = Array.isArray(config) ? config[0] : config;
+      addField(item, index, includesTime ? 'datetime' : 'date');
+    } else if (type === 10) addField(item, index, item?.[4]?.[0]?.[6] ? 'duration' : 'time');
     else if (type === 13) {
-      const serialized = JSON.stringify(item).toLowerCase();
-      if (serialized.includes('image')) addField(item, index, 'photo_group', { validationRules: { minPhotos: isRequired(item) ? 1 : 0, maxPhotos: 10, minChar: 0, maxChar: 5000 } });
-      else warnings.push(`Skipped non-image file upload: ${item?.[1] || `Item ${index + 1}`}`);
+      // Google omits allowed file types from some responder pages. Preserve the
+      // question and make Tinzel's image-only conversion explicit for review.
+      addField(item, index, 'photo_group', { validationRules: { minPhotos: isRequired(item) ? 1 : 0, maxPhotos: 10, minChar: 0, maxChar: 5000 } });
+      warnings.push(`Converted file upload to a photo group: ${item?.[1] || `Item ${index + 1}`}. Only images are accepted in Tinzel; review the photo limits before publishing.`);
     } else if (type === 18) {
       const levelCount = Number(item?.[4]?.[0]?.[1]) || 5;
       addField(item, index, 'rating', { ratingConfig: { levelCount, iconType: 'star' } });
@@ -244,6 +258,25 @@ export const normalizeGoogleFormData = (data, sourceUrl = '') => {
   if (!fields.length) throw new GoogleFormsImportError('No supported questions were found in this Google Form');
 
   return { title, description, sections, fields, warnings: [...new Set(warnings)], sourceUrl };
+};
+
+export const importSavedGoogleForm = (data, sourceUrl = '') => {
+  const invalid = () => new GoogleFormsImportError('This file does not contain readable Google Form questions. Open the responder page while signed in and save it as Webpage, HTML Only.', 400, 'GOOGLE_FORM_INVALID_FILE');
+  if (!Array.isArray(data) || !Array.isArray(data[1]) || !Array.isArray(data[1][1])) throw invalid();
+  if (Buffer.byteLength(JSON.stringify(data)) > 750 * 1024) throw new GoogleFormsImportError('Google Form question data is too large to import', 413);
+  const items = data[1][1];
+  if (!items.length || items.length > 500 || typeof data[3] !== 'string' || typeof data[1][0] !== 'string') throw invalid();
+  for (const item of items) {
+    if (!Array.isArray(item) || typeof item[1] !== 'string' || !Number.isInteger(item[3]) ||
+        (item[2] != null && typeof item[2] !== 'string') ||
+        (item[4] != null && (!Array.isArray(item[4]) || item[4].some(payload => !Array.isArray(payload))))) throw invalid();
+  }
+  try {
+    return normalizeGoogleFormData(data, sourceUrl ? validateGoogleFormUrl(sourceUrl).toString() : '');
+  } catch (error) {
+    if (error instanceof GoogleFormsImportError) throw error;
+    throw invalid();
+  }
 };
 
 export const importGoogleForm = async (sourceUrl, { fetchImpl = fetch } = {}) => {
