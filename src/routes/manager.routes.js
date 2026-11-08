@@ -94,7 +94,8 @@ router.get('/orders', async (req, res) => {
 
     if (status && status !== 'all') {
       conditions.push({ status });
-    } else if (phase && PHASE_STATUSES[phase]) {
+    }
+    if (phase && PHASE_STATUSES[phase]) {
       const phaseList = PHASE_STATUSES[phase];
       const activePhaseList = scope === 'all' || phase === 'post_design'
         ? phaseList
@@ -123,7 +124,7 @@ router.get('/orders', async (req, res) => {
           ],
         });
       }
-    } else if (scope !== 'all') {
+    } else if ((!status || status === 'all') && scope !== 'all') {
       conditions.push({ status: { $in: ACTIVE_ORDER_STATUSES } });
     }
 
@@ -332,12 +333,16 @@ router.post('/orders/:id/hold', async (req, res) => {
     if (action === 'hold') {
       if (order.status === 'closed') throw new ManagerWorkflowError('Closed orders cannot be placed on hold.');
       if (!reason?.trim()) throw new ManagerWorkflowError('A hold reason is required.');
-      order.previousStatusBeforeHold = order.status;
+      if (order.status !== 'on_hold') order.previousStatusBeforeHold = order.status;
       order.status = 'on_hold';
       order.holdReason = reason || 'Placed on hold by manager';
     } else {
       requireStatus(order, ['on_hold'], 'Resume');
-      order.status = order.previousStatusBeforeHold || 'in_design';
+      if (!ACTIVE_ORDER_STATUSES.includes(order.previousStatusBeforeHold) || order.previousStatusBeforeHold === 'on_hold') {
+        throw new ManagerWorkflowError('The previous stage is missing. Ask an administrator to review this order before resuming.', 409);
+      }
+      order.status = order.previousStatusBeforeHold;
+      order.previousStatusBeforeHold = undefined;
       order.holdReason = '';
     }
 

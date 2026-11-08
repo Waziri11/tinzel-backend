@@ -339,9 +339,9 @@ router.get('/orders/:id/photo-folder.zip', async (req, res) => {
 // Start Design
 router.post('/orders/:id/start-design', requirePermission('draft.upload'), async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id);
-    if (!order) {
-      return res.status(404).json({ success: false, message: 'Order not found' });
+    const order = req.order;
+    if (!['assigned', 'revision_requested', 'in_design'].includes(order.status)) {
+      return res.status(409).json({ success: false, message: 'This order is not ready for design. Refresh to check its current stage.' });
     }
 
     if (order.status === 'assigned' || order.status === 'revision_requested') {

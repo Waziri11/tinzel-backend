@@ -1,11 +1,34 @@
 const completed = ['client_approved', 'print_document_prep', 'print_manager_review', 'printing_sent', 'printing_in_progress', 'printing_completed', 'dispatched', 'delivered', 'closed'];
-// Only the latest return determines the lane. Earlier rounds remain in order history.
+// Holds retain the underlying stage. An unresolved correction stays with its
+// requester while the designer works and while the manager reviews the fix.
+const columnExpression = {
+  $let: {
+    vars: {
+      stage: { $cond: [{ $eq: ['$status', 'on_hold'] }, '$previousStatusBeforeHold', '$status'] },
+      latest: { $arrayElemAt: [{ $ifNull: ['$revisionRequests', []] }, -1] },
+    },
+    in: {
+      $switch: {
+        branches: [
+          { case: { $in: ['$$stage', completed] }, then: 'completed' },
+          {
+            case: { $or: [
+              { $eq: ['$$stage', 'revision_requested'] },
+              { $and: [
+                { $in: ['$$stage', ['assigned', 'in_design', 'draft_manager_review']] },
+                { $in: ['$$latest.status', ['open', 'submitted_for_review']] },
+              ] },
+            ] },
+            then: { $cond: [{ $eq: ['$$latest.source', 'client'] }, 'client', 'manager'] },
+          },
+        ],
+        default: 'new',
+      },
+    },
+  },
+};
+
 export function designerColumnFilter(column) {
-  if (column === 'new') return { status: { $nin: [...completed, 'revision_requested'] } };
-  if (column === 'completed') return { status: { $in: completed } };
-  if (column === 'manager' || column === 'client') return {
-    status: 'revision_requested',
-    $expr: { $eq: [{ $ifNull: [{ $arrayElemAt: ['$revisionRequests.source', -1] }, 'manager'] }, column] },
-  };
-  return null;
+  if (!['new', 'manager', 'client', 'completed'].includes(column)) return null;
+  return { $expr: { $eq: [columnExpression, column] } };
 }
