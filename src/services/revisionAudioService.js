@@ -2,6 +2,8 @@ import mongoose from 'mongoose';
 import multer from 'multer';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { ProofAttachment } from '../models/ProofAttachment.model.js';
+import { revisionCommentAudio } from './revisionAudioMetadata.js';
 
 export const MAX_REVISION_AUDIO_BYTES = 3 * 1024 * 1024;
 const bucket = () => new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'revisionAudio' });
@@ -52,9 +54,21 @@ export const deleteRevisionAudio = audio => bucket().delete(audio.assetId);
 export async function streamRevisionAudio(req, res, order, clientOnly = false) {
   const round = order?.revisionRequests.id(req.params.requestId);
   const item = round?.items.id(req.params.itemId);
-  if (!item?.audio?.assetId || (clientOnly && round.source !== 'client')) return res.status(404).json({ message: 'Audio not found' });
-  const file = await bucket().find({ _id: item.audio.assetId, 'metadata.orderId': String(order._id) }).next();
+  if (!item || (clientOnly && round.source !== 'client')) return res.status(404).json({ message: 'Audio not found' });
+  let storage = bucket(), contentType = item.audio?.contentType, file;
+  if (item.audio?.assetId) {
+    file = await storage.find({ _id: item.audio.assetId, 'metadata.orderId': String(order._id) }).next();
+  } else {
+    const attachment = revisionCommentAudio(order.proofAnnotations, round, item);
+    if (!attachment || !mongoose.isValidObjectId(attachment.id)) return res.status(404).json({ message: 'Audio not found' });
+    const asset = await ProofAttachment.findOne({ _id: attachment.id, orderId: order._id,
+      version: round.draftVersionNumber, source: round.source, annotationId: item.annotationId, state: 'attached' }).lean();
+    contentType = asset?.storedContentType || asset?.contentType;
+    if (!contentType?.startsWith('audio/')) return res.status(404).json({ message: 'Audio not found' });
+    storage = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'proofAttachments' });
+    file = await storage.find({ _id: asset.imageId }).next();
+  }
   if (!file) return res.status(404).json({ message: 'Audio not found' });
-  res.set({ 'Content-Type': item.audio.contentType, 'Content-Length': String(file.length), 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
-  await pipeline(bucket().openDownloadStream(file._id), res);
+  res.set({ 'Content-Type': contentType, 'Content-Length': String(file.length), 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
+  await pipeline(storage.openDownloadStream(file._id), res);
 }

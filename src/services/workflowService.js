@@ -1,4 +1,5 @@
 import { publicOrderPricing } from './expressOrderService.js';
+import { revisionWithAudio } from './revisionAudioMetadata.js';
 import { randomInt } from 'node:crypto';
 import { Counter } from '../models/Counter.model.js';
 import { Order } from '../models/Order.model.js';
@@ -116,6 +117,7 @@ export const sanitizeOrderForClient = (order) => {
 
   const revisionRequests = (obj.revisionRequests || [])
     .filter((request) => request.source === 'client')
+    .map(request => revisionWithAudio(request, obj.proofAnnotations))
     .map((request) => ({
       _id: request._id,
       roundNumber: request.roundNumber,

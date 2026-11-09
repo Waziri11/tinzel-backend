@@ -4,7 +4,7 @@ import { normalizePhone } from '../utils/phone.js';
 import {permits} from '../services/authorizationService.js';
 import staffManagementRoutes from './staffManagement.routes.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
-import { pendingAnnotations, assertNoPendingAnnotations, submitAnnotations } from '../services/proofReaderService.js';
+import { pendingAnnotations, assertNoPendingAnnotations, submitAnnotations, annotationCorrectionItem } from '../services/proofReaderService.js';
 import { Router } from 'express';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
@@ -371,7 +371,7 @@ router.post('/orders/:id/review-draft', async (req, res) => {
     }
 
     const saved = pendingAnnotations(order, 'manager');
-    const { action, feedback } = validateDraftDecision({ ...req.body, items: [...(Array.isArray(req.body.items) ? req.body.items : []), ...saved.map((a) => ({ text: a.text }))] });
+    const { action, feedback } = validateDraftDecision({ ...req.body, items: [...(Array.isArray(req.body.items) ? req.body.items : []), ...saved.map(annotationCorrectionItem)] });
     if (order.status !== 'draft_manager_review') {
       return res.status(400).json({
         success: false,

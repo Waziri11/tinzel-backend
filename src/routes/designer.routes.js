@@ -1,6 +1,7 @@
 import { ownedFileUpload } from '../services/fileUploadService.js';
 import { EXPRESS_ORDER_SORT } from '../services/expressOrderService.js';
 import { streamRevisionAudio } from '../services/revisionAudioService.js';
+import { revisionWithAudio } from '../services/revisionAudioMetadata.js';
 import { designerColumnFilter } from '../services/designerBoardService.js';
 import { permits,requirePermission } from '../services/authorizationService.js';
 import { kickWorkflowNotifications } from '../services/workflowNotificationService.js';
@@ -238,6 +239,7 @@ router.get('/returns', async (req, res) => {
                 requestedAt: '$revisionRequests.requestedAt',
                 status: '$revisionRequests.status',
                 items: '$revisionRequests.items',
+                proofAnnotations: '$proofAnnotations',
                 designerSubmittedAt: '$revisionRequests.designerSubmittedAt',
                 resolvedAt: '$revisionRequests.resolvedAt',
                 resolutionNote: '$revisionRequests.resolutionNote',
@@ -258,7 +260,7 @@ router.get('/returns', async (req, res) => {
       client: summaryDoc.client || 0,
     };
     const total = aggResult?.filteredTotal?.[0]?.count || 0;
-    const pagedRows = aggResult?.rows || [];
+    const pagedRows = (aggResult?.rows || []).map(({ proofAnnotations, ...row }) => revisionWithAudio(row, proofAnnotations));
 
     return res.json({
       success: true,
@@ -277,7 +279,9 @@ router.get('/orders/:id', async (req, res) => {
     const order = await req.order.populate(['formId', { path: 'assignedDesigner', select: 'name email' }]);
 
     const auditLogs = await AuditLog.find({ orderId: order._id }).sort({ createdAt: -1 }).lean();
-    return res.status(200).json({ success: true, order, auditLogs });
+    const payload = order.toObject();
+    payload.revisionRequests = payload.revisionRequests.map(round => revisionWithAudio(round, payload.proofAnnotations));
+    return res.status(200).json({ success: true, order: payload, auditLogs });
   } catch (error) {
     return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });
   }

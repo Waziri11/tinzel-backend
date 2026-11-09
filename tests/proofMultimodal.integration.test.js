@@ -18,6 +18,7 @@ import { cleanProofAttachments, claimAttachments, releaseAttachmentClaims } from
 import { submitAnnotations } from '../src/services/proofReaderService.js';
 import { runProofJobs } from '../src/services/proofWorkerService.js';
 import { createCanvas } from '@napi-rs/canvas';
+import { keepLatestDraft } from '../src/services/draftReplacementPolicy.js';
 let mongo, server, base, form, image, tokens = {}, users = {};
 before(async () => {
   mongo = await MongoMemoryServer.create(); await mongoose.connect(mongo.getUri()); await ProofAttachment.init();
@@ -26,6 +27,8 @@ before(async () => {
     users[role] = await StaffUser.create({ name: `Image ${role}`, email: `image-${role}@example.test`, role, passwordHash: 'unused', isActive: true });
     tokens[role] = await generateToken(users[role], { verifiedAt: new Date() });
   }
+  const unassigned = await StaffUser.create({ name: 'Other designer', email: 'other-comment-audio@example.test', role: 'designer', passwordHash: 'unused', isActive: true });
+  tokens.unassigned = await generateToken(unassigned, { verifiedAt: new Date() });
   form = await MagazineForm.create({ title: 'Image reviews', slug: 'image-review-tests', price: 100 });
   image = await sharp({ create: { width: 80, height: 60, channels: 3, background: '#e8a459' } }).png().toBuffer();
   server = app.listen(0); await new Promise(r => server.once('listening', r)); base = `http://127.0.0.1:${server.address().port}`;
@@ -178,6 +181,70 @@ audio.write('RIFF'); audio.writeUInt32LE(audio.length - 8, 4); audio.write('WAVE
 audio.writeUInt16LE(1, 20); audio.writeUInt16LE(1, 22); audio.writeUInt32LE(8000, 24); audio.writeUInt32LE(16000, 28);
 audio.writeUInt16LE(2, 32); audio.writeUInt16LE(16, 34); audio.write('data', 36); audio.writeUInt32LE(16000, 40);
 const audioInfo = { name: 'voice-note.wav', contentType: 'audio/wav' };
+
+for (const source of ['manager', 'client']) test(`${source} audio-only comments reach returns and keep playing after the magazine is replaced`, async () => {
+  const { order, call, clientToken } = await fixture(source === 'client');
+  const { id } = await attach(call, audio, audioInfo);
+  const saved = await call('/annotations', { ...target, clientMutationId: randomUUID(), attachmentIds: [id] });
+  assert.equal(saved.status, 200);
+  const response = await fetch(base + (source === 'client' ? '/api/client/request-revision' : `/api/manager/orders/${order._id}/review-draft`), {
+    method: 'POST', headers: { Authorization: `Bearer ${source === 'client' ? clientToken : tokens.manager}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expectedVersion: 1, items: [], ...(source === 'manager' ? { action: 'return_to_designer', feedback: '' } : {}) }),
+  });
+  const result = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(result));
+  const read = (path, token = tokens.designer) => fetch(base + path, { headers: { Authorization: `Bearer ${token}` } });
+  const payload = await (await read(`/api/designer/orders/${order._id}`)).json();
+  const round = payload.order.revisionRequests[0], item = round.items[0];
+  assert.equal(item.annotationId, saved.data.annotations[0]._id);
+  assert.deepEqual(item.audio, { contentType: 'audio/wav' });
+  const returns = await (await read('/api/designer/returns')).json();
+  const row = returns.returns.find(row => row._id === round._id);
+  assert.deepEqual(row.items[0].audio, { contentType: 'audio/wav' });
+  assert.equal(row.proofAnnotations, undefined);
+  const staffPath = `/api/designer/orders/${order._id}/revisions/${round._id}/items/${item._id}/audio`;
+  const clientPath = `/api/client/revisions/${round._id}/items/${item._id}/audio`;
+  const listen = async () => {
+    const stream = await read(staffPath);
+    assert.equal(stream.status, 200);
+    assert.equal(stream.headers.get('content-type'), 'audio/wav');
+    assert.match(stream.headers.get('cache-control'), /no-store/);
+    assert.deepEqual(Buffer.from(await stream.arrayBuffer()), audio);
+  };
+  await listen();
+  assert.equal((await read(staffPath, tokens.unassigned)).status, 403);
+  assert.equal((await fetch(base + staffPath)).status, 401);
+  assert.equal((await read(clientPath, (await fixture(true)).clientToken)).status, 404);
+  assert.equal((await read(clientPath, clientToken)).status, source === 'client' ? 200 : 404);
+  const persisted = await Order.findById(order._id);
+  // Existing returns have only annotationId, not an audio copy on their checklist item.
+  assert.equal(persisted.revisionRequests[0].items[0].audio, undefined);
+  persisted.currentDraftVersion = 2;
+  persisted.draftVersions.push({ versionNumber: 2 });
+  keepLatestDraft(persisted);
+  await persisted.save();
+  await ProofAttachment.updateOne({ _id: id }, { $set: { expiresAt: new Date(0) } });
+  await cleanProofAttachments();
+  await listen();
+  if (source === 'client') {
+    const history = await (await read('/api/client/order', clientToken)).json();
+    assert.deepEqual(history.order.revisionRequests[0].items[0].audio, { contentType: 'audio/wav' });
+    const stream = await read(clientPath, clientToken);
+    assert.equal(stream.status, 200);
+    assert.deepEqual(Buffer.from(await stream.arrayBuffer()), audio);
+  }
+  // A return must never expose an unsubmitted comment, a different source, or another version.
+  for (const change of [{ submittedAt: null }, { source: source === 'client' ? 'manager' : 'client' }, { version: 99 }]) {
+    const fresh = await Order.findById(order._id);
+    const annotation = fresh.proofAnnotations.id(item.annotationId);
+    const original = { submittedAt: annotation.submittedAt, source: annotation.source, version: annotation.version };
+    Object.assign(annotation, change); await fresh.save();
+    assert.equal((await read(staffPath)).status, 404);
+    const hidden = await (await read(`/api/designer/orders/${order._id}`)).json();
+    assert.equal(hidden.order.revisionRequests[0].items[0].audio, undefined);
+    Object.assign(annotation, original); await fresh.save();
+  }
+});
 
 test('audio-only page comments save privately, submit as a required correction, and play for assigned staff', async () => {
   const { order, call, clientToken } = await fixture(true), other = await fixture(true);

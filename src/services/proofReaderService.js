@@ -195,9 +195,16 @@ export function pendingAnnotations(order, source) {
 export function assertNoPendingAnnotations(order, source) {
   if (pendingAnnotations(order, source).length) { const error = new Error('Submit or discard your saved correction comments before approving.'); error.status = 409; throw error; }
 }
+export function annotationCorrectionItem(annotation) {
+  return {
+    text: annotation.text || (annotation.attachments?.some(file => file.contentType?.startsWith('audio/'))
+      ? 'Listen to attached audio / Sikiliza sauti iliyoambatishwa' : 'Review attached images / Kagua picha zilizoambatishwa'),
+    pageReference: String(annotation.page), annotationId: annotation._id,
+  };
+}
 export function submitAnnotations(order, source, items = []) {
   const annotations = pendingAnnotations(order, source);
   const now = new Date();
   for (const annotation of annotations) annotation.submittedAt = now;
-  return [...items, ...annotations.map((a) => ({ text: a.text || (a.attachments?.some(file => file.contentType?.startsWith('audio/')) ? 'Listen to attached audio / Sikiliza sauti iliyoambatishwa' : 'Review attached images / Kagua picha zilizoambatishwa'), pageReference: String(a.page), annotationId: a._id }))];
+  return [...items, ...annotations.map(annotationCorrectionItem)];
 }
