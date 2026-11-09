@@ -8,6 +8,8 @@ export const ACTIVE_ORDER_STATUSES = [
   'draft_manager_review',
   'client_review',
   'revision_requested',
+  'awaiting_balance_payment',
+  'balance_payment_review',
   'client_approved',
   'print_document_prep',
   'print_manager_review',

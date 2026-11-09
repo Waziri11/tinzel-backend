@@ -8,16 +8,18 @@ process.env.DOTENV_CONFIG_PATH = '/dev/null';
 process.env.JWT_SECRET = 'isolated-delivery-location-test-secret';
 const { default: app } = await import('../src/app.js');
 const { Order } = await import('../src/models/Order.model.js');
+const { MagazineForm } = await import('../src/models/MagazineForm.model.js');
 const { StaffUser } = await import('../src/models/StaffUser.model.js');
 const { AuditLog } = await import('../src/models/AuditLog.model.js');
 const { generateClientToken, generateToken } = await import('../src/middlewares/auth.middleware.js');
 const { updateNotificationSettings } = await import('../src/services/notificationService.js');
-let mongo, server, base, managerToken;
+let mongo, server, base, managerToken, form;
 
 before(async () => {
   mongo = await MongoMemoryServer.create();
   await mongoose.connect(mongo.getUri());
   await updateNotificationSettings({ channels: { in_system: false, email: false, sms: false, whatsapp: false } });
+  form = await MagazineForm.create({ title: 'Delivery test', slug: 'delivery-test', price: 50000, fields: [] });
   const manager = await StaffUser.create({ name: 'Delivery manager', email: 'delivery@example.test', role: 'manager', passwordHash: 'unused' });
   managerToken = await generateToken(manager, { verifiedAt: new Date() });
   server = app.listen(0, '127.0.0.1');
@@ -31,7 +33,7 @@ after(async () => {
   await mongo?.stop();
 });
 async function fixture(extra = {}) {
-  const order = await Order.create({ submissionId: `SUB-DELIVERY-${new mongoose.Types.ObjectId()}`, formId: new mongoose.Types.ObjectId(), clientName: 'Delivery client', clientWhatsApp: '0712000000',
+  const order = await Order.create({ submissionId: `SUB-DELIVERY-${new mongoose.Types.ObjectId()}`, formId: form._id, totalPrice: 50000, paymentDetails: { amountPaid: 50000, verifiedAt: new Date(), lipaNambaReference: 'DELIVERY-PAID' }, clientName: 'Delivery client', clientWhatsApp: '0712000000',
     status: 'client_review', currentDraftVersion: 1, draftVersions: [{ versionNumber: 1, managerReview: { status: 'approved' } }], ...extra });
   return { order, token: await generateClientToken(order) };
 }

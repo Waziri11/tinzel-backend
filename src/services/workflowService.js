@@ -1,3 +1,4 @@
+import { paymentSummary } from './paymentPolicy.js';
 import { publicOrderPricing } from './expressOrderService.js';
 import { revisionWithAudio } from './revisionAudioMetadata.js';
 import { randomInt } from 'node:crypto';
@@ -76,7 +77,9 @@ export const validateTransition = (currentStatus, targetStatus) => {
     assigned: ['in_design', 'queued_for_assignment', 'on_hold'],
     in_design: ['draft_manager_review', 'on_hold'],
     draft_manager_review: ['client_review', 'in_design', 'on_hold'],
-    client_review: ['client_approved', 'revision_requested', 'on_hold'],
+    client_review: ['awaiting_balance_payment', 'client_approved', 'revision_requested', 'on_hold'],
+    awaiting_balance_payment: ['balance_payment_review', 'client_approved', 'print_manager_review', 'on_hold'],
+    balance_payment_review: ['awaiting_balance_payment', 'client_approved', 'print_manager_review', 'on_hold'],
     revision_requested: ['in_design', 'on_hold'],
     client_approved: ['print_document_prep', 'on_hold'],
     print_document_prep: ['print_manager_review', 'on_hold'],
@@ -164,6 +167,7 @@ export const sanitizeOrderForClient = (order) => {
     previousStatusBeforeHold: obj.previousStatusBeforeHold,
     holdReason: obj.holdReason,
     ...publicOrderPricing(obj, obj.formId || obj),
+    payment: paymentSummary(obj, { client: true }),
     lipaNambaInstructions: obj.formId?.lipaNambaInstructions ?? null,
     submittedData: obj.submittedData,
     submittedFields: obj.submittedFields,

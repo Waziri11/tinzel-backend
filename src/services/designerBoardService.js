@@ -1,4 +1,4 @@
-const completed = ['client_approved', 'print_document_prep', 'print_manager_review', 'printing_sent', 'printing_in_progress', 'printing_completed', 'dispatched', 'delivered', 'closed'];
+const completed = ['awaiting_balance_payment', 'balance_payment_review', 'client_approved', 'print_document_prep', 'print_manager_review', 'printing_sent', 'printing_in_progress', 'printing_completed', 'dispatched', 'delivered', 'closed'];
 // Holds retain the underlying stage. An unresolved correction stays with its
 // requester while the designer works and while the manager reviews the fix.
 const columnExpression = {

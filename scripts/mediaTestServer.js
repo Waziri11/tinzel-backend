@@ -124,6 +124,7 @@ testApp.post('/__test__/upload-fixtures', async (_req, res) => {
   const admin = await StaffUser.findOne({ role: 'admin' });
   const create = status => Order.create({ submissionId: `UPLOAD-${new mongoose.Types.ObjectId()}`, formId: form._id,
     clientName: 'Upload verification', clientWhatsApp: 'test', assignedDesigner: designer._id, status,
+    ...(status === 'client_approved' ? { approvedVersionNumber: 1, totalPrice: form.price, paymentDetails: { amountPaid: form.price, verifiedAt: new Date(), lipaNambaReference: 'TEST-PRINT-PAID' } } : {}),
     ...(status === 'draft_manager_review' ? { currentDraftVersion: 1, draftVersions: [{ versionNumber: 1, managerReview: { status: 'pending' } }] } : {}) });
   const [draft, print, review] = await Promise.all(['in_design', 'client_approved', 'draft_manager_review'].map(create));
   res.json({ adminToken: await generateToken(admin, { verifiedAt: new Date() }), designerToken: await generateToken(designer),

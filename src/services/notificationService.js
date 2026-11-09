@@ -24,6 +24,10 @@ const simulatedNotifications = [];
 const inSystemNotifications = [];
 
 export const NOTIFICATION_TRIGGER_CATALOG = [
+  { key: 'balance_payment_requested', label: 'Balance payment required', description: 'Balance payment required.', category: 'Post-Design', recipient: 'Client, Manager & Admin', defaults: { enabled: true, in_system: true, email: true, sms: true } },
+  { key: 'balance_payment_submitted', label: 'Balance payment awaiting approval', description: 'Balance payment awaiting approval.', category: 'Post-Design', recipient: 'Client, Manager & Admin', defaults: { enabled: true, in_system: true, email: true, sms: true } },
+  { key: 'balance_payment_verified', label: 'Balance payment approved', description: 'Balance payment approved.', category: 'Post-Design', recipient: 'Client, Manager, Admin & Designer', defaults: { enabled: true, in_system: true, email: true, sms: true } },
+  { key: 'balance_payment_rejected', label: 'Balance payment needs correction', description: 'Balance payment needs correction.', category: 'Post-Design', recipient: 'Client', defaults: { enabled: true, in_system: true, email: true, sms: true } },
   {key:'staff_credentials',label:'Staff account credentials',description:'Initial staff credentials and administrative reissues.',category:'Security',recipient:'Staff member',defaults:{enabled:true,in_system:false,email:true,sms:true}},
   { key:'assignment_queued',label:'Paid order needs a designer',description:'No designer has capacity; manager assignment required.',category:'Pre-Design',recipient:'Manager & Admin',defaults:{enabled:true,in_system:true,email:true,sms:true} },
   { key:'printing_completed',label:'Printing completed — dispatch required',description:'Printing is complete; arrange delivery.',category:'Post-Design',recipient:'Manager & Admin',defaults:{enabled:true,in_system:true,email:true,sms:true} },

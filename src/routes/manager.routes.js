@@ -1,4 +1,6 @@
 import { EXPRESS_ORDER_SORT } from '../services/expressOrderService.js';
+import { managerPaymentRoutes } from './payment.routes.js';
+import { assertFullyPaid, snapshotOrderPrice } from '../services/paymentPolicy.js';
 import { requiredDeposit } from '../services/paymentPolicy.js';
 import { normalizePhone } from '../utils/phone.js';
 import {permits} from '../services/authorizationService.js';
@@ -40,6 +42,7 @@ const handleManagerError = (res, error) => {
 // Manager or Admin only for all manager routes
 router.use(verifyStaffToken, requireRoles('manager', 'admin'));
 router.use(staffManagementRoutes);
+router.use(managerPaymentRoutes);
 
 router.get('/designers', async (_req, res) => {
   try {
@@ -72,6 +75,8 @@ const PHASE_STATUSES = {
   pre_design: ['awaiting_payment', 'payment_verified', 'queued_for_assignment'],
   design_phase: ['assigned', 'in_design', 'draft_manager_review', 'client_review', 'revision_requested'],
   post_design: [
+    'awaiting_balance_payment',
+    'balance_payment_review',
     'client_approved',
     'print_document_prep',
     'print_manager_review',
@@ -139,7 +144,7 @@ router.get('/orders', async (req, res) => {
 
     const [orderDocs, total, statusCounts] = await Promise.all([
       Order.find(query)
-      .select('submissionId trackingId formId formTitle clientName clientWhatsApp clientEmail status previousStatusBeforeHold assignedDesigner currentDraftVersion revisionRequests printDocument printingDetails dispatchDetails holdReason uploadedPhotos updatedAt createdAt isExpress basePrice expressFee totalPrice currency expressStartedAt expressDueAt standardStartedAt standardDueAt completedAt')
+      .select('submissionId trackingId formId formTitle clientName clientWhatsApp clientEmail status previousStatusBeforeHold paymentDetails balancePayments approvedVersionNumber assignedDesigner currentDraftVersion revisionRequests printDocument printingDetails dispatchDetails holdReason uploadedPhotos updatedAt createdAt isExpress basePrice expressFee totalPrice currency expressStartedAt expressDueAt standardStartedAt standardDueAt completedAt')
       .populate('assignedDesigner', 'name email currentActiveWorkload')
       .populate('formId', 'title slug price currency')
       .sort(EXPRESS_ORDER_SORT)
@@ -168,6 +173,7 @@ router.get('/orders', async (req, res) => {
       draftReview: counts.draft_manager_review || 0,
       clientReview: counts.client_review || 0,
       returns: counts.revision_requested || 0,
+      balancePayments: (counts.awaiting_balance_payment || 0) + (counts.balance_payment_review || 0),
       printPrep: (counts.client_approved || 0) + (counts.print_document_prep || 0),
       printApproval: counts.print_manager_review || 0,
       printing: (counts.printing_sent || 0) + (counts.printing_in_progress || 0),
@@ -243,6 +249,7 @@ router.post('/orders/:id/verify-payment', async (req, res) => {
       });
     }
 
+    snapshotOrderPrice(order);
     const deposit = requiredDeposit(order);
     if (amount < deposit) {
       return res.status(400).json({ success: false, message: `A 50% deposit of ${order.currency || order.formId?.currency || 'TZS'} ${deposit.toLocaleString('en-TZ')} is required to begin design.` });
@@ -253,6 +260,7 @@ router.post('/orders/:id/verify-payment', async (req, res) => {
     order.trackingId = trackingId;
     order.paymentDetails = {
       verifiedBy: req.user._id,
+      verifiedByName: req.user.name,
       verifiedAt: new Date(),
       lipaNambaReference: reference,
       amountPaid: amount,
@@ -473,6 +481,8 @@ router.post('/orders/:id/authorise-print', async (req, res) => {
     }
 
     requireStatus(order, ['print_manager_review'], 'Print authorization');
+    await order.populate('formId', 'price currency');
+    assertFullyPaid(order);
 
     if (!order.printDocument || !order.printDocument.url) {
       return res.status(400).json({

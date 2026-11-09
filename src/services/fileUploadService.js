@@ -1,3 +1,4 @@
+import { assertFullyPaid } from './paymentPolicy.js';
 import mongoose from 'mongoose';
 import { createHash } from 'node:crypto';
 import { Order } from '../models/Order.model.js';
@@ -32,6 +33,8 @@ async function authorize(user, session) {
     const order = await Order.findById(session.orderId);
     if (!permits(user, 'draft.upload', order)) throw fail(403, 'Order is not assigned to you');
     if (!['client_approved', 'print_document_prep'].includes(order.status)) throw fail(409, 'The magazine must be approved before uploading its print file');
+    await order.populate('formId', 'price currency');
+    assertFullyPaid(order);
   } else throw fail(400, 'Invalid upload purpose');
 }
 export async function reserveFileUpload(user, input) {

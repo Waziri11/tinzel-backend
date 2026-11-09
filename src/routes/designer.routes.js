@@ -1,3 +1,4 @@
+import { assertFullyPaid } from '../services/paymentPolicy.js';
 import { ownedFileUpload } from '../services/fileUploadService.js';
 import { MAX_UPLOAD_BATCH_BYTES, writeUploadBatch } from '../services/uploadBatchService.js';
 import { EXPRESS_ORDER_SORT } from '../services/expressOrderService.js';
@@ -515,6 +516,8 @@ router.post('/orders/:id/upload-print-document', requirePermission('draft.upload
       });
     }
 
+    await order.populate('formId', 'price currency');
+    assertFullyPaid(order);
     let printUrl = '';
     if (req.file) {
       if (!isPdf(req.file)) return res.status(400).json({ message: 'Choose a valid PDF file' });

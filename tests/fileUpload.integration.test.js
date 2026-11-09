@@ -50,7 +50,7 @@ test('covers larger than the old gateway cap upload in parallel and retain exact
   assert.equal((await call(`${root}/${id}`,undefined,'GET',tokens[1])).status,404);
 });
 test('gzip PDF parts retain bytes, enforce hashes and assignment, and can be attached as print files',async()=>{
-  const order=await Order.create({submissionId:randomUUID(),formId:form._id,clientName:'Fixture',clientWhatsApp:'fixture-no-contact',assignedDesigner:designer._id,status:'client_approved'});
+  const order=await Order.create({submissionId:randomUUID(),formId:form._id,clientName:'Fixture',clientWhatsApp:'fixture-no-contact',assignedDesigner:designer._id,status:'client_approved',approvedVersionNumber:1,totalPrice:50000,paymentDetails:{amountPaid:50000,verifiedAt:new Date(),lipaNambaReference:'PRINT-PAID'}});
   const bytes=Buffer.concat([Buffer.from('%PDF-1.7\n'),Buffer.alloc(6*1024*1024,32),Buffer.from('\n%%EOF')]);
   const body=input(bytes,{purpose:'print',orderId:String(order._id),name:'print.pdf',contentType:'application/pdf'});
   assert.equal((await call(root,body,'POST',tokens[2])).status,403);
@@ -90,7 +90,7 @@ test('single-request covers are lossless, idempotent, size bounded and permissio
   assert.equal((await call(`${root}/whole`, gzipSync(oversized), 'PUT', tokens[0], {...headers,'Content-Encoding':'gzip'})).status, 413);
 });
 test('batched print uploads resume individual parts, reject corrupt batches and preserve original bytes', async () => {
-  const order=await Order.create({submissionId:randomUUID(),formId:form._id,clientName:'Batch fixture',clientWhatsApp:'fixture-no-contact',assignedDesigner:designer._id,status:'client_approved'});
+  const order=await Order.create({submissionId:randomUUID(),formId:form._id,clientName:'Batch fixture',clientWhatsApp:'fixture-no-contact',assignedDesigner:designer._id,status:'client_approved',approvedVersionNumber:1,totalPrice:50000,paymentDetails:{amountPaid:50000,verifiedAt:new Date(),lipaNambaReference:'PRINT-PAID'}});
   const bytes=Buffer.concat([Buffer.from('%PDF-1.7\n'),randomBytes(5*FILE_CHUNK_BYTES)]);
   const reserved=await call(root,input(bytes,{purpose:'print',orderId:String(order._id),name:'print.pdf',contentType:'application/pdf'}),'POST',tokens[1]);
   const id=reserved.data.id; assert.equal(reserved.data.batchParts,3);

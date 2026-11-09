@@ -1,3 +1,4 @@
+import { paymentSummary } from '../services/paymentPolicy.js';
 import { installOrderRetention } from '../services/orderRetentionPolicy.js';
 import { installExpressOrder } from '../services/expressOrderService.js';
 import mongoose from 'mongoose';
@@ -12,6 +13,8 @@ export const ORDER_STATUSES = [
   'draft_manager_review',
   'client_review',
   'revision_requested',
+  'awaiting_balance_payment',
+  'balance_payment_review',
   'client_approved',
   'print_document_prep',
   'print_manager_review',
@@ -197,10 +200,19 @@ const orderSchema = new mongoose.Schema(
         ref: 'StaffUser',
       },
       verifiedAt: Date,
+      verifiedByName: String,
       lipaNambaReference: String,
       amountPaid: Number,
       receiptNumber: String,
     },
+    balancePayments: { type: [new mongoose.Schema({
+      reference: { type: String, required: true, trim: true, maxlength: 120 },
+      amount: { type: Number, required: true, min: 0.01 },
+      status: { type: String, enum: ['pending', 'approved', 'rejected'], required: true },
+      submittedAt: Date, reviewedAt: Date,
+      reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'StaffUser' },
+      reviewedByName: String, rejectionReason: { type: String, maxlength: 1000 },
+    })], default: [] },
     isExpress: { type: Boolean, default: false },
     basePrice: { type: Number, min: 0 },
     expressFee: { type: Number, min: 0 },
@@ -325,7 +337,9 @@ const orderSchema = new mongoose.Schema(
   }
 );
 
-orderSchema.set('toJSON',{transform:(_doc,ret)=>{delete ret.workflowEvents;delete ret.draftEvents;delete ret.retentionDeletingAt;delete ret.retentionLeaseUntil;delete ret.retentionOwner;delete ret.supersededDrafts;delete ret.draftCleanupOwner;delete ret.draftCleanupLeaseUntil;return ret;}});
+orderSchema.virtual('payment').get(function () { return paymentSummary(this); });
+orderSchema.set('toObject', { virtuals: true });
+orderSchema.set('toJSON',{virtuals:true,transform:(_doc,ret)=>{delete ret.workflowEvents;delete ret.draftEvents;delete ret.retentionDeletingAt;delete ret.retentionLeaseUntil;delete ret.retentionOwner;delete ret.supersededDrafts;delete ret.draftCleanupOwner;delete ret.draftCleanupLeaseUntil;return ret;}});
 installWorkflowEvents(orderSchema);
 installExpressOrder(orderSchema);
 installOrderRetention(orderSchema);

@@ -12,6 +12,7 @@
     "migrate:legacy-drafts": "node scripts/migrateLegacyDrafts.js",
     "seed:admin": "node scripts/seedAdmin.js",
     "seed:local-admin": "node scripts/seedLocalAdmin.js",
+    "backfill:balance-payments": "node scripts/backfillBalancePayments.js",
     "backfill:proof-readers": "node scripts/backfillProofReaders.js",
     "proof:worker": "node scripts/proofWorker.js",
     "proof:diagnose": "node scripts/diagnoseProof.js",

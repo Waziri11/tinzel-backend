@@ -1,3 +1,5 @@
+import { clientPaymentRoutes } from './payment.routes.js';
+import { snapshotOrderPrice } from '../services/paymentPolicy.js';
 import { getPublicPaymentDetails } from '../services/paymentOptionsService.js';
 import { parseRevisionUpload, saveRevisionAudio, deleteRevisionAudio, streamRevisionAudio } from '../services/revisionAudioService.js';
 import { formatTanzanianPhone } from '../services/smsService.js';
@@ -20,6 +22,7 @@ import { streamDraftPdf } from '../services/draftFileService.js';
 import { assertExpectedVersion, createRevisionRequest, normalizeCorrectionItems } from '../services/revisionRequestService.js';
 
 const router = Router();
+router.use(clientPaymentRoutes);
 
 router.patch('/preferences',verifyClientToken,async(req,res)=>{
   if(!['en','sw'].includes(req.body.preferredLanguage)) return res.status(400).json({message:'Choose English or Kiswahili'});
@@ -276,7 +279,7 @@ router.get('/draft/view', verifyClientToken, async (req, res) => {
   try {
     const order = await Order.findById(req.clientAuth.orderId);
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
-    const allowed = ['client_review', 'revision_requested', 'client_approved', 'print_document_prep', 'print_manager_review', 'printing_sent', 'printing_in_progress', 'printing_completed', 'dispatched', 'delivered', 'closed'];
+    const allowed = ['client_review', 'revision_requested', 'awaiting_balance_payment', 'balance_payment_review', 'client_approved', 'print_document_prep', 'print_manager_review', 'printing_sent', 'printing_in_progress', 'printing_completed', 'dispatched', 'delivered', 'closed'];
     const draft = order.draftVersions.find((item) => item.versionNumber === order.currentDraftVersion);
     if (!allowed.includes(order.status) || !draft || draft.managerReview?.status !== 'approved') {
       return res.status(404).json({ success: false, message: 'Your magazine preview is not ready yet. Please check back later.' });
@@ -288,7 +291,7 @@ router.get('/draft/view', verifyClientToken, async (req, res) => {
 // Whole-Magazine Client Approval
 router.post('/approve-draft', verifyClientToken, async (req, res) => {
   try {
-    const order = await Order.findById(req.clientAuth.orderId);
+    const order = await Order.findById(req.clientAuth.orderId).populate('formId', 'price currency lipaNambaInstructions');
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
@@ -321,7 +324,8 @@ router.post('/approve-draft', verifyClientToken, async (req, res) => {
     };
 
     order.approvedVersionNumber = order.currentDraftVersion;
-    order.status = 'client_approved';
+    const payment = snapshotOrderPrice(order);
+    order.status = payment.fullyPaid ? 'client_approved' : 'awaiting_balance_payment';
     await order.save();
 
     await AuditLog.create({
@@ -338,8 +342,8 @@ router.post('/approve-draft', verifyClientToken, async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: 'Thank you! We will now prepare your magazine for printing.',
-      order: sanitizeOrderForClient(order),
+      message: payment.fullyPaid ? 'Thank you! We will now prepare your magazine for printing.' : 'Magazine approved. Please pay the remaining balance before printing.',
+      order: { ...sanitizeOrderForClient(order), ...await getPublicPaymentDetails(order.formId?.lipaNambaInstructions) },
     });
   } catch (error) {
     return res.status(error.name === 'VersionError' ? 409 : error.status || 500).json({ success: false, message: error.name === 'VersionError' ? 'This order changed in another session. Refresh before continuing.' : error.message });
@@ -356,7 +360,7 @@ router.patch('/delivery-location', verifyClientToken, async (req, res) => {
     const order = await Order.findById(req.clientAuth.orderId);
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
     const status = order.status === 'on_hold' ? order.previousStatusBeforeHold : order.status;
-    if (!['client_approved', 'print_document_prep', 'print_manager_review', 'printing_sent', 'printing_in_progress', 'printing_completed'].includes(status)) {
+    if (!['awaiting_balance_payment', 'balance_payment_review', 'client_approved', 'print_document_prep', 'print_manager_review', 'printing_sent', 'printing_in_progress', 'printing_completed'].includes(status)) {
       return res.status(409).json({ success: false, message: 'Delivery locations can be updated after approval and before dispatch. Refresh your order to see the latest update.' });
     }
     order.clientDeliveryDetails = { location, updatedAt: new Date() };

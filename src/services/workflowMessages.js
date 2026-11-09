@@ -2,6 +2,11 @@ import { requiredDeposit } from './paymentPolicy.js';
 import { messageContent } from './accountMessages.js';
 
 const copy = {
+  balance_payment_requested: ['Balance payment required', 'Malipo yaliyobaki yanahitajika', 'The customer approved the magazine. Verify the remaining {balance} before printing.', 'Mteja ameidhinisha jarida. Thibitisha malipo yaliyobaki ya {balance} kabla ya uchapishaji.'],
+  balance_payment_submitted: ['Payment awaiting approval', 'Malipo yanasubiri idhini', 'The customer reported a payment of {amount}. Check reference {paymentReference} and approve it in the Payment section.', 'Mteja ametuma taarifa za malipo ya {amount}. Kagua kumbukumbu {paymentReference} na uidhinishe kwenye sehemu ya Malipo.'],
+  balance_payment_verified: ['Payment approved', 'Malipo yameidhinishwa', 'Payment of {amount} was approved. Remaining balance: {balance}.', 'Malipo ya {amount} yameidhinishwa. Salio lililobaki: {balance}.'],
+  balance_payment_complete: ['Full payment approved', 'Malipo yote yameidhinishwa', 'The order is fully paid. Prepare the approved magazine for printing.', 'Malipo ya oda yamekamilika. Andaa jarida lililoidhinishwa kwa uchapishaji.'],
+  balance_payment_rejected: ['Payment needs correction', 'Malipo yanahitaji marekebisho', 'The reported payment could not be confirmed. {reason}', 'Malipo uliyotuma hayakuweza kuthibitishwa. {reason}'],
   order_submitted: ['New magazine submission', 'Oda mpya ya jarida', '{client} submitted {magazine}. Verify payment.', '{client} ametuma taarifa za {magazine}. Thibitisha malipo.'],
   client_submission: ['Order received', 'Tumepokea oda yako', 'We received your magazine details. Follow the payment instructions on your order.', 'Tumepokea taarifa za jarida lako. Fuata maelekezo ya malipo kwenye oda yako.'],
   payment_verified: ['Payment confirmed', 'Malipo yamethibitishwa', 'Payment received. Track your magazine below.', 'Tumepokea malipo. Fuatilia jarida lako hapa chini.'],
@@ -26,6 +31,11 @@ const copy = {
 
 // Customer updates describe their magazine and next action, without staff handoff instructions.
 const customerCopy = {
+  balance_payment_requested: ['Pay the remaining balance', 'Lipa kiasi kilichobaki', 'Your magazine is approved. Pay the remaining {balance} using your order’s payment instructions, then send your payment reference. Printing starts after we confirm full payment.', 'Jarida lako limeidhinishwa. Lipa kiasi kilichobaki cha {balance} kwa kufuata maelekezo kwenye oda yako, kisha tuma kumbukumbu ya malipo. Uchapishaji utaanza baada ya kuthibitisha malipo yote.'],
+  balance_payment_submitted: ['Payment sent for verification', 'Malipo yametumwa kwa uthibitisho', 'We received your payment reference for {amount}. We will verify it before printing.', 'Tumepokea kumbukumbu yako ya malipo ya {amount}. Tutayathibitisha kabla ya uchapishaji.'],
+  balance_payment_verified: ['Payment confirmed', 'Malipo yamethibitishwa', 'We confirmed your payment of {amount}. Your remaining balance is {balance}.', 'Tumethibitisha malipo yako ya {amount}. Kiasi kilichobaki ni {balance}.'],
+  balance_payment_complete: ['Payment complete', 'Malipo yamekamilika', 'Thank you! Your full payment is confirmed. Your approved magazine can now move to printing.', 'Asante! Malipo yako yote yamethibitishwa. Jarida lako lililoidhinishwa sasa linaweza kuendelea kwa uchapishaji.'],
+
   client_submission: ['We have your order', 'Tumepokea oda yako', 'Your magazine details are saved. Pay {deposit} as your deposit using the payment instructions on your order. We will begin designing your magazine once this payment is confirmed.', 'Taarifa za jarida lako zimehifadhiwa. Lipa {deposit} kama malipo ya awali kwa kufuata maelekezo kwenye oda yako. Tutaanza kubuni jarida lako malipo haya yakithibitishwa.'],
   payment_verified: ['Payment received', 'Malipo yamepokelewa', 'Thank you! Your payment is confirmed. We will start work on your magazine next.', 'Asante! Malipo yako yamethibitishwa. Hatua inayofuata ni kuanza kubuni jarida lako.'],
   draft_released: ['Your magazine is ready to review', 'Jarida lako liko tayari kwa mapitio yako', 'Open your magazine preview (version {version}) and check every page. Approve it for printing or tell us what you would like changed.', 'Fungua jarida lako (toleo la {version}) na upitie kila ukurasa. Idhinisha uchapishaji au tuambie marekebisho unayotaka.'],
@@ -48,6 +58,7 @@ export function workflowMessage(type, order, event, recipient, lang, actionUrl) 
   let key = (staff && staffUpdates[type]) || type;
   if (type === 'order_submitted' && recipient.role === 'client') key = 'client_submission';
   if (type === 'print_dispatched' && recipient.channel !== 'whatsapp') key = 'print_sms';
+  if (type === 'balance_payment_verified' && event.balanceRemaining === 0) key = 'balance_payment_complete';
   const words = (recipient.role === 'client' && customerCopy[key]) || copy[key];
   if (!words) throw new Error('Unsupported workflow notification');
 
@@ -56,6 +67,8 @@ export function workflowMessage(type, order, event, recipient, lang, actionUrl) 
   const total = order.totalPrice ?? order.formId?.price ?? order.price;
   const currency = order.currency || order.formId?.currency || 'TZS';
   const currencyLabel = ['TZS', 'TSH'].includes(currency.toUpperCase()) ? 'TSh' : currency;
+  const money = amount => `${currencyLabel} ${Number(amount || 0).toLocaleString('en-TZ', { maximumFractionDigits: 2 })}`;
+  Object.assign(values, { balance: money(event.balanceRemaining), amount: money(event.paymentAmount), paymentReference: event.paymentReference || '', reason: event.paymentReason || '' });
   values.deposit = total != null && Number.isFinite(Number(total)) && Number(total) >= 0
     ? `${currencyLabel} ${requiredDeposit(order).toLocaleString('en-TZ')}`
     : (sw ? 'kiasi kilichoonyeshwa kwenye oda yako' : 'the amount shown on your order');

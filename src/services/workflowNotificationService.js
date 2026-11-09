@@ -16,15 +16,17 @@ import { signMediaPath } from './mediaSignService.js';
 
 const DELAYS = [60000, 300000, 900000, 3600000];
 const PHONE = /^\+?[\d\s().-]{9,22}$/;
-const managerEvents = new Set(['order_submitted','assignment_queued','draft_uploaded','print_document_uploaded','printing_completed']);
-const clientEvents = new Set(['order_submitted','payment_verified','draft_released','printing_in_progress','order_dispatched','order_closed']);
+const managerEvents = new Set(['balance_payment_requested','balance_payment_submitted','balance_payment_verified','order_submitted','assignment_queued','draft_uploaded','print_document_uploaded','printing_completed']);
+const clientEvents = new Set(['balance_payment_requested','balance_payment_submitted','balance_payment_verified','balance_payment_rejected','order_submitted','payment_verified','draft_released','printing_in_progress','order_dispatched','order_closed']);
 const designerEvents = new Set(['order_assigned','draft_returned','client_revision_requested','client_approved']);
 const informedManagers = new Set(['client_revision_requested','client_approved','printing_in_progress','order_closed']);
 const typeOf = event => event.type === 'draft_returned' && event.source === 'client' ? 'client_revision_requested' : event.type;
 export function isEventRelevant(order, event) {
   const type = typeOf(event);
   if (order.status === 'on_hold') return false;
-  if (['payment_verified','order_closed'].includes(type)) return true;
+  if (['payment_verified','order_closed','balance_payment_verified'].includes(type)) return true;
+  if (type === 'balance_payment_submitted') return order.status === 'balance_payment_review' && order.balancePayments?.some(item => String(item._id) === event.paymentId && item.status === 'pending');
+  if (type === 'balance_payment_rejected') return order.status === 'awaiting_balance_payment' && String(order.balancePayments?.at(-1)?._id) === event.paymentId;
   if (type === 'order_assigned') return ['assigned','in_design','revision_requested'].includes(order.status) && String(order.assignedDesigner?._id || order.assignedDesigner) === event.designerId;
   if (['draft_uploaded','draft_released','draft_returned','client_revision_requested'].includes(type) && order.currentDraftVersion !== event.version) return false;
   if (['draft_returned','client_revision_requested'].includes(type)) return order.status === 'revision_requested' && String(order.revisionRequests?.at(-1)?._id || '') === event.revisionId;
@@ -42,7 +44,7 @@ async function recipientsFor(order, event) {
     if (!staff.length) recipients.push({id:'manager-team',role:'manager',name:'Manager Team',language:'sw'});
   }
   if (clientEvents.has(type)) recipients.push({id:`client:${order._id}`,role:'client',name:order.clientName,email:order.clientEmail,phone:order.clientWhatsApp,language:language(order.clientPreferredLanguage)});
-  if (designerEvents.has(type)) {
+  if (designerEvents.has(type) || (type === 'balance_payment_verified' && event.balanceRemaining === 0)) {
     const designer = event.designerId && await StaffUser.findOne({_id:event.designerId,role:'designer',isActive:true,deletedAt:null}).lean();
     if (designer) recipients.push({id:String(designer._id),role:'designer',name:designer.name,email:designer.email,phone:designer.phone,language:language(designer.preferredLanguage)});
     else recipients.push({id:'missing-designer',role:'manager',name:'Designer unavailable',language:'sw'});
@@ -74,6 +76,7 @@ async function actionUrl(order, event, role, channel) {
   }
   if (['order_submitted','assignment_queued','payment_verified'].includes(typeOf(event))) return `${frontend}/staff/pre-design?orderId=${order._id}`;
   if(['manager','admin'].includes(role)) {
+    if (typeOf(event).startsWith('balance_payment_')) return `${frontend}/staff/post-design?orderId=${order._id}&tab=payment`;
     const phase=['draft_uploaded','draft_returned','client_revision_requested','draft_released'].includes(typeOf(event))?'design-phase':'post-design';
     return `${frontend}/staff/${phase}?orderId=${order._id}`;
   }
