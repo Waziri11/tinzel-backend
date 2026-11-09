@@ -10,6 +10,7 @@ import { keepLatestDraft } from './draftReplacementPolicy.js';
 import { UPLOAD_BATCH_PARTS, MAX_UPLOAD_BATCH_BYTES } from './uploadBatchService.js';
 
 export const DRAFT_CHUNK_BYTES = 1024 * 1024;
+export const draftChunkBytes = session => session.chunkBytes || DRAFT_CHUNK_BYTES;
 export const MAX_DRAFT_BYTES = 500 * 1024 * 1024;
 const collection = (name) => mongoose.connection.db.collection(`draftFiles.${name}`);
 let chunkIndexDb = null;
@@ -47,7 +48,7 @@ export async function createDraftUpload(order, user, input) {
   const provider = process.env.DRAFT_UPLOAD_PROVIDER === 'blob' ? 'blob' : 'gridfs';
   if (provider === 'blob' && !process.env.DRAFT_BLOB_READ_WRITE_TOKEN) throw draftError(503, 'Private draft storage is not configured');
   return DraftUpload.create({ _id: id, provider, ...(provider === 'blob' ? { blobPath: `tinzel/drafts/${order._id}/${id}.pdf` } : {}), orderId: order._id, staffId: user._id, assetId: new mongoose.Types.ObjectId(), name: String(input.name).slice(0,255), size: input.size,
-    fingerprint: input.fingerprint, expectedVersion: input.expectedVersion, designerNotes: String(input.designerNotes || '').slice(0,8000),
+    fingerprint: input.fingerprint, chunkBytes: input.chunkBytes === DRAFT_CHUNK_BYTES / 2 ? DRAFT_CHUNK_BYTES / 2 : DRAFT_CHUNK_BYTES, expectedVersion: input.expectedVersion, designerNotes: String(input.designerNotes || '').slice(0,8000),
     revisionRequestId: input.revisionRequestId, verifyAll: input.verifyAll === true, expiresAt: new Date(Date.now()+86400000) });
 }
 export async function getDraftUpload(id, orderId, staffId, allowClosed = false) {
@@ -65,13 +66,13 @@ export async function draftUploadStatus(session) {
   }
   const chunks = await collection('chunks').find({ files_id: session.assetId }, { projection: { n:1, length:1, sha256:1, _id:0 } }).sort({ n:1 }).toArray();
   return { id: session._id, state:session.state, name:session.name, size:session.size, fingerprint:session.fingerprint, readyForReview:session.readyForReview,
-    expiresAt:session.expiresAt, chunkBytes:DRAFT_CHUNK_BYTES, batchParts: UPLOAD_BATCH_PARTS, wholeBytes: MAX_UPLOAD_BATCH_BYTES, compression: 'gzip', chunks, version:session.version };
+    expiresAt:session.expiresAt, chunkBytes:draftChunkBytes(session), batchParts: UPLOAD_BATCH_PARTS, wholeBytes: MAX_UPLOAD_BATCH_BYTES, compression: 'gzip', chunks, version:session.version };
 }
 export async function writeDraftChunk(session, n, bytes, suppliedHash) {
   if (session.provider === 'blob') throw draftError(400, 'Upload this part directly to private storage');
   if (session.state !== 'open') throw draftError(409,'Upload is not accepting more parts');
-  const expected = Math.min(DRAFT_CHUNK_BYTES, session.size-n*DRAFT_CHUNK_BYTES);
-  if (!Number.isInteger(n) || n < 0 || n >= Math.ceil(session.size/DRAFT_CHUNK_BYTES) || !Buffer.isBuffer(bytes) || bytes.length !== expected) throw draftError(400,'Invalid upload part');
+  const chunkBytes = draftChunkBytes(session), expected = Math.min(chunkBytes, session.size-n*chunkBytes);
+  if (!Number.isInteger(n) || n < 0 || n >= Math.ceil(session.size/chunkBytes) || !Buffer.isBuffer(bytes) || bytes.length !== expected) throw draftError(400,'Invalid upload part');
   const sha256=createHash('sha256').update(bytes).digest('hex');
   if (suppliedHash !== sha256) throw draftError(409,'Upload part verification failed. Retry this part.');
   if (!n && bytes.subarray(0,5).toString() !== '%PDF-') throw draftError(400,'The selected file is not a PDF');
@@ -94,11 +95,12 @@ async function verifyDraftFile(session) {
       const chunks = []; for await (const chunk of stream) chunks.push(chunk);
       if (Buffer.concat(chunks).toString() !== '%PDF-') throw draftError(400,'The uploaded file is not a PDF');
     } else {
+      const chunkBytes = draftChunkBytes(session);
       const parts=await collection('chunks').find({files_id:session.assetId},{projection:{n:1,length:1,_id:0}}).sort({n:1}).toArray();
-      if(parts.length!==Math.ceil(session.size/DRAFT_CHUNK_BYTES)||parts.some((p,n)=>p.n!==n||p.length!==Math.min(DRAFT_CHUNK_BYTES,session.size-n*DRAFT_CHUNK_BYTES)))throw draftError(409,'Upload is incomplete. Resume the missing parts.');
+      if(parts.length!==Math.ceil(session.size/chunkBytes)||parts.some((p,n)=>p.n!==n||p.length!==Math.min(chunkBytes,session.size-n*chunkBytes)))throw draftError(409,'Upload is incomplete. Resume the missing parts.');
       const first=await collection('chunks').findOne({files_id:session.assetId,n:0});
       if(Buffer.from(first.data.buffer).subarray(0,5).toString()!=='%PDF-')throw draftError(400,'The uploaded file is not a PDF');
-      await collection('files').updateOne({_id:session.assetId},{$setOnInsert:{length:session.size,chunkSize:DRAFT_CHUNK_BYTES,uploadDate:new Date(),filename:session.name,contentType:'application/pdf',metadata:{orderId:String(session.orderId),versionNumber:session.expectedVersion+1}}},{upsert:true});
+      await collection('files').updateOne({_id:session.assetId},{$setOnInsert:{length:session.size,chunkSize:chunkBytes,uploadDate:new Date(),filename:session.name,contentType:'application/pdf',metadata:{orderId:String(session.orderId),versionNumber:session.expectedVersion+1}}},{upsert:true});
     }
 }
 export async function prepareDraftUpload(session) {

@@ -8,12 +8,13 @@ import { UPLOAD_BATCH_PARTS, MAX_UPLOAD_BATCH_BYTES, uploadHash, writeUploadBatc
 export const FILE_CHUNK_BYTES = 1024 * 1024;
 export const FileUpload = mongoose.model('FileUpload', new mongoose.Schema({
   staffId: { type: mongoose.Schema.Types.ObjectId, required: true }, orderId: mongoose.Schema.Types.ObjectId,
-  purpose: String, clientId: String, name: String, contentType: String, size: Number, fingerprint: String,
+  purpose: String, clientId: String, name: String, contentType: String, size: Number, fingerprint: String, chunkBytes: Number,
   assetId: mongoose.Schema.Types.ObjectId, state: { type: String, default: 'open' }, expiresAt: Date,
 }, { timestamps: true }).index({ staffId: 1, clientId: 1 }, { unique: true }).index({ expiresAt: 1 }));
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const db = () => mongoose.connection.db;
 const bucketName = session => session.purpose === 'cover' ? 'coverImages' : 'draftFiles';
+export const fileChunkBytes = session => session.chunkBytes || FILE_CHUNK_BYTES;
 const collection = (session, kind) => db().collection(`${bucketName(session)}.${kind}`);
 let indexDb;
 const indexes = new Map();
@@ -45,7 +46,7 @@ export async function reserveFileUpload(user, input) {
   try {
     session = await FileUpload.findOneAndUpdate(filter, { $setOnInsert: { ...filter,
       purpose: input.purpose, orderId: input.orderId, name: String(input.name || 'cover').slice(0, 255),
-      size: input.size, contentType: input.contentType, fingerprint: input.fingerprint,
+      size: input.size, contentType: input.contentType, fingerprint: input.fingerprint, chunkBytes: input.chunkBytes === FILE_CHUNK_BYTES / 2 ? FILE_CHUNK_BYTES / 2 : FILE_CHUNK_BYTES,
       assetId: new mongoose.Types.ObjectId(), expiresAt: new Date(Date.now() + 86400000),
     } }, { upsert: true, returnDocument: 'after' });
   } catch (error) {
@@ -67,7 +68,7 @@ export async function ownedFileUpload(user, id, purpose) {
 }
 export async function describeFileUpload(session) {
   const chunks = await collection(session, 'chunks').find({ files_id: session.assetId }, { projection: { n: 1, sha256: 1, _id: 0 } }).toArray();
-  return { id: String(session._id), state: session.state, chunkBytes: FILE_CHUNK_BYTES, batchParts: UPLOAD_BATCH_PARTS, compression: 'gzip', chunks,
+  return { id: String(session._id), state: session.state, chunkBytes: fileChunkBytes(session), batchParts: UPLOAD_BATCH_PARTS, compression: 'gzip', chunks,
     ...(session.state === 'complete' && session.purpose === 'cover' ? { coverUrl: `/api/public/covers/${session.assetId}` } : {}) };
 }
 export async function uploadWholeFile(user, input, bytes, expectedHash) {
@@ -76,7 +77,7 @@ export async function uploadWholeFile(user, input, bytes, expectedHash) {
   const status = await reserveFileUpload(user, input);
   const session = await ownedFileUpload(user, status.id);
   const saved = new Map(status.chunks.map(part => [part.n, part.sha256]));
-  await writeUploadBatch({ bytes, start: 0, size: session.size, chunkBytes: FILE_CHUNK_BYTES, expectedHash,
+  await writeUploadBatch({ bytes, start: 0, size: session.size, chunkBytes: fileChunkBytes(session), expectedHash,
     write: async (n, part, hash) => {
       if (saved.has(n)) {
         if (saved.get(n) !== hash) throw fail(409, 'This file differs from the original upload');
@@ -87,8 +88,8 @@ export async function uploadWholeFile(user, input, bytes, expectedHash) {
 }
 export async function putFileChunk(session, n, bytes, expectedHash) {
   if (session.state !== 'open') throw fail(409, 'Upload is already complete');
-  const length = Math.min(FILE_CHUNK_BYTES, session.size - n * FILE_CHUNK_BYTES);
-  if (!Number.isInteger(n) || n < 0 || n >= Math.ceil(session.size / FILE_CHUNK_BYTES) || !Buffer.isBuffer(bytes) || bytes.length !== length) throw fail(400, 'Invalid upload part');
+  const chunkBytes = fileChunkBytes(session), length = Math.min(chunkBytes, session.size - n * chunkBytes);
+  if (!Number.isInteger(n) || n < 0 || n >= Math.ceil(session.size / chunkBytes) || !Buffer.isBuffer(bytes) || bytes.length !== length) throw fail(400, 'Invalid upload part');
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   if (sha256 !== expectedHash) throw fail(409, 'Upload verification failed. Retry this part.');
   if (n === 0) {
@@ -103,10 +104,11 @@ export async function putFileChunk(session, n, bytes, expectedHash) {
   if (stored.sha256 !== sha256) throw fail(409, 'This part differs from the original upload');
 }
 export async function completeFileUpload(session) {
+  const chunkBytes = fileChunkBytes(session);
   const chunks = await collection(session, 'chunks').find({ files_id: session.assetId }, { projection: { n: 1, length: 1 } }).sort({ n: 1 }).toArray();
-  if (chunks.length !== Math.ceil(session.size / FILE_CHUNK_BYTES) || chunks.some((part, n) => part.n !== n || part.length !== Math.min(FILE_CHUNK_BYTES, session.size - n * FILE_CHUNK_BYTES))) throw fail(409, 'Upload is incomplete. Resume the missing parts.');
+  if (chunks.length !== Math.ceil(session.size / chunkBytes) || chunks.some((part, n) => part.n !== n || part.length !== Math.min(chunkBytes, session.size - n * chunkBytes))) throw fail(409, 'Upload is incomplete. Resume the missing parts.');
   await collection(session, 'files').updateOne({ _id: session.assetId }, { $setOnInsert: {
-    filename: session.name, length: session.size, chunkSize: FILE_CHUNK_BYTES, uploadDate: new Date(), contentType: session.contentType,
+    filename: session.name, length: session.size, chunkSize: chunkBytes, uploadDate: new Date(), contentType: session.contentType,
     metadata: { contentType: session.contentType, uploadedBy: session.staffId, orderId: session.orderId ? String(session.orderId) : undefined, purpose: session.purpose },
   } }, { upsert: true });
   await FileUpload.updateOne({ _id: session._id, state: 'open' }, { $set: { state: 'complete' } });

@@ -5,7 +5,7 @@ export const DraftUpload = mongoose.model('DraftUpload', new mongoose.Schema({
   assetId: { type: mongoose.Schema.Types.ObjectId, required: true },
   provider: { type: String, default: 'gridfs' }, blobPath: String, multipartId: String, multipartKey: String,
   receipts: { type: [{ partNumber: Number, etag: String, sha256: String }], default: [] },
-  name: String, size: Number, fingerprint: String,
+  name: String, size: Number, fingerprint: String, chunkBytes: Number,
   expectedVersion: Number, designerNotes: String, revisionRequestId: String, verifyAll: Boolean,
   readyForReview: { type: Boolean, default: false },
   state: { type: String, default: 'open' }, leaseUntil: Date,

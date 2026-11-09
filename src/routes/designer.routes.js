@@ -11,7 +11,7 @@ import { enqueueProof } from '../services/proofReaderService.js';
 import { keepLatestDraft } from '../services/draftReplacementPolicy.js';
 import express, { Router } from 'express';
 import { DraftUpload } from '../models/DraftUpload.model.js';
-import { DRAFT_CHUNK_BYTES, createDraftUpload, getDraftUpload, draftUploadStatus, writeDraftChunk, finishDraftUpload, prepareDraftUpload, checkpointDraftUpload } from '../services/draftUploadService.js';
+import { DRAFT_CHUNK_BYTES, draftChunkBytes, createDraftUpload, getDraftUpload, draftUploadStatus, writeDraftChunk, finishDraftUpload, prepareDraftUpload, checkpointDraftUpload } from '../services/draftUploadService.js';
 import mongoose from 'mongoose';
 import { Order } from '../models/Order.model.js';
 import { AuditLog } from '../models/AuditLog.model.js';
@@ -389,14 +389,14 @@ router.put('/orders/:id/draft-uploads/:uploadId/chunks/:n', requirePermission('d
 }));
 router.put('/orders/:id/draft-uploads/:uploadId/batches/:n', requirePermission('draft.upload'), express.raw({type:'application/octet-stream',limit:MAX_UPLOAD_BATCH_BYTES}), draftRoute(async (req,res) => {
   const session = await getDraftUpload(req.params.uploadId,req.order._id,req.user._id);
-  await writeUploadBatch({ bytes: req.body, start: Number(req.params.n), size: session.size, chunkBytes: DRAFT_CHUNK_BYTES,
+  await writeUploadBatch({ bytes: req.body, start: Number(req.params.n), size: session.size, chunkBytes: draftChunkBytes(session),
     expectedHash: req.get('X-Chunk-SHA256'), write: (n, bytes, hash) => writeDraftChunk(session, n, bytes, hash) });
   res.json({success:true});
 }));
 router.put('/orders/:id/draft-uploads/:uploadId/whole', requirePermission('draft.upload'), express.raw({type:'application/octet-stream',limit:MAX_UPLOAD_BATCH_BYTES}), draftRoute(async (req,res) => {
   const session = await getDraftUpload(req.params.uploadId,req.order._id,req.user._id);
   if (req.body?.length !== session.size) return res.status(400).json({message:'Invalid upload size'});
-  await writeUploadBatch({ bytes: req.body, start: 0, size: session.size, chunkBytes: DRAFT_CHUNK_BYTES,
+  await writeUploadBatch({ bytes: req.body, start: 0, size: session.size, chunkBytes: draftChunkBytes(session),
     expectedHash: req.get('X-Chunk-SHA256'), write: (n, bytes, hash) => writeDraftChunk(session, n, bytes, hash) });
   res.json(await prepareDraftUpload(session));
 }));

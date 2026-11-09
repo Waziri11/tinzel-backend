@@ -77,9 +77,10 @@ test('legacy cover and order-photo storage preserve JPEG, PNG and WebP originals
 });
 test('single-request covers are lossless, idempotent, size bounded and permission checked', async () => {
   const bytes = await sharp(randomBytes(900*700*3), {raw:{width:900,height:700,channels:3}}).png().toBuffer();
-  const body = input(bytes), headers = {'X-Upload-Metadata':encodeURIComponent(JSON.stringify(body)), 'X-Chunk-SHA256':digest(bytes)};
+  const body = input(bytes,{chunkBytes:FILE_CHUNK_BYTES/2}), headers = {'X-Upload-Metadata':encodeURIComponent(JSON.stringify(body)), 'X-Chunk-SHA256':digest(bytes)};
   const first = await call(`${root}/whole`, bytes, 'PUT', tokens[0], headers); assert.equal(first.status, 200, JSON.stringify(first.data));
   assert.deepEqual((await call(first.data.coverUrl)).data, bytes);
+  assert.equal((await call(`${root}/${first.data.id}`)).data.chunkBytes,FILE_CHUNK_BYTES/2);
   assert.deepEqual((await call(`${root}/whole`, bytes, 'PUT', tokens[0], headers)).data, first.data);
   assert.equal(await FileUpload.countDocuments({staffId:admin._id,clientId:body.clientId}), 1);
   assert.equal((await call(`${root}/whole`, bytes, 'PUT', tokens[1], headers)).status, 403);
@@ -110,7 +111,7 @@ test('small PDF transfer prepares review without submitting, and larger PDFs sup
   for (const size of [2*FILE_CHUNK_BYTES+17,7*FILE_CHUNK_BYTES+17]) {
     const order=await Order.create({submissionId:randomUUID(),formId:form._id,clientName:'Draft fixture',clientWhatsApp:'fixture-no-contact',assignedDesigner:designer._id,status:'in_design'});
     const bytes=Buffer.concat([Buffer.from('%PDF-1.7\n'),Buffer.alloc(size-9,32)]),prefix=`/api/designer/orders/${order._id}/draft-uploads`;
-    const reserved=await call(prefix,{name:'draft.pdf',contentType:'application/pdf',size:bytes.length,fingerprint:digest(bytes),expectedVersion:0},'POST',tokens[1]);
+    const reserved=await call(prefix,{name:'draft.pdf',contentType:'application/pdf',size:bytes.length,chunkBytes:size<3*FILE_CHUNK_BYTES?FILE_CHUNK_BYTES/2:FILE_CHUNK_BYTES,fingerprint:digest(bytes),expectedVersion:0},'POST',tokens[1]);
     assert.equal(reserved.data.batchParts,3);const id=reserved.data.id;
     if(size<3*FILE_CHUNK_BYTES){
       for(let attempt=0;attempt<2;attempt++)assert.equal((await call(`${prefix}/${id}/whole`,gzipSync(bytes),'PUT',tokens[1],{'Content-Encoding':'gzip','X-Chunk-SHA256':digest(bytes)})).status,200);
