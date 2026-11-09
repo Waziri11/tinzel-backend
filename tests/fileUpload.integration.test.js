@@ -8,6 +8,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import app from '../src/app.js';
 import { StaffUser } from '../src/models/StaffUser.model.js';
 import { Order } from '../src/models/Order.model.js';
+import { DraftUpload } from '../src/models/DraftUpload.model.js';
 import { MagazineForm } from '../src/models/MagazineForm.model.js';
 import { generateToken } from '../src/middlewares/auth.middleware.js';
 import { FileUpload, FILE_CHUNK_BYTES, cleanExpiredFileUploads } from '../src/services/fileUploadService.js';
@@ -72,5 +73,52 @@ test('legacy cover and order-photo storage preserve JPEG, PNG and WebP originals
     const bytes=await sharp({create:{width:200,height:150,channels:4,background:'#aabbcc80'}}).withMetadata({orientation:6})[type]().toBuffer();const file={buffer:bytes,mimetype:`image/${type}`,originalname:`photo.${type}`,size:bytes.length};
     const cover=await storeCoverImage(file,admin._id),photo=await storeOrderPhoto(file);
     assert.deepEqual(await read('coverImages',cover.id),bytes);assert.deepEqual(await read('orderPhotos',photo.id),bytes);
+  }
+});
+test('single-request covers are lossless, idempotent, size bounded and permission checked', async () => {
+  const bytes = await sharp(randomBytes(900*700*3), {raw:{width:900,height:700,channels:3}}).png().toBuffer();
+  const body = input(bytes), headers = {'X-Upload-Metadata':encodeURIComponent(JSON.stringify(body)), 'X-Chunk-SHA256':digest(bytes)};
+  const first = await call(`${root}/whole`, bytes, 'PUT', tokens[0], headers); assert.equal(first.status, 200, JSON.stringify(first.data));
+  assert.deepEqual((await call(first.data.coverUrl)).data, bytes);
+  assert.deepEqual((await call(`${root}/whole`, bytes, 'PUT', tokens[0], headers)).data, first.data);
+  assert.equal(await FileUpload.countDocuments({staffId:admin._id,clientId:body.clientId}), 1);
+  assert.equal((await call(`${root}/whole`, bytes, 'PUT', tokens[1], headers)).status, 403);
+  assert.equal((await call(`${root}/whole`, bytes, 'PUT', tokens[0], {...headers,'X-Chunk-SHA256':'0'.repeat(64)})).status, 409);
+  assert.equal((await call(`${root}/whole`, bytes, 'PUT', tokens[0], {...headers,'X-Upload-Metadata':'invalid'})).status, 400);
+  const oversized = Buffer.alloc(3*FILE_CHUNK_BYTES+1);
+  assert.equal((await call(`${root}/whole`, gzipSync(oversized), 'PUT', tokens[0], {...headers,'Content-Encoding':'gzip'})).status, 413);
+});
+test('batched print uploads resume individual parts, reject corrupt batches and preserve original bytes', async () => {
+  const order=await Order.create({submissionId:randomUUID(),formId:form._id,clientName:'Batch fixture',clientWhatsApp:'fixture-no-contact',assignedDesigner:designer._id,status:'client_approved'});
+  const bytes=Buffer.concat([Buffer.from('%PDF-1.7\n'),randomBytes(5*FILE_CHUNK_BYTES)]);
+  const reserved=await call(root,input(bytes,{purpose:'print',orderId:String(order._id),name:'print.pdf',contentType:'application/pdf'}),'POST',tokens[1]);
+  const id=reserved.data.id; assert.equal(reserved.data.batchParts,3);
+  const batch=bytes.subarray(0,3*FILE_CHUNK_BYTES);
+  assert.equal((await call(`${root}/${id}/batches/0`,batch,'PUT',tokens[1],{'X-Chunk-SHA256':'0'.repeat(64)})).status,409);
+  assert.equal((await call(`${root}/${id}` ,undefined,'GET',tokens[1])).data.chunks.length,0);
+  assert.equal((await call(`${root}/${id}/batches/0`,batch,'PUT',tokens[1],{'X-Chunk-SHA256':digest(batch)})).status,200);
+  assert.equal((await call(`${root}/${id}`,undefined,'GET',tokens[1])).data.chunks.length,3);
+  // Retry a saved part individually, then finish the remaining batch.
+  const part=bytes.subarray(0,FILE_CHUNK_BYTES);
+  assert.equal((await call(`${root}/${id}/chunks/0`,part,'PUT',tokens[1],{'X-Chunk-SHA256':digest(part)})).status,200);
+  const rest=bytes.subarray(3*FILE_CHUNK_BYTES);
+  assert.equal((await call(`${root}/${id}/batches/3`,gzipSync(rest),'PUT',tokens[1],{'Content-Encoding':'gzip','X-Chunk-SHA256':digest(rest)})).status,200);
+  assert.equal((await call(`${root}/${id}/complete`,{},'POST',tokens[1])).status,200);
+  assert.deepEqual(await read('draftFiles',(await FileUpload.findById(id)).assetId),bytes);
+});
+test('small PDF transfer prepares review without submitting, and larger PDFs support verified batches', async () => {
+  for (const size of [2*FILE_CHUNK_BYTES+17,7*FILE_CHUNK_BYTES+17]) {
+    const order=await Order.create({submissionId:randomUUID(),formId:form._id,clientName:'Draft fixture',clientWhatsApp:'fixture-no-contact',assignedDesigner:designer._id,status:'in_design'});
+    const bytes=Buffer.concat([Buffer.from('%PDF-1.7\n'),Buffer.alloc(size-9,32)]),prefix=`/api/designer/orders/${order._id}/draft-uploads`;
+    const reserved=await call(prefix,{name:'draft.pdf',contentType:'application/pdf',size:bytes.length,fingerprint:digest(bytes),expectedVersion:0},'POST',tokens[1]);
+    assert.equal(reserved.data.batchParts,3);const id=reserved.data.id;
+    if(size<3*FILE_CHUNK_BYTES){
+      for(let attempt=0;attempt<2;attempt++)assert.equal((await call(`${prefix}/${id}/whole`,gzipSync(bytes),'PUT',tokens[1],{'Content-Encoding':'gzip','X-Chunk-SHA256':digest(bytes)})).status,200);
+    }else{
+      for(let n=0;n<Math.ceil(size/FILE_CHUNK_BYTES);n+=3){const batch=bytes.subarray(n*FILE_CHUNK_BYTES,(n+3)*FILE_CHUNK_BYTES);assert.equal((await call(`${prefix}/${id}/batches/${n}`,gzipSync(batch),'PUT',tokens[1],{'Content-Encoding':'gzip','X-Chunk-SHA256':digest(batch)})).status,200);}
+      assert.equal((await call(`${prefix}/${id}/ready`,{},'POST',tokens[1])).status,200);
+    }
+    const saved=await DraftUpload.findById(id);assert.equal(saved.readyForReview,true);assert.deepEqual(await read('draftFiles',saved.assetId),bytes);
+    const unchanged=await Order.findById(order._id);assert.equal(unchanged.status,'in_design');assert.equal(unchanged.draftVersions.length,0);
   }
 });

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { Order } from '../models/Order.model.js';
 import { permits } from './authorizationService.js';
 import { assertNoActiveImageContent } from './uploadService.js';
+import { UPLOAD_BATCH_PARTS, MAX_UPLOAD_BATCH_BYTES, uploadHash, writeUploadBatch } from './uploadBatchService.js';
 
 export const FILE_CHUNK_BYTES = 1024 * 1024;
 export const FileUpload = mongoose.model('FileUpload', new mongoose.Schema({
@@ -66,8 +67,23 @@ export async function ownedFileUpload(user, id, purpose) {
 }
 export async function describeFileUpload(session) {
   const chunks = await collection(session, 'chunks').find({ files_id: session.assetId }, { projection: { n: 1, sha256: 1, _id: 0 } }).toArray();
-  return { id: String(session._id), state: session.state, chunkBytes: FILE_CHUNK_BYTES, compression: 'gzip', chunks,
+  return { id: String(session._id), state: session.state, chunkBytes: FILE_CHUNK_BYTES, batchParts: UPLOAD_BATCH_PARTS, compression: 'gzip', chunks,
     ...(session.state === 'complete' && session.purpose === 'cover' ? { coverUrl: `/api/public/covers/${session.assetId}` } : {}) };
+}
+export async function uploadWholeFile(user, input, bytes, expectedHash) {
+  if (!Buffer.isBuffer(bytes) || bytes.length !== input.size || bytes.length > MAX_UPLOAD_BATCH_BYTES) throw fail(400, 'Invalid upload size');
+  if (uploadHash(bytes) !== expectedHash) throw fail(409, 'Upload verification failed. Retry the file.');
+  const status = await reserveFileUpload(user, input);
+  const session = await ownedFileUpload(user, status.id);
+  const saved = new Map(status.chunks.map(part => [part.n, part.sha256]));
+  await writeUploadBatch({ bytes, start: 0, size: session.size, chunkBytes: FILE_CHUNK_BYTES, expectedHash,
+    write: async (n, part, hash) => {
+      if (saved.has(n)) {
+        if (saved.get(n) !== hash) throw fail(409, 'This file differs from the original upload');
+      } else await putFileChunk(session, n, part, hash);
+    },
+  });
+  return completeFileUpload(session);
 }
 export async function putFileChunk(session, n, bytes, expectedHash) {
   if (session.state !== 'open') throw fail(409, 'Upload is already complete');

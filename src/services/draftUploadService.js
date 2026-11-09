@@ -7,6 +7,7 @@ import { enqueueProof } from './proofReaderService.js';
 import { privateDraftStorage, BLOB_PART_BYTES } from './privateDraftStorage.js';
 import { draftCommittedEvent } from './draftOutboxService.js';
 import { keepLatestDraft } from './draftReplacementPolicy.js';
+import { UPLOAD_BATCH_PARTS, MAX_UPLOAD_BATCH_BYTES } from './uploadBatchService.js';
 
 export const DRAFT_CHUNK_BYTES = 1024 * 1024;
 export const MAX_DRAFT_BYTES = 500 * 1024 * 1024;
@@ -64,7 +65,7 @@ export async function draftUploadStatus(session) {
   }
   const chunks = await collection('chunks').find({ files_id: session.assetId }, { projection: { n:1, length:1, sha256:1, _id:0 } }).sort({ n:1 }).toArray();
   return { id: session._id, state:session.state, name:session.name, size:session.size, fingerprint:session.fingerprint, readyForReview:session.readyForReview,
-    expiresAt:session.expiresAt, chunkBytes:DRAFT_CHUNK_BYTES, compression: 'gzip', chunks, version:session.version };
+    expiresAt:session.expiresAt, chunkBytes:DRAFT_CHUNK_BYTES, batchParts: UPLOAD_BATCH_PARTS, wholeBytes: MAX_UPLOAD_BATCH_BYTES, compression: 'gzip', chunks, version:session.version };
 }
 export async function writeDraftChunk(session, n, bytes, suppliedHash) {
   if (session.provider === 'blob') throw draftError(400, 'Upload this part directly to private storage');
