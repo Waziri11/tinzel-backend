@@ -190,7 +190,8 @@ test('manager notes-only return reaches designer, corrected draft returns to man
     200,
   );
   const older = await req(proof(order, 1));
-  assert.equal(older.data.canComment, false);
+  // Replaced originals are removed; correction notes remain on the current order.
+  assert.equal(older.status, 404);
   const current = await req(proof(order, 2));
   assert.equal(current.data.canComment, true);
   assert.equal(

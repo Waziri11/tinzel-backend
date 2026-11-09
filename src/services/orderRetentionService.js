@@ -1,3 +1,4 @@
+import { FileUpload } from './fileUploadService.js';
 import mongoose from 'mongoose';
 import { randomUUID } from 'node:crypto';
 import { unlink } from 'node:fs/promises';
@@ -48,6 +49,7 @@ async function purgeFilesAndRecords(order, owner) {
   await MediaJob.updateMany({ ...jobFilter, state: { $ne: 'running' } }, { $set: { state: 'expired' } });
   if (await MediaJob.exists({ ...jobFilter, state: 'running', leaseUntil: { $gt: new Date() } })) return false;
   const uploads = await DraftUpload.find({ orderId }).lean();
+  const fileUploads = await FileUpload.find({ orderId }).lean();
   if (uploads.some(u => u.provider === 'blob' && u.state !== 'complete' && u.expiresAt > new Date())) return false;
   const [jobs, pages, attachments] = await Promise.all([
     MediaJob.find(jobFilter).lean(), ProofPage.find({ orderId }).lean(), ProofAttachment.find({ orderId }).lean(),
@@ -70,7 +72,7 @@ async function purgeFilesAndRecords(order, owner) {
   await removeGridFiles('revisionAudio', audioFiles.map(file => file._id));
   await removeGridFiles('orderPhotos', [...photoIds]);
   await removeGridFiles('mediaDerivatives', [...assets.map(a => a.thumbnailId), ...outputs('preview')]);
-  await removeGridFiles('draftFiles', [...drafts.map(d => d.assetId), ...drafts.map(d => fileId(d.fileUrl, 'drafts')), ...uploads.map(u => u.assetId), fileId(printUrl, 'drafts'), ...extraDrafts.map(d => d._id)]);
+  await removeGridFiles('draftFiles', [...drafts.map(d => d.assetId), ...drafts.map(d => fileId(d.fileUrl, 'drafts')), ...uploads.map(u => u.assetId), ...fileUploads.map(u => u.assetId), fileId(printUrl, 'drafts'), ...extraDrafts.map(d => d._id)]);
   await removeGridFiles('proofPages', [...pages.map(p => p.imageId), ...outputs('proof')]);
   await removeGridFiles('mediaArchives', outputs('archive'));
   await removeGridFiles('proofAttachments', attachments.flatMap(a => [a.imageId, a.thumbnailId]));
@@ -79,7 +81,7 @@ async function purgeFilesAndRecords(order, owner) {
   // Keep the owning order and asset references until file deletion is complete.
   await db.collection('proofAttachmentUploads').deleteMany({ assetId: { $in: attachments.map(a => String(a._id)) } });
   await Promise.all([
-    ProofAttachment.deleteMany({ orderId }), ProofPage.deleteMany({ orderId }), DraftUpload.deleteMany({ orderId }),
+    FileUpload.deleteMany({ orderId }), ProofAttachment.deleteMany({ orderId }), ProofPage.deleteMany({ orderId }), DraftUpload.deleteMany({ orderId }),
     MediaDownloadTicket.deleteMany({ orderId }), MediaJob.deleteMany(jobFilter), MediaAsset.deleteMany({ _id: { $in: [...photoIds] } }),
     UploadSession.deleteMany({ _id: { $in: sessionIds } }), Notification.deleteMany({ orderId }), AuditLog.deleteMany({ orderId }),
     AccessSession.deleteMany({ subjectId: orderKey, kind: { $ne: 'staff' } }), AccessChallenge.deleteMany({ subjectId: orderKey }),

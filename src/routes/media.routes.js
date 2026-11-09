@@ -36,7 +36,7 @@ router.get('/sessions/:id', route(async (req, res) => {
 }));
 router.post('/sessions/:id/assets', route(async (req, res) => {
   const entry = await reservePhoto(req.params.id, token(req), req.body);
-  res.status(201).json({ success: true, entry, path: blobPath(entry._id), chunkBytes: CHUNK_BYTES });
+  res.status(201).json({ success: true, entry, path: blobPath(entry._id), chunkBytes: CHUNK_BYTES, compression: 'gzip' });
 }));
 router.get('/sessions/:id/assets/:assetId', route(async (req, res) => {
   const { entry } = await getEntry(req.params.id, token(req), req.params.assetId, { writable: false });
@@ -54,7 +54,7 @@ router.get('/sessions/:id/assets/:assetId/preview', route(async (req, res) => {
 }));
 router.put('/sessions/:id/assets/:assetId/chunks/:n', express.raw({ type: 'application/octet-stream', limit: CHUNK_BYTES }), route(async (req, res) => {
   const { entry } = await getEntry(req.params.id, token(req), req.params.assetId);
-  await writeChunk(entry, Number(req.params.n), req.body);
+  await writeChunk(entry, Number(req.params.n), req.body, req.get('X-Chunk-SHA256'));
   res.json({ success: true });
 }));
 router.post('/sessions/:id/assets/:assetId/complete', route(async (req, res) => {

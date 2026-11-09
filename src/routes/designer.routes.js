@@ -1,3 +1,4 @@
+import { ownedFileUpload } from '../services/fileUploadService.js';
 import { EXPRESS_ORDER_SORT } from '../services/expressOrderService.js';
 import { streamRevisionAudio } from '../services/revisionAudioService.js';
 import { designerColumnFilter } from '../services/designerBoardService.js';
@@ -498,10 +499,15 @@ router.post('/orders/:id/upload-print-document', requirePermission('draft.upload
 
     let printUrl = '';
     if (req.file) {
+      if (!isPdf(req.file)) return res.status(400).json({ message: 'Choose a valid PDF file' });
       const assetId = await saveDraftPdf(req.file, order._id, `print-${(order.currentDraftVersion || 1)}`);
       printUrl = `/api/public/drafts/${assetId}`;
+    } else if (req.body.fileUploadId) {
+      const session = await ownedFileUpload(req.user, req.body.fileUploadId, 'print');
+      if (session.state !== 'complete' || String(session.orderId) !== String(order._id)) return res.status(409).json({ message: 'Finish uploading this order’s print file first' });
+      printUrl = `/api/public/drafts/${session.assetId}`;
     } else if (req.body.uploadSessionId && mongoose.isValidObjectId(req.body.uploadSessionId)) {
-      const session = await DraftUpload.findOne({ _id: req.body.uploadSessionId, orderId: order._id });
+      const session = await DraftUpload.findOne({ _id: req.body.uploadSessionId, orderId: order._id, staffId: req.user._id, state: 'complete' });
       if (!session) {
         return res.status(404).json({ success: false, message: 'Print upload session not found' });
       }

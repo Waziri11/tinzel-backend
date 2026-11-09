@@ -54,7 +54,7 @@ export async function reserveAttachment(req) {
   }
   if (asset.size !== size || asset.contentType !== contentType || asset.state === 'deleting' || asset.expiresAt <= new Date()) throw fail(409, 'Choose this attachment again to start a new upload');
   const received = await chunks().find({ assetId: String(asset._id) }, { projection: { n: 1, sha256: 1 } }).toArray();
-  return { id: String(asset._id), state: asset.state, chunkBytes: ATTACHMENT_CHUNK_BYTES, received, attachment: asset.state === 'ready' ? attachmentDescriptor(asset) : undefined };
+  return { id: String(asset._id), state: asset.state, chunkBytes: ATTACHMENT_CHUNK_BYTES, compression: 'gzip', received, attachment: asset.state === 'ready' ? attachmentDescriptor(asset) : undefined };
 }
 export async function putAttachmentChunk(req) {
   editable(req);
@@ -63,9 +63,11 @@ export async function putAttachmentChunk(req) {
   if (!Number.isInteger(n) || n < 0 || n >= Math.ceil(asset.size / ATTACHMENT_CHUNK_BYTES) || !Buffer.isBuffer(req.body) || req.body.length !== Math.min(ATTACHMENT_CHUNK_BYTES, asset.size - n * ATTACHMENT_CHUNK_BYTES)) throw fail(400, 'Incomplete attachment part');
   await ensureUploadIndex();
   const sha256 = createHash('sha256').update(req.body).digest('hex'), id = `${asset._id}:${n}`;
-  try { await chunks().updateOne({ _id: id }, { $setOnInsert: { assetId: String(asset._id), n, sha256, bytes: req.body, expiresAt: asset.expiresAt } }, { upsert: true }); }
-  catch (error) { if (error.code !== 11000) throw error; }
-  if ((await chunks().findOne({ _id: id }, { projection: { sha256: 1 } })).sha256 !== sha256) throw fail(409, 'Attachment part differs from the previous upload');
+  if (req.headers?.['x-chunk-sha256'] && req.headers['x-chunk-sha256'] !== sha256) throw fail(409, 'Upload part verification failed');
+  let stored;
+  try { stored = await chunks().findOneAndUpdate({ _id: id }, { $setOnInsert: { assetId: String(asset._id), n, sha256, bytes: req.body, expiresAt: asset.expiresAt } }, { upsert: true, returnDocument: 'after', projection: { sha256: 1 } }); }
+  catch (error) { if (error.code !== 11000) throw error; stored = await chunks().findOne({ _id: id }, { projection: { sha256: 1 } }); }
+  if (stored.sha256 !== sha256) throw fail(409, 'Attachment part differs from the previous upload');
   return { n, sha256 };
 }
 async function removeBytes(asset) {
@@ -93,18 +95,19 @@ export async function completeAttachment(req) {
       await pipeline(Readable.from(bytes), bucket().openUploadStreamWithId(asset.imageId, 'review-audio', { contentType }));
       asset = await ProofAttachment.findOneAndUpdate({ _id: asset._id, state: 'processing' }, { $set: { state: 'ready', storedContentType: contentType } }, { returnDocument: 'after' });
       if (!asset) throw fail(409, 'Audio is being prepared. Retry shortly');
+      await chunks().deleteMany({ assetId: String(asset._id) });
       return attachmentDescriptor(asset);
     }
     const input = sharp(bytes, { limitInputPixels: 40000000, failOn: 'warning' });
     const metadata = await input.metadata();
     if (!['jpeg', 'png', 'webp'].includes(metadata.format) || `image/${metadata.format}` !== asset.contentType || (metadata.pages || 1) !== 1) throw fail(400, 'Choose a still JPG, PNG or WebP image');
-    const { data: image, info } = await input.rotate().webp({ quality: 92 }).toBuffer({ resolveWithObject: true });
-    const thumbnail = await sharp(image).resize(320, 320, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 80 }).toBuffer();
+    const thumbnail = await input.rotate().resize(320, 320, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 80 }).toBuffer();
     await removeBytes(asset);
-    for (const [id, data] of [[asset.imageId, image], [asset.thumbnailId, thumbnail]])
-      await pipeline(Readable.from(data), bucket().openUploadStreamWithId(id, 'review-image.webp', { contentType: 'image/webp' }));
-    asset = await ProofAttachment.findOneAndUpdate({ _id: asset._id, state: 'processing' }, { $set: { state: 'ready', width: info.width, height: info.height } }, { returnDocument: 'after' });
+    await pipeline(Readable.from(bytes), bucket().openUploadStreamWithId(asset.imageId, asset.name, { contentType: asset.contentType }));
+    await pipeline(Readable.from(thumbnail), bucket().openUploadStreamWithId(asset.thumbnailId, 'review-preview.webp', { contentType: 'image/webp' }));
+    asset = await ProofAttachment.findOneAndUpdate({ _id: asset._id, state: 'processing' }, { $set: { state: 'ready', storedContentType: asset.contentType, width: metadata.autoOrient?.width || metadata.width, height: metadata.autoOrient?.height || metadata.height } }, { returnDocument: 'after' });
     if (!asset) throw fail(409, 'Attachment is being prepared. Retry shortly');
+    await chunks().deleteMany({ assetId: String(asset._id) });
     return attachmentDescriptor(asset);
   } catch (error) {
     await ProofAttachment.updateOne({ _id: processingId, state: 'processing' }, { $set: { state: 'uploading' } });
@@ -145,7 +148,7 @@ export async function readAttachment(req, visible) {
   const asset = await ProofAttachment.findOne({ _id: id, orderId: req.proofOrder._id, version: req.proofVersion });
   const owned = asset && req.proofCanComment && asset.source === req.proofSource && asset.authorId === attachmentScope(req).authorId && asset.state === 'ready' && asset.expiresAt > new Date();
   if (!asset || (!linked && !owned)) throw fail(404, 'Attachment not found');
-  return { stream: bucket().openDownloadStream(req.query.thumbnail === '1' && !isAudio(asset) ? asset.thumbnailId : asset.imageId), contentType: attachmentDescriptor(asset).contentType };
+  return { stream: bucket().openDownloadStream(req.query.thumbnail === '1' && !isAudio(asset) ? asset.thumbnailId : asset.imageId), contentType: req.query.thumbnail === '1' && !isAudio(asset) ? 'image/webp' : attachmentDescriptor(asset).contentType };
 }
 export async function cleanProofAttachments() {
   await ProofAttachment.updateMany({ state: 'processing', processingUntil: { $lt: new Date() } }, { $set: { state: 'uploading' } });

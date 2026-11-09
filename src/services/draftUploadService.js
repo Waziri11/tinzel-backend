@@ -64,7 +64,7 @@ export async function draftUploadStatus(session) {
   }
   const chunks = await collection('chunks').find({ files_id: session.assetId }, { projection: { n:1, length:1, sha256:1, _id:0 } }).sort({ n:1 }).toArray();
   return { id: session._id, state:session.state, name:session.name, size:session.size, fingerprint:session.fingerprint, readyForReview:session.readyForReview,
-    expiresAt:session.expiresAt, chunkBytes:DRAFT_CHUNK_BYTES, chunks, version:session.version };
+    expiresAt:session.expiresAt, chunkBytes:DRAFT_CHUNK_BYTES, compression: 'gzip', chunks, version:session.version };
 }
 export async function writeDraftChunk(session, n, bytes, suppliedHash) {
   if (session.provider === 'blob') throw draftError(400, 'Upload this part directly to private storage');
@@ -75,11 +75,11 @@ export async function writeDraftChunk(session, n, bytes, suppliedHash) {
   if (suppliedHash !== sha256) throw draftError(409,'Upload part verification failed. Retry this part.');
   if (!n && bytes.subarray(0,5).toString() !== '%PDF-') throw draftError(400,'The selected file is not a PDF');
   const filter={files_id:session.assetId,n};
-  try { await collection('chunks').updateOne(filter,{$setOnInsert:{...filter,data:bytes,length:bytes.length,sha256}},{upsert:true}); }
-  catch(e) { if(e.code!==11000)throw e; }
-  const stored=await collection('chunks').findOne(filter,{projection:{sha256:1}});
+  let stored;
+  try { stored = await collection('chunks').findOneAndUpdate(filter, {$setOnInsert:{...filter,data:bytes,length:bytes.length,sha256}}, {upsert:true,returnDocument:'after',projection:{sha256:1}}); }
+  catch(e) { if(e.code!==11000)throw e; stored = await collection('chunks').findOne(filter,{projection:{sha256:1}}); }
   if(stored.sha256!==sha256)throw draftError(409,'This part differs from the original upload. Select the same file or start again.');
-  await DraftUpload.updateOne({_id:session._id,state:'open'},{$set:{expiresAt:new Date(Date.now()+86400000)}});
+  if (session.expiresAt < new Date(Date.now() + 23 * 3600000)) await DraftUpload.updateOne({_id:session._id,state:'open'},{$set:{expiresAt:new Date(Date.now()+86400000)}});
 }
 // Verifying transferred bytes does not submit the draft or change the correction round.
 async function verifyDraftFile(session) {

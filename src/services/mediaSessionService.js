@@ -112,7 +112,7 @@ export async function chunkStatus(entry) {
     { projection: { n: 1, length: 1, sha256: 1 }, timeoutMS: 15000 }).sort({ n: 1 }).toArray();
 }
 
-export async function writeChunk(entry, n, buffer) {
+export async function writeChunk(entry, n, buffer, suppliedHash) {
   if (entry.provider !== 'gridfs' || !Number.isInteger(n) || n < 0 || n >= Math.ceil(entry.size / CHUNK_BYTES)) throw mediaError(400, 'Invalid upload part');
   const expected = Math.min(CHUNK_BYTES, entry.size - n * CHUNK_BYTES);
   if (!Buffer.isBuffer(buffer) || buffer.length !== expected) throw mediaError(400, 'Incomplete upload part. Retry this photo.');
@@ -126,11 +126,16 @@ export async function writeChunk(entry, n, buffer) {
   await ensureMediaIndexes();
   const filter = { files_id: new mongoose.Types.ObjectId(entry._id), n };
   const sha256 = digest(buffer);
+  if (suppliedHash && suppliedHash !== sha256) throw mediaError(409, 'Upload part verification failed');
+  let stored;
   try {
-    await db().collection('orderPhotos.chunks').updateOne(filter,
-      { $setOnInsert: { ...filter, data: buffer, length: buffer.length, sha256 } }, { upsert: true, timeoutMS: 20000 });
-  } catch (e) { if (e.code !== 11000) throw e; }
-  const stored = await db().collection('orderPhotos.chunks').findOne(filter, { projection: { sha256: 1 }, timeoutMS: 10000 });
+    stored = await db().collection('orderPhotos.chunks').findOneAndUpdate(filter,
+      { $setOnInsert: { ...filter, data: buffer, length: buffer.length, sha256 } },
+      { upsert: true, returnDocument: 'after', projection: { sha256: 1 }, timeoutMS: 20000 });
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+    stored = await db().collection('orderPhotos.chunks').findOne(filter, { projection: { sha256: 1 }, timeoutMS: 10000 });
+  }
   if (stored?.sha256 !== sha256) throw mediaError(409, 'This photo differs from its uploaded parts. Remove it and select the original again.');
 }
 

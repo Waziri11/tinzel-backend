@@ -1,5 +1,4 @@
 import mongoose from 'mongoose';
-import sharp from 'sharp';
 import { assertNoActiveImageContent } from './uploadService.js';
 
 let cachedDb = null;
@@ -20,29 +19,8 @@ export const storeOrderPhoto = async (file, meta = {}) => {
   const rawBuffer = Buffer.isBuffer(file.buffer) ? file.buffer : Buffer.from(file.buffer || []);
   assertNoActiveImageContent(rawBuffer);
 
-  let buffer = rawBuffer;
-  let contentType = file.mimetype || 'image/jpeg';
-
-  try {
-    const metadata = await sharp(rawBuffer, { limitInputPixels: 60000000 }).metadata();
-    if (metadata.format === 'svg') {
-      const err = new Error('SVG images are not permitted');
-      err.status = 400;
-      throw err;
-    }
-    if (metadata.format === 'png') {
-      buffer = await sharp(rawBuffer, { limitInputPixels: 60000000 }).rotate().png().toBuffer();
-      contentType = 'image/png';
-    } else if (metadata.format === 'webp') {
-      buffer = await sharp(rawBuffer, { limitInputPixels: 60000000 }).rotate().webp({ quality: 90 }).toBuffer();
-      contentType = 'image/webp';
-    } else if (metadata.format === 'jpeg' || metadata.format === 'jpg') {
-      buffer = await sharp(rawBuffer, { limitInputPixels: 60000000 }).rotate().jpeg({ quality: 90 }).toBuffer();
-      contentType = 'image/jpeg';
-    }
-  } catch (err) {
-    if (err.status === 400) throw err;
-  }
+  const buffer = rawBuffer;
+  const contentType = file.mimetype || 'image/jpeg';
 
   return new Promise((resolve, reject) => {
     const upload = bucket().openUploadStream(file.originalname || 'photo.jpg', {

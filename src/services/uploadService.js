@@ -109,5 +109,5 @@ export const uploadCover = multer({
   // writing to Vercel's read-only /var/task filesystem, and 4MB fits Vercel's 4.5MB gateway limit.
   storage: multer.memoryStorage(),
   fileFilter: photoFileFilter,
-  limits: { fileSize: 4 * 1024 * 1024 }, // 4MB for cover images (client + server WebP optimization)
+  limits: { fileSize: 4 * 1024 * 1024 }, // 4MB for legacy single-request covers; current clients use lossless resumable uploads
 });

@@ -1,3 +1,4 @@
+import { cleanExpiredFileUploads } from './fileUploadService.js';
 import { cleanProofAttachments } from './proofAttachmentService.js';
 import { runProofJobs } from './proofWorkerService.js';
 import { cleanExpiredDraftUploads } from './draftUploadService.js';
@@ -125,7 +126,7 @@ export async function runMediaJobs({ maxJobs = 100, budgetMs = 230000, proofFilt
   try {
     await MediaJob.updateMany({ kind: { $in: allowedKinds }, state: 'running', leaseUntil: { $lt: new Date() }, attempts: { $gte: 3 } },
       { $set: { state: 'failed', error: 'Worker stopped repeatedly. Please contact staff.' } });
-    if (!proofFilter && lockId === 'worker-lock') { await cleanDerivedMedia(); await cleanExpiredDraftUploads(); await cleanProofAttachments(); }
+    if (!proofFilter && lockId === 'worker-lock') { await cleanDerivedMedia(); await cleanExpiredDraftUploads(); await cleanProofAttachments(); await cleanExpiredFileUploads(); }
     while (count < maxJobs && Date.now() - started < budgetMs - 1000) {
       const outputId = new mongoose.Types.ObjectId().toString();
       const job = await MediaJob.findOneAndUpdate({ kind: { $in: allowedKinds }, attempts: { $lt: 3 }, $or: [

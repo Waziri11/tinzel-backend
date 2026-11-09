@@ -48,6 +48,20 @@ const {proofPdf}=await import('../tests/fixtures/proofPdf.js');
 const {enqueueProof}=await import('../src/services/proofReaderService.js');
 const form=await MagazineForm.findOne({slug:'acceptance-magazine'});
 const designer=await StaffUser.findOne({role:'designer'});
+testApp.post('/__test__/comment-audio-order', async (req, res) => {
+  const { generateClientToken } = await import('../src/middlewares/auth.middleware.js');
+  const { updateNotificationSettings } = await import('../src/services/notificationService.js');
+  await updateNotificationSettings({ channels: { sms: false, email: false, in_system: false } });
+  const client = req.query.source === 'client';
+  const id = new mongoose.Types.ObjectId();
+  const assetId = await saveDraftPdf({ buffer: proofPdf(), originalname: 'audio-review.pdf' }, id, 1);
+  const order = await Order.create({ _id: id, submissionId: `AUDIO-RETURN-${id}`, clientName: `Audio return ${client ? 'client' : 'manager'}`,
+    clientWhatsApp: '0712000044', formId: form._id, formTitle: 'Audio review test', assignedDesigner: designer._id,
+    status: client ? 'client_review' : 'draft_manager_review', currentDraftVersion: 1,
+    draftVersions: [{ versionNumber: 1, assetId, managerReview: { status: client ? 'approved' : 'pending' } }] });
+  await enqueueProof(order._id, 1);
+  res.json({ orderId: String(order._id), clientToken: await generateClientToken(order) });
+});
 for (const sequence of [9998, 9999]) await Order.create({ submissionId: `SUB-PHONE-BROWSER-${sequence}`, trackingId: `TNZ-2026-${sequence}`, clientName: 'Phone browser fixture', clientWhatsApp: '0712 000 081', formId: form._id, formTitle: 'Acceptance magazine', status: 'awaiting_payment' });
 for(let n=1;n<=2;n++){
  const id=new mongoose.Types.ObjectId();const assetId=await saveDraftPdf({buffer:proofPdf(),originalname:'synthetic.pdf'},id,1);
@@ -103,6 +117,26 @@ testApp.post('/__test__/retention-run', async (_req, res) => {
   const {cleanExpiredOrders}=await import('../src/services/orderRetentionService.js');
   const now=new Date();await cleanExpiredOrders({now});
   res.json(await cleanExpiredOrders({now:new Date(+now+6*60000)}));
+});
+// Upload verification fixtures are reachable only on the disposable test server.
+testApp.post('/__test__/upload-fixtures', async (_req, res) => {
+  const { generateToken } = await import('../src/middlewares/auth.middleware.js');
+  const admin = await StaffUser.findOne({ role: 'admin' });
+  const create = status => Order.create({ submissionId: `UPLOAD-${new mongoose.Types.ObjectId()}`, formId: form._id,
+    clientName: 'Upload verification', clientWhatsApp: 'test', assignedDesigner: designer._id, status,
+    ...(status === 'draft_manager_review' ? { currentDraftVersion: 1, draftVersions: [{ versionNumber: 1, managerReview: { status: 'pending' } }] } : {}) });
+  const [draft, print, review] = await Promise.all(['in_design', 'client_approved', 'draft_manager_review'].map(create));
+  res.json({ adminToken: await generateToken(admin, { verifiedAt: new Date() }), designerToken: await generateToken(designer),
+    designerId: String(designer._id), draftId: String(draft._id), printId: String(print._id), reviewId: String(review._id) });
+});
+testApp.get('/__test__/upload-digest/:orderId', async (req, res) => {
+  const { createHash } = await import('node:crypto');
+  const order = await Order.findById(req.params.orderId);
+  const file = await mongoose.connection.db.collection('draftFiles.files').findOne({ 'metadata.orderId': String(order._id) });
+  if (!file) return res.sendStatus(404);
+  const hash = createHash('sha256');
+  for await (const part of new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'draftFiles' }).openDownloadStream(file._id)) hash.update(part);
+  res.json({ sha256: hash.digest('hex'), size: file.length, status: order.status });
 });
 // Consume the real protected-proof queue against this disposable database as a dedicated worker.
 const {runProofJobs}=await import('../src/services/proofWorkerService.js');

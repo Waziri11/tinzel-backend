@@ -116,6 +116,21 @@ test('discarded and abandoned images are cleaned, and conflicting claims can be 
   const another = await attach(call); await call(`/attachments/${another.id}`, undefined, 'DELETE'); await cleanProofAttachments();
   assert.equal((await call(`/attachments/${another.id}`)).status, 404);
 });
+test('review images retain exact originals and serve a separate WebP thumbnail', async () => {
+  const { call } = await fixture();
+  for (const format of ['jpeg', 'png', 'webp']) {
+    const bytes = await sharp({ create: { width: 320, height: 240, channels: 4, background: '#e8a45980' } })
+      .withMetadata({ orientation: 6 })[format]().toBuffer();
+    const { id, complete } = await attach(call, bytes, { name: `original.${format}`, contentType: `image/${format}` });
+    assert.equal(complete.status, 200, JSON.stringify(complete.data));
+    const original = await call(`/attachments/${id}`);
+    assert.equal(original.headers.get('content-type'), `image/${format}`);
+    assert.deepEqual(original.data, bytes);
+    const thumbnail = await call(`/attachments/${id}?thumbnail=1`);
+    assert.equal(thumbnail.headers.get('content-type'), 'image/webp');
+    assert.equal((await sharp(thumbnail.data).metadata()).format, 'webp');
+  }
+});
 test('real OCR job reads the clean page, stores English/Swahili positions, and is idempotent', async () => {
   const { order, call } = await fixture();
   const canvas = createCanvas(1200, 900), ctx = canvas.getContext('2d'); ctx.fillStyle = 'white'; ctx.fillRect(0, 0, 1200, 900); ctx.fillStyle = 'black'; ctx.font = '36px "Tinzel Watermark"';

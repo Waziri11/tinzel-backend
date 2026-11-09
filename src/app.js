@@ -1,3 +1,4 @@
+import fileUploadRoutes from './routes/fileUpload.routes.js';
 import csrfRoutes from './routes/csrf.routes.js';
 import { isAllowedOrigin, protectAuthenticationEntry } from './services/csrfService.js';
 import {authorizePrivatePhoto} from './services/privateMediaAccessService.js';
@@ -244,6 +245,7 @@ app.use('/api/public/media', mediaRoutes);
 app.use('/api', mediaOperationsRoutes);
 app.use('/api', workflowNotificationRoutes);
 app.use('/api/client', clientTrackingRoutes);
+app.use('/api/staff/file-uploads', fileUploadRoutes);
 app.use('/api/staff', staffAuthRoutes);
 app.use('/api/manager', managerRoutes);
 app.use('/api/designer', designerRoutes);
